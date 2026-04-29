@@ -96,6 +96,7 @@ func ParseResult(output string) (*Result, error) {
 		PromptInjection: raw["prompt_injection"].(bool),
 		SecretLeak:      raw["secret_leak"].(bool),
 		MaliciousPatch:  raw["malicious_patch"].(bool),
+		Reasons:         []string{},
 	}
 
 	// Parse reasons
