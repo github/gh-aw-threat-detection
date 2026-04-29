@@ -1,5 +1,9 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
+
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git ca-certificates
 
@@ -10,7 +14,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o /threat-detect ./cmd/threat-detect
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o /threat-detect ./cmd/threat-detect
 
 # Runtime stage
 FROM alpine:3.20
