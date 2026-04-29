@@ -15,10 +15,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
@@ -36,6 +38,9 @@ func main() {
 }
 
 func run() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	var (
 		engineID    string
 		model       string
@@ -97,7 +102,7 @@ func run() int {
 	}
 
 	// Run detection
-	rawOutput, err := eng.Analyze(prompt)
+	rawOutput, err := eng.Analyze(ctx, prompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
 		return exitError
@@ -118,7 +123,7 @@ func run() int {
 	}
 
 	if outputJSON != "" {
-		if err := os.WriteFile(outputJSON, jsonBytes, 0644); err != nil {
+		if err := os.WriteFile(outputJSON, jsonBytes, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
 			return exitError
 		}

@@ -4,6 +4,8 @@
 package engine
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,7 +15,7 @@ import (
 // Engine represents an AI engine capable of analyzing content for threats.
 type Engine interface {
 	// Analyze sends the prompt to the AI engine and returns the raw output.
-	Analyze(prompt string) (string, error)
+	Analyze(ctx context.Context, prompt string) (string, error)
 }
 
 // New creates a new engine instance based on the engine ID.
@@ -40,17 +42,13 @@ type copilotEngine struct {
 	model string
 }
 
-func (e *copilotEngine) Analyze(prompt string) (string, error) {
-	return runCLI("copilot", e.buildArgs(prompt))
-}
-
-func (e *copilotEngine) buildArgs(prompt string) []string {
+func (e *copilotEngine) Analyze(ctx context.Context, prompt string) (string, error) {
 	args := []string{"--print"}
 	if e.model != "" {
 		args = append(args, "--model", e.model)
 	}
-	args = append(args, prompt)
-	return args
+	args = append(args, "-")
+	return runCLI(ctx, "copilot", args, prompt)
 }
 
 // claudeEngine implements Engine using the Claude CLI.
@@ -58,17 +56,13 @@ type claudeEngine struct {
 	model string
 }
 
-func (e *claudeEngine) Analyze(prompt string) (string, error) {
-	return runCLI("claude", e.buildArgs(prompt))
-}
-
-func (e *claudeEngine) buildArgs(prompt string) []string {
+func (e *claudeEngine) Analyze(ctx context.Context, prompt string) (string, error) {
 	args := []string{"--print", "--output-format", "stream-json"}
 	if e.model != "" {
 		args = append(args, "--model", e.model)
 	}
-	args = append(args, prompt)
-	return args
+	args = append(args, "-")
+	return runCLI(ctx, "claude", args, prompt)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -76,31 +70,32 @@ type codexEngine struct {
 	model string
 }
 
-func (e *codexEngine) Analyze(prompt string) (string, error) {
-	return runCLI("codex", e.buildArgs(prompt))
-}
-
-func (e *codexEngine) buildArgs(prompt string) []string {
+func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error) {
 	args := []string{"--print"}
 	if e.model != "" {
 		args = append(args, "--model", e.model)
 	}
-	args = append(args, prompt)
-	return args
+	args = append(args, "-")
+	return runCLI(ctx, "codex", args, prompt)
 }
 
-// runCLI executes a CLI command and returns its stdout output.
-func runCLI(name string, args []string) (string, error) {
-	cmd := exec.Command(name, args...)
+// runCLI executes a CLI command, passing the prompt via stdin, and returns its
+// stdout output. Using stdin avoids OS argument length limits and prevents the
+// prompt content from appearing in process listings.
+func runCLI(ctx context.Context, name string, args []string, stdinData string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = strings.NewReader(stdinData)
 	cmd.Stderr = os.Stderr
 
-	output, err := cmd.Output()
-	if err != nil {
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("%s exited with code %d: %s", name, exitErr.ExitCode(), string(exitErr.Stderr))
 		}
 		return "", fmt.Errorf("failed to execute %s: %w", name, err)
 	}
 
-	return string(output), nil
+	return stdout.String(), nil
 }
