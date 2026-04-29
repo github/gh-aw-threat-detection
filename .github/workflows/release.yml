@@ -45,6 +45,7 @@ jobs:
 
       - name: Build binary
         run: |
+          mkdir -p bin
           VERSION=${GITHUB_REF_NAME}
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
             -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
@@ -78,9 +79,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
+            type=semver,pattern=v{{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

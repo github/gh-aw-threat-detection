@@ -112,11 +112,12 @@ make docker-build
 ## Architecture
 
 ```
-cmd/threat-detect/     CLI entry point
-pkg/detector/          Core detection logic (prompt building, result parsing)
-pkg/engine/            AI engine abstraction (copilot, claude, codex)
-pkg/artifacts/         Artifact reading and validation
-specs/                 W3C-style specification
+cmd/threat-detect/         CLI entry point
+pkg/detector/              Core detection logic (prompt building, result parsing)
+pkg/detector/prompts/      Prompt templates for detection analysis
+pkg/engine/                AI engine abstraction (copilot, claude, codex)
+pkg/artifacts/             Artifact reading and validation
+specs/                     W3C-style specification
 ```
 
 ## Container Registry (GHCR)
@@ -142,9 +143,10 @@ Container images from private repositories are accessible to other repositories 
 ### Image Tags
 
 The release workflow produces the following image tags:
-- `ghcr.io/github/gh-aw-threat-detection:<version>` (e.g., `v1.0.0`)
+- `ghcr.io/github/gh-aw-threat-detection:v<version>` (e.g., `v1.0.0`)
 - `ghcr.io/github/gh-aw-threat-detection:<major>.<minor>` (e.g., `1.0`)
 - `ghcr.io/github/gh-aw-threat-detection:sha-<commit>` (immutable reference)
+- `ghcr.io/github/gh-aw-threat-detection:latest` (most recent release)
 
 ## Integration with gh-aw
 
@@ -167,9 +169,9 @@ The following decisions resolve questions from the original extraction issue:
 
 1. **JS scripts rewritten in Go** — All detection logic (setup, parsing) is implemented in Go for consistency and single-binary deployment. No Node.js runtime dependency.
 
-2. **Engine CLIs are NOT bundled** — The container expects AI engine CLIs to be available at runtime (installed via setup steps or pre-existing on the runner). This keeps the image small and avoids version coupling with CLI releases.
+2. **Engine CLIs are NOT bundled in the image** — The container runs on a GitHub Actions runner where engine CLIs (`copilot`, `claude`, `codex`) are installed via workflow setup steps before the detection container is invoked. The container itself only contains the `threat-detect` binary; it invokes CLIs available on the runner's `$PATH` (mounted or host-networked). This keeps the image small and avoids version coupling with CLI releases.
 
-3. **Custom steps run outside the container** — The container handles only AI detection. Custom `steps:` and `post-steps:` from workflow config run as normal GitHub Actions steps before/after the container.
+3. **Custom steps run outside the container** — The container handles only AI detection. Custom `steps:` and `post-steps:` from workflow config run as normal GitHub Actions steps before/after the container invocation (e.g., to install engine CLIs or post-process results).
 
 4. **Strict version pinning** — Following the firewall pattern, `gh-aw` pins to an exact version (`DefaultThreatDetectionVersion = "v1.0.0"`) with minimum version checks.
 

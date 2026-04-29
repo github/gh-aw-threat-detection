@@ -2,8 +2,8 @@
 FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
 
 ARG TARGETPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 RUN apk add --no-cache git ca-certificates
 
