@@ -41,7 +41,7 @@ type copilotEngine struct {
 }
 
 func (e *copilotEngine) Analyze(prompt string) (string, error) {
-	return runCLI("copilot", e.buildArgs(prompt), prompt)
+	return runCLI("copilot", e.buildArgs(prompt))
 }
 
 func (e *copilotEngine) buildArgs(prompt string) []string {
@@ -59,7 +59,7 @@ type claudeEngine struct {
 }
 
 func (e *claudeEngine) Analyze(prompt string) (string, error) {
-	return runCLI("claude", e.buildArgs(prompt), prompt)
+	return runCLI("claude", e.buildArgs(prompt))
 }
 
 func (e *claudeEngine) buildArgs(prompt string) []string {
@@ -77,7 +77,7 @@ type codexEngine struct {
 }
 
 func (e *codexEngine) Analyze(prompt string) (string, error) {
-	return runCLI("codex", e.buildArgs(prompt), prompt)
+	return runCLI("codex", e.buildArgs(prompt))
 }
 
 func (e *codexEngine) buildArgs(prompt string) []string {
@@ -90,7 +90,7 @@ func (e *codexEngine) buildArgs(prompt string) []string {
 }
 
 // runCLI executes a CLI command and returns its stdout output.
-func runCLI(name string, args []string, _ string) (string, error) {
+func runCLI(name string, args []string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Stderr = os.Stderr
 

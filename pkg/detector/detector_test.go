@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
@@ -26,16 +27,16 @@ func TestBuildPrompt_Default(t *testing.T) {
 	}
 
 	// Check that placeholders were replaced
-	if contains(prompt, "{WORKFLOW_NAME}") {
+	if strings.Contains(prompt, "{WORKFLOW_NAME}") {
 		t.Error("expected {WORKFLOW_NAME} to be replaced")
 	}
-	if contains(prompt, "{WORKFLOW_DESCRIPTION}") {
+	if strings.Contains(prompt, "{WORKFLOW_DESCRIPTION}") {
 		t.Error("expected {WORKFLOW_DESCRIPTION} to be replaced")
 	}
-	if !contains(prompt, "Test Workflow") {
+	if !strings.Contains(prompt, "Test Workflow") {
 		t.Error("expected workflow name in prompt")
 	}
-	if !contains(prompt, "A test workflow") {
+	if !strings.Contains(prompt, "A test workflow") {
 		t.Error("expected workflow description in prompt")
 	}
 }
@@ -79,13 +80,13 @@ func TestBuildPrompt_CustomPromptAppended(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contains(prompt, "Base prompt.") {
+	if !strings.Contains(prompt, "Base prompt.") {
 		t.Error("expected base prompt")
 	}
-	if !contains(prompt, "Focus on SQL injection") {
+	if !strings.Contains(prompt, "Focus on SQL injection") {
 		t.Error("expected custom prompt appended")
 	}
-	if !contains(prompt, "## Additional Instructions") {
+	if !strings.Contains(prompt, "## Additional Instructions") {
 		t.Error("expected Additional Instructions header")
 	}
 }
@@ -98,20 +99,7 @@ func TestDefaultPromptTemplate(t *testing.T) {
 	if tmpl == "" {
 		t.Fatal("expected non-empty template")
 	}
-	if !contains(tmpl, "THREAT_DETECTION_RESULT") {
+	if !strings.Contains(tmpl, "THREAT_DETECTION_RESULT") {
 		t.Error("expected template to contain THREAT_DETECTION_RESULT")
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

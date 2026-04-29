@@ -5,7 +5,7 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /app
 
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 COPY . .
@@ -18,7 +18,6 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates git
 
 COPY --from=builder /threat-detect /usr/local/bin/threat-detect
-COPY prompts/ /etc/threat-detection/prompts/
 
 # Create non-root user
 RUN adduser -D -u 1000 detector
