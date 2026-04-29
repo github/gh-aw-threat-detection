@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -85,14 +84,14 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error
 func runCLI(ctx context.Context, name string, args []string, stdinData string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdin = strings.NewReader(stdinData)
-	cmd.Stderr = os.Stderr
 
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%s exited with code %d: %s", name, exitErr.ExitCode(), string(exitErr.Stderr))
+			return "", fmt.Errorf("%s exited with code %d: %s", name, exitErr.ExitCode(), stderr.String())
 		}
 		return "", fmt.Errorf("failed to execute %s: %w", name, err)
 	}

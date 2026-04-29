@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+// writeTestFile is a test helper that writes a file and fails the test on error.
+func writeTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("writing test file %s: %v", path, err)
+	}
+}
+
 func TestLoad_ValidDirectory(t *testing.T) {
 	dir := t.TempDir()
 
@@ -14,9 +22,9 @@ func TestLoad_ValidDirectory(t *testing.T) {
 	if err := os.MkdirAll(promptDir, 0o755); err != nil {
 		t.Fatalf("creating prompt dir: %v", err)
 	}
-	os.WriteFile(filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"), 0o644)
-	os.WriteFile(filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`), 0o644)
-	os.WriteFile(filepath.Join(dir, "aw-feature.patch"), []byte("diff content"), 0o644)
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte("diff content"))
 
 	arts, err := Load(dir)
 	if err != nil {
@@ -42,7 +50,7 @@ func TestLoad_ValidDirectory(t *testing.T) {
 
 func TestLoad_BundleFiles(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "aw-main.bundle"), []byte("bundle"), 0o644)
+	writeTestFile(t, filepath.Join(dir, "aw-main.bundle"), []byte("bundle"))
 
 	arts, err := Load(dir)
 	if err != nil {
@@ -82,7 +90,7 @@ func TestLoad_NonExistentDirectory(t *testing.T) {
 
 func TestLoad_FileInsteadOfDirectory(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "file.txt")
-	os.WriteFile(f, []byte("not a dir"), 0o644)
+	writeTestFile(t, f, []byte("not a dir"))
 
 	_, err := Load(f)
 	if err == nil {
