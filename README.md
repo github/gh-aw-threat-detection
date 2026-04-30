@@ -116,6 +116,22 @@ The detection job in compiled workflows uses this container instead of inline AI
 
 See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification covering requirements TD-01 through TD-28.
 
+## Contributing
+
+For development setup and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Support
+
+For help or questions about using this project, please see [SUPPORT.md](SUPPORT.md).
+
+## Security
+
+For reporting security vulnerabilities, please see [SECURITY.md](SECURITY.md).
+
+## Code of Conduct
+
+This project has adopted the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
-See [LICENSE](LICENSE) for details.
+This project is licensed under the [MIT License](LICENSE).
