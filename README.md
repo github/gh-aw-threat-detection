@@ -1,6 +1,6 @@
 # gh-aw-threat-detection
 
-Threat detection component for [GitHub Agentic Workflows](https://github.com/github/gh-aw). Analyzes AI agent output for security threats including prompt injection, secret leaks, and malicious patches.
+Threat Detection component for [GitHub Agentic Workflows](https://github.com/github/gh-aw). Analyzes AI agent output for security threats including prompt injection, secret leaks, and malicious patches.
 
 ## Contents
 
@@ -156,6 +156,10 @@ See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the ful
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and contribution guidelines.
+
+## Maintainers
+
+See [CODEOWNERS](CODEOWNERS) for maintainers.
 
 ## Support
 
