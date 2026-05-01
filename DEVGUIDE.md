@@ -158,8 +158,12 @@ Today, pushing a tag matching `v*` triggers a workflow that:
 1. checks out the repository
 2. runs tests
 3. builds the Linux `threat-detect` binary
-4. logs into GHCR
-5. builds and pushes container images tagged with the version and `latest`
+4. generates release checksums
+5. uploads release artifacts
+6. waits at the `release-publish` environment if that environment has protection rules configured
+7. logs into GHCR
+8. builds and pushes container images tagged with the version and `latest`
+9. creates a GitHub release with generated notes and attached artifacts
 
 ### Current CI Support
 
@@ -183,13 +187,4 @@ git push origin vX.Y.Z
 
 After pushing the tag, verify the workflow run and confirm the container image was published to GHCR.
 
-### Planned Follow-up
-
-Release work is still incomplete and tracked separately in TODOs. Areas still to build out include:
-
-- GitHub release creation and release notes
-- release assets and checksums
-- any gated/manual promotion flow
-- any post-tag synchronization workflow if this repo needs to mirror the parent project’s model more closely
-
-Do not describe the current release flow as fully complete or production-final until those items are addressed.
+If the repository configures protection rules on the `release-publish` environment, the workflow will pause before publishing the container image and GitHub release.

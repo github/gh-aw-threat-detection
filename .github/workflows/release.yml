@@ -6,11 +6,11 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
-  release:
+  build-release-artifacts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,12 +22,39 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
-      - name: Build binary
+      - name: Build release binary
         run: |
           VERSION=${GITHUB_REF_NAME}
+          mkdir -p dist
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
-            -o bin/threat-detect ./cmd/threat-detect
+            -o dist/threat-detect-linux-amd64 ./cmd/threat-detect
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum threat-detect-linux-amd64 > checksums.txt
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/*
+          retention-days: 7
+
+  publish-release:
+    needs: build-release-artifacts
+    runs-on: ubuntu-latest
+    environment:
+      name: release-publish
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -44,3 +71,13 @@ jobs:
           tags: |
             ghcr.io/github/gh-aw-threat-detection:${{ github.ref_name }}
             ghcr.io/github/gh-aw-threat-detection:latest
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
+            dist/checksums.txt#checksums.txt \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
