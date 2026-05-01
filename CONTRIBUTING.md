@@ -91,18 +91,20 @@ This structure is useful context when writing your agentic plan, so the core tea
 
 ```text
 /
-├── cmd/gh-aw/           # Main CLI application
-├── pkg/                 # Core Go packages
-│   ├── cli/             # CLI command implementations
-│   ├── console/         # Console formatting utilities
-│   ├── parser/          # Markdown frontmatter parsing
-│   └── workflow/        # Workflow compilation and processing
-├── scratchpad/               # Technical specifications the agent reads
+├── .devcontainer/       # Codespaces and Dev Container setup
+├── .github/
+│   └── workflows/       # CI and release workflows
+├── cmd/
+│   └── threat-detect/   # Main CLI application
+├── pkg/
+│   ├── artifacts/       # Artifact loading and validation
+│   ├── detector/        # Threat detection logic and prompt templates
+│   └── engine/          # AI engine abstraction and adapters
+├── scratchpad/          # Technical specifications and implementation notes
 ├── skills/              # Specialized knowledge for agents
-├── .github/             # Instructions and sample workflows
-│   ├── instructions/    # Agent instructions
-│   └── workflows/       # Sample workflows and CI
-└── Makefile             # Build automation (agent uses this)
+├── specs/               # Project specification and requirements
+├── DEVGUIDE.md          # Maintainer and agent reference guide
+└── Makefile             # Build automation and agent validation targets
 ```
 
 ## 📋 Dependency License Policy
