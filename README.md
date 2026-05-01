@@ -2,9 +2,46 @@
 
 Threat detection component for [GitHub Agentic Workflows](https://github.com/github/gh-aw). Analyzes AI agent output for security threats including prompt injection, secret leaks, and malicious patches.
 
+## Contents
+
+- [Quick Start](#quick-start)
+- [Overview](#overview)
+- [Guardrails and Security Considerations](#guardrails-and-security-considerations)
+- [Usage](#usage)
+- [Development](#development)
+- [Architecture](#architecture)
+- [Integration with gh-aw](#integration-with-gh-aw)
+- [Specification](#specification)
+- [Contributing](#contributing)
+- [Support](#support)
+- [Code of Conduct](#code-of-conduct)
+- [Security](#security)
+- [License](#license)
+
+## Quick Start
+
+Build the CLI and run it against an artifacts directory:
+
+```bash
+make build
+./bin/threat-detect /path/to/artifacts
+```
+
+Run tests locally:
+
+```bash
+make test
+```
+
 ## Overview
 
 This tool runs as a standalone binary or container that analyzes artifacts produced by AI agents before safe outputs are permitted. It supports multiple AI engines (Copilot, Claude, Codex) for detection analysis.
+
+## Guardrails and Security Considerations
+
+This project is designed to help reduce risk when running AI agent workflows by inspecting generated artifacts before they are accepted as safe output. Detection is advisory and should be combined with defense-in-depth controls such as least-privilege permissions, human review, and repository protections.
+
+Do not treat a "safe" result as a security guarantee. Use the output as one signal in a broader security review process.
 
 ## Usage
 
@@ -115,6 +152,22 @@ The detection job in compiled workflows uses this container instead of inline AI
 ## Specification
 
 See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification covering requirements TD-01 through TD-28.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and contribution guidelines.
+
+## Support
+
+See [SUPPORT.md](SUPPORT.md) for help, issue reporting, and support scope.
+
+## Code of Conduct
+
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting instructions.
 
 ## License
 
