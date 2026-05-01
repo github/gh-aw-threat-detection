@@ -70,9 +70,8 @@ jobs:
           push: true
           tags: |
             ghcr.io/github/gh-aw-threat-detection:${{ github.ref_name }}
-            ghcr.io/github/gh-aw-threat-detection:latest
 
-      - name: Create GitHub release
+      - name: Create GitHub release (prerelease)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -80,4 +79,5 @@ jobs:
             dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
             dist/checksums.txt#checksums.txt \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --generate-notes \
+            --prerelease

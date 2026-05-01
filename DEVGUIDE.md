@@ -149,23 +149,29 @@ If tooling is missing:
 
 This section stays in place even though the release flow is still being built out.
 
-### Current State
+### Promotion Model
 
-The repository already has a release workflow in [.github/workflows/release.yml](.github/workflows/release.yml).
+Releases follow a **prerelease → promote** model:
 
-Today, pushing a tag matching `v*` triggers a workflow that:
+1. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
+   [release workflow](.github/workflows/release.yml). It builds artifacts,
+   pushes a version-tagged container image (e.g. `ghcr.io/github/gh-aw-threat-detection:v1.2.3`),
+   and creates a **prerelease** on GitHub. The `release-publish` environment gate
+   pauses the workflow before publishing so maintainers can abort if needed.
 
-1. checks out the repository
-2. runs tests
-3. builds the Linux `threat-detect` binary
-4. generates release checksums
-5. uploads release artifacts
-6. waits at the `release-publish` environment if that environment has protection rules configured
-7. logs into GHCR
-8. builds and pushes container images tagged with the version and `latest`
-9. creates a GitHub release with generated notes and attached artifacts
+2. **Promote (manual)** — after verifying the prerelease, a maintainer triggers
+   the [promote-release workflow](.github/workflows/promote-release.yml) via
+   **Actions → Promote Release → Run workflow**, entering the tag name. This
+   workflow (gated by the `release-promote` environment):
+   - verifies the release is still a prerelease
+   - marks it as a stable release (`--prerelease=false`)
+   - pulls the version-tagged container image and pushes it as `latest`
 
-### Current CI Support
+The `latest` container tag and the GitHub "Latest" release badge only move
+when a maintainer explicitly promotes. This gives the team time to validate a
+release before it becomes the default for users installing with `version: latest`.
+
+### CI Support
 
 The main CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) runs:
 
@@ -173,11 +179,10 @@ The main CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) run
 - `go test -race`
 - `go build`
 
-### Release Steps For Now
-
-Until the release process is expanded further, maintainers should treat releases as a controlled manual operation:
+### Release Steps
 
 ```bash
+# 1. Tag and push — triggers the release workflow
 git checkout main
 git pull
 make agent-finish
@@ -185,6 +190,11 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-After pushing the tag, verify the workflow run and confirm the container image was published to GHCR.
+After pushing the tag:
 
-If the repository configures protection rules on the `release-publish` environment, the workflow will pause before publishing the container image and GitHub release.
+1. Approve the `release-publish` environment gate when the workflow pauses.
+2. Verify the prerelease on the [Releases page](../../releases) and test the
+   version-tagged container image.
+3. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
+   the workflow. Approve the `release-promote` environment gate.
+4. Confirm `latest` now resolves to the new version.
