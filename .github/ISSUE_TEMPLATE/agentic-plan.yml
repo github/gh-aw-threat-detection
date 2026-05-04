@@ -1,0 +1,124 @@
+name: Agentic contribution plan
+description: Propose a bug fix, feature, or improvement with a detailed agentic implementation plan.
+title: "[Plan]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before you file this issue
+
+        Please read [CONTRIBUTING.md](../../CONTRIBUTING.md) before submitting this issue. This template follows the community contribution process described there.
+
+        ### Quick Start for Community Contributors
+
+        If you are not part of the core team, do not create pull requests directly. Instead, craft a detailed agentic plan in an issue and a core team member will pick it up and implement it using agents.
+
+        ### Step 1: Analyze with an Agent (for bug reports)
+
+        Before filing a contribution request, use an agent to:
+
+        - Scan the source code to identify root causes (for bugs)
+        - Analyze execution patterns and trace the issue
+        - Research similar issues and solutions
+        - Propose specific fixes with code examples
+        - Create a comprehensive plan for the changes needed
+
+  - type: dropdown
+    id: contribution-type
+    attributes:
+      label: Contribution type
+      description: What kind of contribution are you proposing?
+      options:
+        - Bug fix
+        - Feature request
+        - Documentation improvement
+        - Refactoring or maintenance
+        - Security hardening
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What do you want to contribute?
+      description: Describe the bug, feature, improvement, or outcome you want the core team to consider.
+      placeholder: |
+        Provide a clear summary of the requested change and why it matters.
+    validations:
+      required: true
+
+  - type: textarea
+    id: agent-analysis
+    attributes:
+      label: Agent analysis and findings
+      description: For bugs, include your agent's root-cause analysis. For non-bugs, include any research or codebase analysis that supports the proposal.
+      placeholder: |
+        Include relevant files, execution paths, root causes, related issues, or examples your agent found.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case and expected behavior
+      description: Explain who benefits from this change and what should happen after it is implemented.
+      placeholder: |
+        As a ..., I expect ... so that ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation-plan
+    attributes:
+      label: Complete step-by-step agentic plan
+      description: Provide a complete, ordered plan that a core team member's coding agent can follow.
+      placeholder: |
+        1. Read ...
+        2. Update ...
+        3. Add or adjust tests for ...
+        4. Run validation with ...
+        5. Document ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation-details
+    attributes:
+      label: Specific implementation details and examples
+      description: Include file paths, functions, data shapes, command examples, test cases, or pseudocode that would help an agent implement the plan.
+      placeholder: |
+        Relevant areas:
+        - pkg/...
+        - specs/...
+
+        Suggested tests:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: labels
+    attributes:
+      label: Suggested labels
+      description: List any labels you think maintainers should apply, such as bug, enhancement, documentation, or security.
+      placeholder: |
+        - bug
+        - needs-triage
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Contributor checklist
+      description: Confirm that this issue is ready for review by the core team.
+      options:
+        - label: I read CONTRIBUTING.md and understand that non-core contributors should not open pull requests directly.
+          required: true
+        - label: I included a detailed agentic plan for the core team to review and implement.
+          required: true
+        - label: I included agent analysis and findings, or explained why they are not applicable.
+          required: true
+        - label: I included expected behavior, implementation details, and validation ideas.
+          required: true
