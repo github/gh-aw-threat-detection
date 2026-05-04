@@ -124,7 +124,7 @@ The following open-source licenses are compatible with our MIT license:
 
 The following licenses are **not allowed** as they conflict with our MIT license or impose unacceptable restrictions:
 
-- **GPL, LGPL, AGPL** - Copyleft licenses that would force us to release under GPL
+- **GPL, LGPL, AGPL** - Copyleft licenses that would force us to release code under a copyleft license
 - **SSPL** - Server Side Public License with restrictive requirements
 - **Proprietary/Commercial** - Closed-source licenses requiring payment or special terms
 
