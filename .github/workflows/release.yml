@@ -64,6 +64,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: build-image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -75,9 +76,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          IMAGE="ghcr.io/github/gh-aw-threat-detection"
           gh release create "${GITHUB_REF_NAME}" \
             dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
             dist/checksums.txt#checksums.txt \
             --title "${GITHUB_REF_NAME}" \
+            --notes "Container image digest: ${IMAGE}@${{ steps.build-image.outputs.digest }}" \
             --generate-notes \
             --prerelease

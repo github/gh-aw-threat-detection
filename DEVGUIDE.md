@@ -156,7 +156,7 @@ Releases follow a **prerelease → promote** model:
 1. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
    [release workflow](.github/workflows/release.yml). It builds artifacts,
    pushes a version-tagged container image (e.g. `ghcr.io/github/gh-aw-threat-detection:v1.2.3`),
-   and creates a **prerelease** on GitHub. The `release-publish` environment gate
+   and creates a **prerelease** on GitHub that records the image digest. The `release-publish` environment gate
    pauses the workflow before publishing so maintainers can abort if needed.
 
 2. **Promote (manual)** — after verifying the prerelease, a maintainer triggers
@@ -164,8 +164,8 @@ Releases follow a **prerelease → promote** model:
    **Actions → Promote Release → Run workflow**, entering the tag name. This
    workflow (gated by the `release-promote` environment):
    - verifies the release is still a prerelease
-   - pulls the version-tagged container image and pushes it as `latest`
-   - marks the GitHub release as a stable release (`--prerelease=false`)
+   - pulls the recorded image digest and pushes that exact image as `latest`
+   - marks the GitHub release as stable and explicitly selects it as Latest (`--prerelease=false --latest`)
 
 The `latest` container tag and the GitHub "Latest" release badge only move
 when a maintainer explicitly promotes. This gives the team time to validate a
