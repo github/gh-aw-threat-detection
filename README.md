@@ -130,7 +130,7 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 
 | Variable | Required when | Notes |
 |----------|---------------|-------|
-| `GH_AW_COPILOT_TOKEN` or equivalent Copilot auth | Running `--engine copilot` in an environment that needs explicit Copilot authentication | Exact variable consumption depends on the Copilot CLI. |
+| `GH_AW_COPILOT_TOKEN` | Running `--engine copilot` in an environment that needs explicit token-based Copilot authentication | If the Copilot CLI uses device, browser, or host-provided authentication instead, configure that mechanism before running the container. |
 | `ANTHROPIC_API_KEY` | Running `--engine claude` with the Claude CLI | Not used by unit tests. |
 | `OPENAI_API_KEY` | Running `--engine codex` with the Codex CLI | Not used by unit tests. |
 | `WORKFLOW_NAME` | Optional local/container runs | Included in the generated prompt. |

@@ -146,6 +146,7 @@ docker-build:
 	docker build --build-arg VERSION=$(IMAGE_TAG) -t $(REGISTRY):$(IMAGE_TAG) .
 
 docker-smoke: docker-build
+	docker run --rm --entrypoint /bin/sh $(REGISTRY):$(IMAGE_TAG) -c 'test -s /etc/ssl/cert.pem'
 	docker run --rm $(REGISTRY):$(IMAGE_TAG) --version
 
 docker-push:

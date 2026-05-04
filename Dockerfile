@@ -8,16 +8,23 @@ RUN go mod download
 
 COPY . .
 
+# This module currently has no external dependencies, so the build does not
+# install git or other VCS tools. Add them here if future direct VCS-backed
+# modules require them.
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" -o /threat-detect ./cmd/threat-detect
 
 # Runtime stage
 FROM alpine:3.20
 
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /tmp/ca-certificates.crt
 COPY --from=builder /threat-detect /usr/local/bin/threat-detect
 
 # Create non-root user
-RUN adduser -D -u 1000 detector
+RUN rm -f /etc/ssl/cert.pem \
+	&& cp /tmp/ca-certificates.crt /etc/ssl/cert.pem \
+	&& rm /tmp/ca-certificates.crt \
+	&& adduser -D -u 1000 detector
 USER detector
 
 WORKDIR /workspace

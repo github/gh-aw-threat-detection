@@ -179,7 +179,7 @@ The implementation MAY pass through engine-specific authentication variables req
 
 | Variable | Engine |
 |----------|--------|
-| `GH_AW_COPILOT_TOKEN` or equivalent Copilot CLI authentication | Copilot |
+| `GH_AW_COPILOT_TOKEN` | Copilot |
 | `ANTHROPIC_API_KEY` | Claude |
 | `OPENAI_API_KEY` | Codex |
 
