@@ -13,7 +13,7 @@ body:
 
         If you are not part of the core team, do not create pull requests directly. Instead, craft a detailed agentic plan in an issue and a core team member will pick it up and implement it using agents.
 
-        ### Step 1: Analyze with an Agent (for bug reports)
+        ### Step 1: Analyze with an Agent
 
         Before filing a contribution request, use an agent to:
 
@@ -22,6 +22,8 @@ body:
         - Research similar issues and solutions
         - Propose specific fixes with code examples
         - Create a comprehensive plan for the changes needed
+
+        NOTE: if filing with an agent, you can direct them to create an issue from a blank issue (instead of copy/pasting here) so long as it contains the same information.
 
   - type: dropdown
     id: contribution-type
