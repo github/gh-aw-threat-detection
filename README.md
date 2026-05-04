@@ -74,7 +74,8 @@ docker run --rm \
   /workspace/artifacts
 ```
 
-The current image is suitable for CLI packaging and smoke testing. Production AI-backed detection requires the selected engine CLI and its authentication to be available in the runtime image or installed by a future image variant.
+The current image is suitable for CLI packaging and smoke testing.
+Production AI-backed detection requires the selected engine CLI and its authentication to be available in the runtime image or installed by a future image variant.
 
 ### Input (Artifacts Directory)
 
@@ -102,7 +103,9 @@ The current image is suitable for CLI packaging and smoke testing. Production AI
 
 ## Stage Status and Decisions
 
-Stage 1 is functionally represented in this repository. The standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present. Remaining work involves integration with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
+Stage 1 is functionally represented in this repository.
+The standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present.
+Remaining work involves integration with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
 
 Decisions for the unresolved extraction questions:
 

@@ -23,8 +23,8 @@ COPY --from=builder /threat-detect /usr/local/bin/threat-detect
 # Create non-root user
 RUN rm -f /etc/ssl/cert.pem \
 	&& cp /tmp/ca-certificates.crt /etc/ssl/cert.pem \
-	&& rm /tmp/ca-certificates.crt \
-	&& adduser -D -u 1000 detector
+	&& rm /tmp/ca-certificates.crt
+RUN adduser -D -u 1000 detector
 USER detector
 
 WORKDIR /workspace
