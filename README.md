@@ -102,7 +102,7 @@ The current image is suitable for CLI packaging and smoke testing. Production AI
 
 ## Stage Status and Decisions
 
-Stage 1 is functionally represented in this repository: the standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present. Remaining parity work is integration work with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
+Stage 1 is functionally represented in this repository. The standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present. Remaining parity work is integration work with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
 
 Decisions for the unresolved extraction questions:
 

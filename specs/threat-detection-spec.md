@@ -173,7 +173,7 @@ threat-detection:
 | `WORKFLOW_DESCRIPTION` | Description of the workflow |
 | `CUSTOM_PROMPT` | Additional detection instructions |
 
-**TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt-building, unit-test, or container smoke-test execution.
+**TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt building, unit test, or container smoke test execution.
 
 The implementation MAY pass through engine-specific authentication variables required by the selected CLI, including:
 
