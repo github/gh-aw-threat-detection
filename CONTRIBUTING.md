@@ -44,7 +44,7 @@ This project practices what it preaches: agentic development is used to build ag
 
 ⚠️ **If you are not part of the core team, do not create pull requests directly.** Instead, craft a detailed agentic plan in an issue and a core team member will pick it up and implement it using agents.
 
-### Step 1: Analyze with an Agent (for bug reports)
+### Step 1: Analyze with an Agent
 
 **Before filing a contribution request**, use an agent to:
 
