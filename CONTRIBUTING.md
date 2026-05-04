@@ -159,65 +159,35 @@ This project follows the GitHub Community Guidelines. Please be respectful and i
 
 > **For core team maintainers only.** Community members do not participate in releasing.
 
-Releases are triggered manually by a core team member using the GitHub Actions release workflow.
-
-> **Note:** The release workflow publishes the new version as a **prerelease** on GitHub. Once the release is verified, a maintainer must **manually promote it to a full release and move the `latest` tag** so that users installing with `version: latest` receive the new version.
+Releases follow a **prerelease → promote** two-phase model. See [DEVGUIDE.md](DEVGUIDE.md#release-process) for full details.
 
 ### Steps
 
-1. **Launch the release action**
+1. **Push a version tag** — pushing a tag matching `v*` (e.g. `v1.2.3`) automatically triggers the [release workflow](.github/workflows/release.yml). It builds and pushes a version-tagged container image, records its digest, and creates a **prerelease** on GitHub (gated by the `release-publish` environment).
 
-   Go to [Actions → Release](https://github.com/github/gh-aw/actions/workflows/release.lock.yml) and click **Run workflow**. Select the release type (`patch`, `minor`, or `major`) and start the run.
+2. **Verify the prerelease** — confirm the prerelease behaves correctly before promoting. The `latest` container image and the GitHub "Latest" release badge do not move until promotion.
 
-   The workflow will build the release binaries, push a new git tag, and then pause — waiting for a required manual step before publishing.
-
-2. **Complete the sync in `github/gh-aw-actions`**
-
-   While the workflow is paused at the `gh-aw-actions-release` environment gate, complete the following steps in the [`github/gh-aw-actions`](https://github.com/github/gh-aw-actions) repository:
-
-   a. **Run the sync-actions workflow** — go to [Actions → sync-actions](https://github.com/github/gh-aw-actions/actions/workflows/sync-actions.yml) and trigger it with the new release tag (e.g. `v1.2.3`).
-
-   b. **Merge the PR** — the sync-actions workflow will open a pull request in `github/gh-aw-actions`. Review and merge it to bring the tag into that repository.
-
-3. **Approve the environment gate**
-
-   Return to the paused release run in [`github/gh-aw`](https://github.com/github/gh-aw/actions). Approve the **`gh-aw-actions-release`** environment gate. The workflow will verify that the new tag exists in `github/gh-aw-actions` and then publish the GitHub release as a **prerelease**.
-
-4. **Promote to latest** _(manual step)_
-
-   After verifying the prerelease is working correctly:
-
-   a. **Edit the GitHub release** — go to the [Releases page](https://github.com/github/gh-aw/releases), open the new prerelease, uncheck **This is a pre-release**, and save. This promotes the release to a stable full release.
-
-   b. **Move the `latest` tag** — GitHub's release API resolves `latest` to the most recent non-prerelease release. Promoting the release in step (a) is sufficient for the `latest` resolution to update automatically.
-
-   Users who install with `version: latest` (the default) will now receive the new release.
+3. **Promote to stable** — trigger the [Promote Release workflow](.github/workflows/promote-release.yml) via **Actions → Promote Release → Run workflow**, entering the tag name (e.g. `v1.2.3`). This workflow (gated by the `release-promote` environment):
+   - verifies the release is still a prerelease
+   - pushes the recorded image digest as `latest`
+   - marks the GitHub release as stable and explicitly selects it as Latest
 
 ### Summary
 
 ```
-Launch release action
+push tag (v*)
         │
         ▼
-Workflow pushes tag & pauses
+release workflow (release-publish gate)
         │
         ▼
-Run sync-actions in github/gh-aw-actions (with new tag)
+Prerelease published + versioned container image pushed 🎉
+        │
+        ▼  (manual — after verification)
+promote-release workflow (release-promote gate)
         │
         ▼
-Merge the sync-actions PR
-        │
-        ▼
-Approve the gh-aw-actions-release environment gate
-        │
-        ▼
-Release published as prerelease 🎉
-        │
-        ▼  (manual)
-Promote prerelease → full release on GitHub Releases page
-        │
-        ▼
-'latest' now resolves to the new version ✅
+Container image tagged as latest + GitHub release marked stable ✅
 ```
 
 ## 🎯 Why This Contribution Model?

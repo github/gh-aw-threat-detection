@@ -1,0 +1,88 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to promote (e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment:
+      name: release-promote
+    steps:
+      - name: Verify prerelease exists
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IMAGE="ghcr.io/github/gh-aw-threat-detection"
+          RELEASE_INFO=$(gh release view "${{ inputs.tag }}" --json body,isPrerelease,tagName)
+          IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
+          if [ "$IS_PRERELEASE" != "true" ]; then
+            echo "::error::Release ${{ inputs.tag }} is not a prerelease. Nothing to promote."
+            exit 1
+          fi
+          DIGEST_LINE_PREFIX="Container image digest: ${IMAGE}@"
+          IMAGE_REF_PREFIX="${IMAGE}@sha256:"
+          EXPECTED_SHA256_LENGTH=64
+          IMAGE_REF=""
+          while IFS= read -r line; do
+            case "$line" in
+              "$DIGEST_LINE_PREFIX"*)
+                IMAGE_REF="${line#Container image digest: }"
+                break
+                ;;
+            esac
+          done < <(echo "$RELEASE_INFO" | jq -r '.body // ""')
+          if [ -z "$IMAGE_REF" ]; then
+            echo "::error::Release ${{ inputs.tag }} does not record a container image digest. Nothing to promote."
+            exit 1
+          fi
+          case "$IMAGE_REF" in
+            "$IMAGE_REF_PREFIX"*) ;;
+            *)
+              echo "::error::Release ${{ inputs.tag }} records a container image digest that does not use sha256. Nothing to promote."
+              exit 1
+              ;;
+          esac
+          DIGEST="${IMAGE_REF#${IMAGE_REF_PREFIX}}"
+          if [ "${#DIGEST}" -ne "$EXPECTED_SHA256_LENGTH" ]; then
+            echo "::error::Release ${{ inputs.tag }} records a container image digest with an invalid length. Nothing to promote."
+            exit 1
+          fi
+          if ! echo "$DIGEST" | grep -Eq '^[0-9a-f]+$'; then
+            echo "::error::Release ${{ inputs.tag }} records a container image digest with non-hex characters. Nothing to promote."
+            exit 1
+          fi
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+          echo "✅ Verified ${{ inputs.tag }} is a prerelease with container image ${IMAGE_REF} — proceeding with promotion."
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag container image as latest
+        run: |
+          IMAGE="ghcr.io/github/gh-aw-threat-detection"
+          docker pull "${{ steps.verify.outputs.image_ref }}"
+          docker tag "${{ steps.verify.outputs.image_ref }}" "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+          echo "✅ Container image tagged as latest."
+
+      - name: Promote release to stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ inputs.tag }}" --prerelease=false --latest
+          echo "✅ Release ${{ inputs.tag }} promoted to stable and marked as Latest."
