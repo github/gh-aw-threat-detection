@@ -30,9 +30,14 @@ jobs:
             echo "::error::Release ${{ inputs.tag }} is not a prerelease. Nothing to promote."
             exit 1
           fi
-          IMAGE_REF=$(echo "$RELEASE_INFO" | jq -r '.body // ""' | sed -n "s|^Container image digest: ${IMAGE}@\(sha256:[0-9a-fA-F]\{64\}\)$|${IMAGE}@\1|p" | head -n 1)
+          IMAGE_REF=$(echo "$RELEASE_INFO" | jq -r '.body // ""' | awk -v prefix="Container image digest: ${IMAGE}@sha256:" 'index($0, prefix) == 1 { print substr($0, length("Container image digest: ") + 1); exit }')
+          DIGEST="${IMAGE_REF#"${IMAGE}@sha256:"}"
           if [ -z "$IMAGE_REF" ]; then
             echo "::error::Release ${{ inputs.tag }} does not record a container image digest. Nothing to promote."
+            exit 1
+          fi
+          if [ "$DIGEST" = "$IMAGE_REF" ] || [ "${#DIGEST}" -ne 64 ] || ! echo "$DIGEST" | grep -Eq '^[0-9a-fA-F]+$'; then
+            echo "::error::Release ${{ inputs.tag }} records an invalid container image digest. Nothing to promote."
             exit 1
           fi
           echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
