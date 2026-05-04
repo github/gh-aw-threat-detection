@@ -2,7 +2,9 @@ name: License Compliance Check
 
 on:
   pull_request:
-    branches: [main]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
   push:
     branches: [main]
   workflow_dispatch:
