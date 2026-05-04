@@ -23,7 +23,7 @@ body:
         - Propose specific fixes with code examples
         - Create a comprehensive plan for the changes needed
 
-        NOTE: if filing with an agent, you can direct them to create an issue from a blank issue (instead of copy/pasting here) so long as it contains the same information.
+        NOTE: if filing with an agent, have it complete this issue form and fill in every required section below instead of creating a blank issue.
 
   - type: dropdown
     id: contribution-type
