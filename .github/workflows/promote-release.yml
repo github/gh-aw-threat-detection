@@ -32,6 +32,7 @@ jobs:
           fi
           DIGEST_LINE_PREFIX="Container image digest: ${IMAGE}@"
           IMAGE_REF_PREFIX="${IMAGE}@sha256:"
+          EXPECTED_SHA256_LENGTH=64
           IMAGE_REF=$(
             echo "$RELEASE_INFO" | jq -r '.body // ""' | while IFS= read -r line; do
               case "$line" in
@@ -54,11 +55,11 @@ jobs:
               ;;
           esac
           DIGEST="${IMAGE_REF#${IMAGE_REF_PREFIX}}"
-          if [ "${#DIGEST}" -ne 64 ]; then
+          if [ "${#DIGEST}" -ne "$EXPECTED_SHA256_LENGTH" ]; then
             echo "::error::Release ${{ inputs.tag }} records a container image digest with an invalid length. Nothing to promote."
             exit 1
           fi
-          if ! echo "$DIGEST" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+          if ! echo "$DIGEST" | grep -Eq "^[0-9a-fA-F]{${EXPECTED_SHA256_LENGTH}}$"; then
             echo "::error::Release ${{ inputs.tag }} records a container image digest with non-hex characters. Nothing to promote."
             exit 1
           fi
