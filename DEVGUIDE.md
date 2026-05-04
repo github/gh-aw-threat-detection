@@ -164,8 +164,8 @@ Releases follow a **prerelease → promote** model:
    **Actions → Promote Release → Run workflow**, entering the tag name. This
    workflow (gated by the `release-promote` environment):
    - verifies the release is still a prerelease
-   - marks it as a stable release (`--prerelease=false`)
    - pulls the version-tagged container image and pushes it as `latest`
+   - marks the GitHub release as a stable release (`--prerelease=false`)
 
 The `latest` container tag and the GitHub "Latest" release badge only move
 when a maintainer explicitly promotes. This gives the team time to validate a
