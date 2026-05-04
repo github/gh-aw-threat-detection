@@ -103,6 +103,11 @@ Production AI-backed detection requires the selected engine CLI and its authenti
 
 ## Stage Status and Decisions
 
+The extraction staging model is:
+- Stage 1: standalone repository
+- Stage 2: containerization
+- Stage 3: `github/gh-aw` integration
+
 Stage 1 is functionally represented in this repository.
 The standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present.
 Remaining work involves integration with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
