@@ -173,22 +173,34 @@ threat-detection:
 | `WORKFLOW_DESCRIPTION` | Description of the workflow |
 | `CUSTOM_PROMPT` | Additional detection instructions |
 
+**TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt-building, unit-test, or container smoke-test execution.
+
+The implementation MAY pass through engine-specific authentication variables required by the selected CLI, including:
+
+| Variable | Engine |
+|----------|--------|
+| `GH_AW_COPILOT_TOKEN` or equivalent Copilot CLI authentication | Copilot |
+| `ANTHROPIC_API_KEY` | Claude |
+| `OPENAI_API_KEY` | Codex |
+
 ---
 
 ## 9. Version Compatibility
 
-**TD-23**: The container image MUST be tagged with semantic version numbers.
+**TD-24**: The container image MUST be tagged with semantic version numbers.
 
-**TD-24**: The parent orchestrator (`gh-aw`) MUST pin to a specific container version.
+**TD-25**: The parent orchestrator (`gh-aw`) MUST pin to a specific container version.
 
-**TD-25**: Breaking changes to the input/output contract MUST increment the major version.
+**TD-26**: Breaking changes to the input/output contract MUST increment the major version.
+
+**TD-27**: Private repository status MUST NOT block container publication or consumption. When the source repository or GHCR package is private, the package MUST be configured so approved consuming repositories can pull pinned image tags with `packages: read`.
 
 ---
 
 ## 10. Security Considerations
 
-**TD-26**: The detection container SHOULD run with no network access (fully blocked egress).
+**TD-28**: The detection container SHOULD run with no network access (fully blocked egress).
 
-**TD-27**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
+**TD-29**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
 
-**TD-28**: Detection results MUST NOT be modifiable by the agent being analyzed.
+**TD-30**: Detection results MUST NOT be modifiable by the agent being analyzed.
