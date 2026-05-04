@@ -41,13 +41,21 @@ jobs:
               esac
             done
           )
-          DIGEST="${IMAGE_REF#"${IMAGE}@sha256:"}"
           if [ -z "$IMAGE_REF" ]; then
             echo "::error::Release ${{ inputs.tag }} does not record a container image digest. Nothing to promote."
             exit 1
           fi
-          if [ "$DIGEST" = "$IMAGE_REF" ] || [ "${#DIGEST}" -ne 64 ] || ! echo "$DIGEST" | grep -Eq '^[0-9a-fA-F]+$'; then
-            echo "::error::Release ${{ inputs.tag }} records an invalid or malformed container image digest. Nothing to promote."
+          DIGEST="${IMAGE_REF#"${IMAGE}@sha256:"}"
+          if [ "$DIGEST" = "$IMAGE_REF" ]; then
+            echo "::error::Release ${{ inputs.tag }} records a malformed container image digest. Nothing to promote."
+            exit 1
+          fi
+          if [ "${#DIGEST}" -ne 64 ]; then
+            echo "::error::Release ${{ inputs.tag }} records a container image digest with an invalid length. Nothing to promote."
+            exit 1
+          fi
+          if ! echo "$DIGEST" | grep -Eq '^[0-9a-fA-F]+$'; then
+            echo "::error::Release ${{ inputs.tag }} records a container image digest with non-hex characters. Nothing to promote."
             exit 1
           fi
           echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
