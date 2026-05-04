@@ -2,12 +2,13 @@ name: License Compliance Check
 
 on:
   pull_request:
-    paths:
-      - 'go.mod'
-      - 'go.sum'
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
+
+env:
+  GO_LICENSES_VERSION: v1.6.0
 
 jobs:
   license-check:
@@ -22,7 +23,10 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: Install go-licenses
-        run: go install github.com/google/go-licenses@latest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/go-bin"
+          echo "${RUNNER_TEMP}/go-bin" >> "${GITHUB_PATH}"
+          GOBIN="${RUNNER_TEMP}/go-bin" go install github.com/google/go-licenses@${GO_LICENSES_VERSION}
 
       - name: Check licenses
         run: |
