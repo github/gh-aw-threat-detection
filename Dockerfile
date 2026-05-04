@@ -17,6 +17,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/github/gh-aw
 # Runtime stage
 FROM alpine:3.20
 
+# Replace Alpine's default cert.pem symlink so non-root smoke tests can verify
+# the copied CA bundle without traversing /etc/ssl/certs.
 RUN rm -f /etc/ssl/cert.pem
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
 COPY --from=builder /threat-detect /usr/local/bin/threat-detect
