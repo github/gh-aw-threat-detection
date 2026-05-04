@@ -201,7 +201,7 @@ The detection job in compiled workflows uses this container instead of inline AI
 
 ## Specification
 
-See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification covering requirements TD-01 through TD-30.
+See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification.
 
 ## Contributing
 

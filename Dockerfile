@@ -17,13 +17,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/github/gh-aw
 # Runtime stage
 FROM alpine:3.20
 
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /tmp/ca-certificates.crt
+RUN rm -f /etc/ssl/cert.pem
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
 COPY --from=builder /threat-detect /usr/local/bin/threat-detect
 
 # Create non-root user
-RUN rm -f /etc/ssl/cert.pem \
-	&& cp /tmp/ca-certificates.crt /etc/ssl/cert.pem \
-	&& rm /tmp/ca-certificates.crt
 RUN adduser -D -u 1000 detector
 USER detector
 

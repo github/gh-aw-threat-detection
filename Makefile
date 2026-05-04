@@ -146,6 +146,7 @@ docker-build:
 	docker build --build-arg VERSION=$(IMAGE_TAG) -t $(REGISTRY):$(IMAGE_TAG) .
 
 docker-smoke: docker-build
+	# Verify the runtime CA bundle exists for HTTPS-capable engine CLIs.
 	docker run --rm --entrypoint /bin/sh $(REGISTRY):$(IMAGE_TAG) -c 'test -s /etc/ssl/cert.pem'
 	docker run --rm $(REGISTRY):$(IMAGE_TAG) --version
 
