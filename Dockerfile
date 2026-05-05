@@ -1,8 +1,6 @@
 # Build stage
 FROM golang:1.23-alpine AS builder
 
-RUN apk add --no-cache git ca-certificates
-
 WORKDIR /app
 
 COPY go.mod go.sum* ./
@@ -10,13 +8,17 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o /threat-detect ./cmd/threat-detect
+# This module currently has no external dependencies, so the build does not
+# install git or other VCS tools. Add them here if future direct VCS-backed
+# modules require them.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" -o /threat-detect ./cmd/threat-detect
 
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates git
-
+# Keep Alpine's standard CA bundle/package-managed trust store layout.
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /threat-detect /usr/local/bin/threat-detect
 
 # Create non-root user

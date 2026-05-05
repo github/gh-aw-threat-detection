@@ -1,4 +1,4 @@
-.PHONY: all build test test-coverage lint golint clean docker-build docker-push \
+.PHONY: all build test test-coverage lint golint clean docker-build docker-smoke docker-push \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
 	sbom agent-finish help
@@ -143,7 +143,12 @@ clean:
 	rm -f licenses.csv sbom.spdx.json sbom.cdx.json gosec-report.json
 
 docker-build:
-	docker build -t $(REGISTRY):$(IMAGE_TAG) .
+	docker build --build-arg VERSION=$(IMAGE_TAG) -t $(REGISTRY):$(IMAGE_TAG) .
+
+docker-smoke: docker-build
+	# Verify Alpine's standard CA bundle path exists for HTTPS-enabled engine CLIs.
+	docker run --rm --entrypoint /bin/sh $(REGISTRY):$(IMAGE_TAG) -c 'test -s /etc/ssl/certs/ca-certificates.crt'
+	docker run --rm $(REGISTRY):$(IMAGE_TAG) --version
 
 docker-push:
 	docker push $(REGISTRY):$(IMAGE_TAG)
@@ -180,6 +185,7 @@ help:
 	@echo "  security-scan  - Run gosec and govulncheck"
 	@echo "  sbom           - Generate SPDX and CycloneDX SBOMs"
 	@echo "  docker-build   - Build the Docker image"
+	@echo "  docker-smoke   - Build the Docker image and run a CLI smoke test"
 	@echo "  docker-push    - Push the Docker image"
 	@echo "  clean          - Remove build artifacts and reports"
 	@echo "  agent-finish   - Run the maintainer validation workflow"

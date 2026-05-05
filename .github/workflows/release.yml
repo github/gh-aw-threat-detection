@@ -69,6 +69,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
           tags: |
             ghcr.io/github/gh-aw-threat-detection:${{ github.ref_name }}
 
