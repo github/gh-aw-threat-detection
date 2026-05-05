@@ -75,7 +75,10 @@ func detectDuplicateSystemBlock(prompt string) string {
 }
 
 func looksLikeReplacementTokenExpansion(lines []string, systemLine int) bool {
-	for i := systemLine; i >= 0 && i >= systemLine-replacementTokenLookbackLines; i-- {
+	if strings.Contains(lines[systemLine], `\s*<system>`) {
+		return true
+	}
+	for i := systemLine - 1; i >= 0 && i >= systemLine-replacementTokenLookbackLines; i-- {
 		if strings.Contains(lines[i], `\s*<system>`) {
 			return true
 		}
