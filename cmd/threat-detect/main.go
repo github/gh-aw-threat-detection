@@ -115,7 +115,6 @@ func run() int {
 		return exitError
 	}
 	result = detector.MergeResults(result, detector.StaticAnalyze(arts))
-
 	// Output result
 	jsonBytes, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
