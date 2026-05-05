@@ -12,6 +12,8 @@ import (
 func TestStaticAnalyze_DuplicateSystemBlock(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
+	// The unmatched opening backtick mirrors the observed artifact: a regex code
+	// span that should have ended with \s*$` was corrupted into \s*<system>.
 	prompt := strings.Join([]string{
 		"<system>",
 		"<security>trusted</security>",
