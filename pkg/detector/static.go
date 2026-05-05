@@ -10,14 +10,13 @@ import (
 
 const (
 	replacementTokenLookbackLines = 3
-	noPromptFile                  = "No prompt file found"
 )
 
 // StaticAnalyze performs deterministic checks for high-confidence threats that
 // should not depend on model judgment.
 func StaticAnalyze(arts *artifacts.Artifacts) *Result {
 	result := &Result{Reasons: []string{}}
-	if arts == nil || arts.PromptFilePath == "" || arts.PromptFilePath == noPromptFile {
+	if arts == nil || arts.PromptFilePath == "" {
 		return result
 	}
 
@@ -75,6 +74,9 @@ func detectDuplicateSystemBlock(prompt string) string {
 }
 
 func looksLikeReplacementTokenExpansion(lines []string, systemLine int) bool {
+	if systemLine < 0 || systemLine >= len(lines) {
+		return false
+	}
 	if strings.Contains(lines[systemLine], `\s*<system>`) {
 		return true
 	}
