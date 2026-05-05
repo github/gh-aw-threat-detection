@@ -58,9 +58,9 @@ func TestStaticAnalyze_SingleSystemBlock(t *testing.T) {
 	}
 }
 
-func TestResultMerge(t *testing.T) {
+func TestMergeResults(t *testing.T) {
 	result := &Result{Reasons: []string{"model"}}
-	result.Merge(&Result{PromptInjection: true, Reasons: []string{"static"}})
+	result = MergeResults(result, &Result{PromptInjection: true, Reasons: []string{"static"}})
 
 	if !result.PromptInjection {
 		t.Fatal("expected prompt injection to be merged")

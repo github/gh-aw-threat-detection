@@ -114,7 +114,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Error parsing result: %v\n", err)
 		return exitError
 	}
-	result.Merge(detector.StaticAnalyze(arts))
+	result = detector.MergeResults(result, detector.StaticAnalyze(arts))
 
 	// Output result
 	jsonBytes, err := json.MarshalIndent(result, "", "  ")

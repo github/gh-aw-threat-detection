@@ -8,6 +8,8 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 )
 
+const replacementTokenLookbackLines = 3
+
 // StaticAnalyze performs deterministic checks for high-confidence threats that
 // should not depend on model judgment.
 func StaticAnalyze(arts *artifacts.Artifacts) *Result {
@@ -29,15 +31,19 @@ func StaticAnalyze(arts *artifacts.Artifacts) *Result {
 	return result
 }
 
-// Merge combines another detection result into r.
-func (r *Result) Merge(other *Result) {
-	if r == nil || other == nil {
-		return
+// MergeResults combines two detection results.
+func MergeResults(base, other *Result) *Result {
+	if base == nil {
+		return other
 	}
-	r.PromptInjection = r.PromptInjection || other.PromptInjection
-	r.SecretLeak = r.SecretLeak || other.SecretLeak
-	r.MaliciousPatch = r.MaliciousPatch || other.MaliciousPatch
-	r.Reasons = append(r.Reasons, other.Reasons...)
+	if other == nil {
+		return base
+	}
+	base.PromptInjection = base.PromptInjection || other.PromptInjection
+	base.SecretLeak = base.SecretLeak || other.SecretLeak
+	base.MaliciousPatch = base.MaliciousPatch || other.MaliciousPatch
+	base.Reasons = append(base.Reasons, other.Reasons...)
+	return base
 }
 
 func detectDuplicateSystemBlock(prompt string) string {
@@ -61,7 +67,7 @@ func detectDuplicateSystemBlock(prompt string) string {
 }
 
 func looksLikeReplacementTokenExpansion(lines []string, systemLine int) bool {
-	for i := systemLine; i >= 0 && i >= systemLine-3; i-- {
+	for i := systemLine; i >= 0 && i >= systemLine-replacementTokenLookbackLines; i-- {
 		if strings.Contains(lines[i], `\s*<system>`) {
 			return true
 		}
