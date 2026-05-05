@@ -146,8 +146,8 @@ docker-build:
 	docker build --build-arg VERSION=$(IMAGE_TAG) -t $(REGISTRY):$(IMAGE_TAG) .
 
 docker-smoke: docker-build
-	# Verify /etc/ssl/cert.pem is a readable CA bundle for HTTPS-enabled engine CLIs.
-	docker run --rm --entrypoint /bin/sh $(REGISTRY):$(IMAGE_TAG) -c 'test -s /etc/ssl/cert.pem'
+	# Verify Alpine's standard CA bundle path exists for HTTPS-enabled engine CLIs.
+	docker run --rm --entrypoint /bin/sh $(REGISTRY):$(IMAGE_TAG) -c 'test -s /etc/ssl/certs/ca-certificates.crt'
 	docker run --rm $(REGISTRY):$(IMAGE_TAG) --version
 
 docker-push:
