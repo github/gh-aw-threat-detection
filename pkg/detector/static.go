@@ -137,6 +137,11 @@ func MergeResults(base, other *Result) *Result {
 	return base
 }
 
+const (
+	// maxReasonPreviewLength is the max characters of untrusted content shown in reason messages.
+	maxReasonPreviewLength = 200
+)
+
 // injectionPatterns are patterns that indicate prompt injection in untrusted content.
 var injectionPatterns = []*regexp.Regexp{
 	// System-level XML tags that should never appear in user content.
@@ -157,8 +162,8 @@ func checkForPromptInjection(region string) string {
 		if loc := pat.FindString(region); loc != "" {
 			// Truncate region for the reason message.
 			preview := region
-			if len(preview) > 200 {
-				preview = preview[:200] + "..."
+			if len(preview) > maxReasonPreviewLength {
+				preview = preview[:maxReasonPreviewLength] + "..."
 			}
 			return "Prompt injection pattern detected in untrusted input region: found \"" + loc + "\" in content: " + preview
 		}
