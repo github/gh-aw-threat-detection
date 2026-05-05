@@ -8,13 +8,16 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 )
 
-const replacementTokenLookbackLines = 3
+const (
+	replacementTokenLookbackLines = 3
+	noPromptFile                  = "No prompt file found"
+)
 
 // StaticAnalyze performs deterministic checks for high-confidence threats that
 // should not depend on model judgment.
 func StaticAnalyze(arts *artifacts.Artifacts) *Result {
 	result := &Result{Reasons: []string{}}
-	if arts == nil || arts.PromptFilePath == "" || arts.PromptFilePath == "No prompt file found" {
+	if arts == nil || arts.PromptFilePath == "" || arts.PromptFilePath == noPromptFile {
 		return result
 	}
 
@@ -56,9 +59,14 @@ func detectDuplicateSystemBlock(prompt string) string {
 		}
 		if firstSystemClosed && strings.Contains(line, "<system>") {
 			lineNumber := i + 1
-			reason := fmt.Sprintf("Prompt artifact contains an additional <system> block after the first </system> at line %d, indicating prompt-context contamination with system-level instructions.", lineNumber)
+			reason := fmt.Sprintf(
+				"Prompt artifact contains an additional <system> block after the first </system> at line %d, indicating prompt-context contamination with system-level instructions.",
+				lineNumber,
+			)
 			if looksLikeReplacementTokenExpansion(lines, i) {
-				reason += " The duplicate appears immediately after a regex end-anchor location, which matches a prompt-rendering or runtime-import replacement bug signature rather than evidence that the agent patch itself is malicious."
+				reason += " The duplicate appears immediately after a regex end-anchor location, " +
+					"which matches a prompt-rendering or runtime-import replacement bug signature " +
+					"rather than evidence that the agent patch itself is malicious."
 			}
 			return reason
 		}
