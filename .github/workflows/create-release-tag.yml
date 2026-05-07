@@ -48,7 +48,8 @@ jobs:
 
           git fetch --force --tags origin
 
-          latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)
+          semver_pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -E "$semver_pattern" | sort -V | tail -n 1 || true)
           if [ -z "$latest_tag" ]; then
             latest_tag="v0.0.0"
           fi
@@ -58,10 +59,10 @@ jobs:
 
           case "${{ inputs.bump }}" in
             patch)
-              patch=$((10#$patch + 1))
+              patch=$((patch + 1))
               ;;
             minor)
-              minor=$((10#$minor + 1))
+              minor=$((minor + 1))
               patch=0
               ;;
             *)
@@ -70,8 +71,8 @@ jobs:
               ;;
           esac
 
-          next_tag="v$((10#$major)).${minor}.${patch}"
-          if ! echo "$next_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+          next_tag="v${major}.${minor}.${patch}"
+          if ! echo "$next_tag" | grep -Eq "$semver_pattern"; then
             echo "::error::Computed tag ${next_tag} is not a strict semver tag."
             exit 1
           fi
