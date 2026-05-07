@@ -1,0 +1,588 @@
+name: Replay Threat Detection
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: 'Source repository owner'
+        required: true
+        default: github
+        type: string
+      repo:
+        description: 'Source repository name'
+        required: true
+        default: gh-aw
+        type: string
+      run_id:
+        description: 'Source gh-aw workflow run ID'
+        required: true
+        type: string
+      run_attempt:
+        description: 'Optional source run attempt for metadata lookup'
+        required: false
+        type: string
+      agent_artifact:
+        description: 'Agent artifact name'
+        required: true
+        default: agent
+        type: string
+      activation_artifact:
+        description: 'Activation artifact name'
+        required: true
+        default: activation
+        type: string
+      experiment_artifact:
+        description: 'Optional experiment artifact name'
+        required: false
+        type: string
+      original_detection_artifact:
+        description: 'Optional original detection artifact name'
+        required: false
+        default: detection
+        type: string
+      detector_source:
+        description: 'Detector source to replay with'
+        required: true
+        default: current
+        type: choice
+        options:
+          - current
+          - release
+          - image
+      detector_ref:
+        description: 'Branch/SHA/tag for current, release tag for release, or image tag for image'
+        required: false
+        type: string
+      engine:
+        description: 'Detection engine'
+        required: true
+        default: copilot
+        type: choice
+        options:
+          - copilot
+          - claude
+          - codex
+      model:
+        description: 'Optional model override'
+        required: false
+        type: string
+      use_awf:
+        description: 'Run through an AWF wrapper instead of direct CLI mode'
+        required: true
+        default: false
+        type: boolean
+      custom_prompt:
+        description: 'Optional additional detection instructions'
+        required: false
+        type: string
+      workflow_name_override:
+        description: 'Optional WORKFLOW_NAME override for prompt metadata'
+        required: false
+        type: string
+      workflow_description_override:
+        description: 'Optional WORKFLOW_DESCRIPTION override for prompt metadata'
+        required: false
+        type: string
+      upload_replay_artifacts:
+        description: 'Upload sanitized replay artifacts'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_OWNER: ${{ inputs.owner }}
+      SOURCE_REPO_NAME: ${{ inputs.repo }}
+      SOURCE_RUN_ID: ${{ inputs.run_id }}
+      SOURCE_RUN_ATTEMPT: ${{ inputs.run_attempt }}
+      AGENT_ARTIFACT: ${{ inputs.agent_artifact }}
+      ACTIVATION_ARTIFACT: ${{ inputs.activation_artifact }}
+      EXPERIMENT_ARTIFACT: ${{ inputs.experiment_artifact }}
+      ORIGINAL_DETECTION_ARTIFACT: ${{ inputs.original_detection_artifact }}
+      DETECTOR_SOURCE: ${{ inputs.detector_source }}
+      DETECTOR_REF: ${{ inputs.detector_ref }}
+      ENGINE: ${{ inputs.engine }}
+      MODEL: ${{ inputs.model }}
+      USE_AWF: ${{ inputs.use_awf }}
+      CUSTOM_PROMPT: ${{ inputs.custom_prompt }}
+      WORKFLOW_NAME_OVERRIDE: ${{ inputs.workflow_name_override }}
+      WORKFLOW_DESCRIPTION_OVERRIDE: ${{ inputs.workflow_description_override }}
+      GH_TOKEN: ${{ secrets.GH_AW_REPLAY_TOKEN || github.token }}
+      GH_AW_COPILOT_TOKEN: ${{ secrets.GH_AW_COPILOT_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Check out detector repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.detector_source == 'current' && inputs.detector_ref || github.ref }}
+
+      - name: Set up Go
+        if: ${{ inputs.detector_source == 'current' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare replay workspace
+        run: |
+          set -euo pipefail
+          mkdir -p \
+            "${RUNNER_TEMP}/gh-aw-replay/downloads" \
+            "${RUNNER_TEMP}/gh-aw-replay/input" \
+            "${RUNNER_TEMP}/gh-aw-replay/output" \
+            "${RUNNER_TEMP}/gh-aw-replay/metadata"
+          {
+            echo "REPLAY_ROOT=${RUNNER_TEMP}/gh-aw-replay"
+            echo "REPLAY_DOWNLOADS=${RUNNER_TEMP}/gh-aw-replay/downloads"
+            echo "REPLAY_INPUT=${RUNNER_TEMP}/gh-aw-replay/input"
+            echo "REPLAY_OUTPUT=${RUNNER_TEMP}/gh-aw-replay/output"
+            echo "REPLAY_METADATA=${RUNNER_TEMP}/gh-aw-replay/metadata"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch source run and artifact metadata
+        run: |
+          set -euo pipefail
+          source_repo="${SOURCE_OWNER}/${SOURCE_REPO_NAME}"
+          run_api="/repos/${source_repo}/actions/runs/${SOURCE_RUN_ID}"
+          if [ -n "${SOURCE_RUN_ATTEMPT}" ]; then
+            run_api="${run_api}/attempts/${SOURCE_RUN_ATTEMPT}"
+          fi
+
+          if ! gh api "$run_api" > "${REPLAY_METADATA}/source-run.json"; then
+            echo "::error::Unable to read source run ${source_repo}/${SOURCE_RUN_ID}. Check the run ID, repository, token permissions, and artifact retention."
+            exit 1
+          fi
+          if ! gh api "/repos/${source_repo}/actions/runs/${SOURCE_RUN_ID}/artifacts?per_page=100" > "${REPLAY_METADATA}/artifacts-api.json"; then
+            echo "::error::Unable to list artifacts for source run ${source_repo}/${SOURCE_RUN_ID}."
+            exit 1
+          fi
+          jq '[.artifacts[] | {
+            id,
+            name,
+            size_in_bytes,
+            expired,
+            digest,
+            created_at,
+            expires_at,
+            archive_download_url
+          }]' "${REPLAY_METADATA}/artifacts-api.json" > "${REPLAY_METADATA}/artifact-metadata.json"
+
+          require_artifact() {
+            local artifact_name="$1"
+            local required="$2"
+            if [ -z "$artifact_name" ]; then
+              return 0
+            fi
+            local match
+            match=$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name)] | first // empty' "${REPLAY_METADATA}/artifacts-api.json")
+            if [ -z "$match" ]; then
+              if [ "$required" = "true" ]; then
+                echo "::error::Required artifact '${artifact_name}' was not found on source run ${source_repo}/${SOURCE_RUN_ID}."
+                exit 1
+              fi
+              echo "::warning::Optional artifact '${artifact_name}' was not found; continuing without it."
+              return 0
+            fi
+            if [ "$(jq -r '.expired' <<< "$match")" = "true" ]; then
+              echo "::error::Artifact '${artifact_name}' is expired and cannot be replayed."
+              exit 1
+            fi
+          }
+
+          require_artifact "$AGENT_ARTIFACT" true
+          require_artifact "$ACTIVATION_ARTIFACT" true
+          require_artifact "$EXPERIMENT_ARTIFACT" false
+          require_artifact "$ORIGINAL_DETECTION_ARTIFACT" false
+
+      - name: Download source artifacts
+        run: |
+          set -euo pipefail
+          source_repo="${SOURCE_OWNER}/${SOURCE_REPO_NAME}"
+
+          download_artifact() {
+            local artifact_name="$1"
+            local target_dir="$2"
+            local required="$3"
+            if [ -z "$artifact_name" ]; then
+              return 0
+            fi
+            if ! jq -e --arg name "$artifact_name" '.artifacts[] | select(.name == $name)' "${REPLAY_METADATA}/artifacts-api.json" >/dev/null; then
+              if [ "$required" = "true" ]; then
+                echo "::error::Required artifact '${artifact_name}' is missing."
+                exit 1
+              fi
+              return 0
+            fi
+            mkdir -p "$target_dir"
+            if ! gh run download "$SOURCE_RUN_ID" --repo "$source_repo" --name "$artifact_name" --dir "$target_dir"; then
+              echo "::error::Failed to download artifact '${artifact_name}' from ${source_repo}/${SOURCE_RUN_ID}. It may be expired or inaccessible."
+              exit 1
+            fi
+          }
+
+          download_artifact "$AGENT_ARTIFACT" "${REPLAY_DOWNLOADS}/agent" true
+          download_artifact "$ACTIVATION_ARTIFACT" "${REPLAY_DOWNLOADS}/activation" true
+          download_artifact "$EXPERIMENT_ARTIFACT" "${REPLAY_DOWNLOADS}/experiment" false
+          download_artifact "$ORIGINAL_DETECTION_ARTIFACT" "${REPLAY_DOWNLOADS}/original-detection" false
+
+      - name: Normalize detector inputs
+        run: |
+          set -euo pipefail
+          copy_file_if_exists() {
+            local src="$1"
+            local dst="$2"
+            if [ -f "$src" ]; then
+              mkdir -p "$(dirname "$dst")"
+              cp "$src" "$dst"
+            fi
+          }
+          copy_dir_if_exists() {
+            local src="$1"
+            local dst="$2"
+            if [ -d "$src" ]; then
+              mkdir -p "$dst"
+              cp -a "$src"/. "$dst"/
+            fi
+          }
+
+          mkdir -p "${REPLAY_INPUT}/aw-prompts"
+          copy_dir_if_exists "${REPLAY_DOWNLOADS}/activation/aw-prompts" "${REPLAY_INPUT}/aw-prompts"
+          copy_dir_if_exists "${REPLAY_DOWNLOADS}/agent/aw-prompts" "${REPLAY_INPUT}/aw-prompts"
+          copy_file_if_exists "${REPLAY_DOWNLOADS}/agent/agent_output.json" "${REPLAY_INPUT}/agent_output.json"
+          copy_file_if_exists "${REPLAY_DOWNLOADS}/activation/aw_info.json" "${REPLAY_INPUT}/aw_info.json"
+          copy_file_if_exists "${REPLAY_DOWNLOADS}/agent/awf-config.json" "${REPLAY_INPUT}/awf-config.json"
+          copy_dir_if_exists "${REPLAY_DOWNLOADS}/agent/comment-memory" "${REPLAY_INPUT}/comment-memory"
+          copy_dir_if_exists "${REPLAY_DOWNLOADS}/experiment" "${REPLAY_INPUT}/experiments"
+
+          shopt -s nullglob
+          for patch in "${REPLAY_DOWNLOADS}/agent"/aw-*.patch "${REPLAY_DOWNLOADS}/agent"/aw-*.bundle; do
+            cp "$patch" "${REPLAY_INPUT}/"
+          done
+          shopt -u nullglob
+
+          if [ ! -f "${REPLAY_INPUT}/aw-prompts/prompt.txt" ] && [ ! -f "${REPLAY_INPUT}/agent_output.json" ]; then
+            echo "::error::Normalized replay input does not contain aw-prompts/prompt.txt or agent_output.json. Check the selected artifacts."
+            exit 1
+          fi
+
+      - name: Build or fetch detector
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/gh-aw-replay/bin"
+          case "$DETECTOR_SOURCE" in
+            current)
+              go build -o "${RUNNER_TEMP}/gh-aw-replay/bin/threat-detect" ./cmd/threat-detect
+              echo "DETECTOR_BIN=${RUNNER_TEMP}/gh-aw-replay/bin/threat-detect" >> "$GITHUB_ENV"
+              ;;
+            release)
+              if [ -z "$DETECTOR_REF" ]; then
+                echo "::error::detector_ref must be set to a release tag when detector_source=release."
+                exit 1
+              fi
+              gh release download "$DETECTOR_REF" \
+                --repo "$GITHUB_REPOSITORY" \
+                --pattern threat-detect-linux-amd64 \
+                --dir "${RUNNER_TEMP}/gh-aw-replay/bin"
+              chmod +x "${RUNNER_TEMP}/gh-aw-replay/bin/threat-detect-linux-amd64"
+              echo "DETECTOR_BIN=${RUNNER_TEMP}/gh-aw-replay/bin/threat-detect-linux-amd64" >> "$GITHUB_ENV"
+              ;;
+            image)
+              image_tag="${DETECTOR_REF:-latest}"
+              echo "DETECTOR_IMAGE=ghcr.io/github/gh-aw-threat-detection:${image_tag}" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "::error::Unsupported detector_source '${DETECTOR_SOURCE}'."
+              exit 1
+              ;;
+          esac
+
+      - name: Install selected engine CLI
+        if: ${{ inputs.detector_source != 'image' }}
+        run: |
+          set -euo pipefail
+          case "$ENGINE" in
+            copilot)
+              if ! command -v copilot >/dev/null 2>&1; then
+                npm install --global @github/copilot@1.0.43
+              fi
+              ;;
+            claude)
+              if ! command -v claude >/dev/null 2>&1; then
+                npm install --global @anthropic-ai/claude-code@2.1.132
+              fi
+              ;;
+            codex)
+              if ! command -v codex >/dev/null 2>&1; then
+                npm install --global @openai/codex@0.129.0
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported engine '${ENGINE}'."
+              exit 1
+              ;;
+          esac
+
+      - name: Generate replay manifest
+        run: |
+          set -euo pipefail
+          jq -n \
+            --slurpfile run "${REPLAY_METADATA}/source-run.json" \
+            --slurpfile artifacts "${REPLAY_METADATA}/artifact-metadata.json" \
+            --arg source_repository "${SOURCE_OWNER}/${SOURCE_REPO_NAME}" \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_run_attempt "$SOURCE_RUN_ATTEMPT" \
+            --arg agent_artifact "$AGENT_ARTIFACT" \
+            --arg activation_artifact "$ACTIVATION_ARTIFACT" \
+            --arg experiment_artifact "$EXPERIMENT_ARTIFACT" \
+            --arg original_detection_artifact "$ORIGINAL_DETECTION_ARTIFACT" \
+            --arg detector_source "$DETECTOR_SOURCE" \
+            --arg detector_ref "$DETECTOR_REF" \
+            --arg engine "$ENGINE" \
+            --arg model "$MODEL" \
+            --arg use_awf "$USE_AWF" \
+            --arg workflow_name_override "$WORKFLOW_NAME_OVERRIDE" \
+            --arg workflow_description_override "$WORKFLOW_DESCRIPTION_OVERRIDE" \
+            '{
+              source: {
+                repository: $source_repository,
+                run_id: $source_run_id,
+                requested_run_attempt: $source_run_attempt,
+                run_attempt: ($run[0].run_attempt // null),
+                event: ($run[0].event // null),
+                status: ($run[0].status // null),
+                conclusion: ($run[0].conclusion // null),
+                html_url: ($run[0].html_url // null),
+                head_branch: ($run[0].head_branch // null),
+                head_sha: ($run[0].head_sha // null),
+                run_started_at: ($run[0].run_started_at // null),
+                updated_at: ($run[0].updated_at // null)
+              },
+              artifacts: {
+                requested: {
+                  agent: $agent_artifact,
+                  activation: $activation_artifact,
+                  experiment: $experiment_artifact,
+                  original_detection: $original_detection_artifact
+                },
+                available: $artifacts[0]
+              },
+              replay: {
+                detector_source: $detector_source,
+                detector_ref: $detector_ref,
+                engine: $engine,
+                model: $model,
+                use_awf: ($use_awf == "true"),
+                workflow_name_override: $workflow_name_override,
+                workflow_description_override: $workflow_description_override
+              }
+            }' > "${REPLAY_OUTPUT}/manifest.json"
+
+      - name: Run replay detection
+        id: replay
+        env:
+          WORKFLOW_NAME: ${{ inputs.workflow_name_override }}
+          WORKFLOW_DESCRIPTION: ${{ inputs.workflow_description_override }}
+        run: |
+          set -euo pipefail
+          result_path="${REPLAY_OUTPUT}/result.json"
+          log_path="${REPLAY_OUTPUT}/replay.log"
+          if [ "$ENGINE" = "copilot" ] && [ -n "${GH_AW_COPILOT_TOKEN}" ]; then
+            export GH_TOKEN="$GH_AW_COPILOT_TOKEN"
+            export GITHUB_TOKEN="$GH_AW_COPILOT_TOKEN"
+          fi
+          args=(--engine "$ENGINE" --output "$result_path")
+          if [ -n "$MODEL" ]; then
+            args+=(--model "$MODEL")
+          fi
+          args+=("$REPLAY_INPUT")
+
+          run_status=0
+          if [ "$DETECTOR_SOURCE" = "image" ]; then
+            docker pull "$DETECTOR_IMAGE"
+            docker_args=(--engine "$ENGINE" --output /workspace/output/result.json)
+            if [ -n "$MODEL" ]; then
+              docker_args+=(--model "$MODEL")
+            fi
+            docker_args+=(/workspace/artifacts)
+            set +e
+            docker run --rm \
+              -e "CUSTOM_PROMPT=${CUSTOM_PROMPT}" \
+              -e "WORKFLOW_NAME=${WORKFLOW_NAME}" \
+              -e "WORKFLOW_DESCRIPTION=${WORKFLOW_DESCRIPTION}" \
+              -v "${REPLAY_INPUT}:/workspace/artifacts:ro" \
+              -v "${REPLAY_OUTPUT}:/workspace/output" \
+              "$DETECTOR_IMAGE" "${docker_args[@]}" 2>&1 | tee "$log_path"
+            run_status=${PIPESTATUS[0]}
+            set -e
+          elif [ "$USE_AWF" = "true" ]; then
+            if ! command -v awf >/dev/null 2>&1; then
+              echo "::error::AWF mode requires an awf CLI on PATH. Re-run with use_awf=false for direct replay or use a runner image that includes AWF."
+              exit 2
+            fi
+            jq -n \
+              --arg engine "$ENGINE" \
+              --arg model "$MODEL" \
+              --arg artifacts_dir "$REPLAY_INPUT" \
+              --arg result_path "$result_path" \
+              '{
+                name: "gh-aw-threat-detection-replay",
+                engine: $engine,
+                model: $model,
+                artifacts_dir: $artifacts_dir,
+                result_path: $result_path
+              }' > "${REPLAY_OUTPUT}/awf-replay-config.json"
+            set +e
+            awf exec -- "$DETECTOR_BIN" "${args[@]}" 2>&1 | tee "$log_path"
+            run_status=${PIPESTATUS[0]}
+            set -e
+          else
+            set +e
+            "$DETECTOR_BIN" "${args[@]}" 2>&1 | tee "$log_path"
+            run_status=${PIPESTATUS[0]}
+            set -e
+          fi
+
+          echo "exit_code=${run_status}" >> "$GITHUB_OUTPUT"
+          if [ "$run_status" -eq 0 ]; then
+            echo "outcome=safe" >> "$GITHUB_OUTPUT"
+          elif [ "$run_status" -eq 1 ]; then
+            echo "outcome=threat_detected" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Replay detector failed with infrastructure/configuration exit code ${run_status}."
+            exit "$run_status"
+          fi
+
+      - name: Extract original detection result
+        if: ${{ inputs.original_detection_artifact != '' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import re
+
+          root = pathlib.Path(__import__('os').environ['REPLAY_DOWNLOADS']) / 'original-detection'
+          output = pathlib.Path(__import__('os').environ['REPLAY_OUTPUT']) / 'original-result.json'
+          candidates = list(root.rglob('detection.log')) + list(root.rglob('*.log'))
+          marker = re.compile(r'THREAT_DETECTION_RESULT:(\{.*\})')
+          for path in candidates:
+              for line in path.read_text(errors='replace').splitlines():
+                  match = marker.search(line)
+                  if match:
+                      output.write_text(json.dumps(json.loads(match.group(1)), indent=2) + '\n')
+                      raise SystemExit(0)
+          raise SystemExit(0)
+          PY
+
+      - name: Compare replay with original result
+        run: |
+          set -euo pipefail
+          if [ -f "${REPLAY_OUTPUT}/original-result.json" ] && [ -f "${REPLAY_OUTPUT}/result.json" ]; then
+            jq -n \
+              --slurpfile original "${REPLAY_OUTPUT}/original-result.json" \
+              --slurpfile replay "${REPLAY_OUTPUT}/result.json" \
+              '{
+                matches: ($original[0] == $replay[0]),
+                original: $original[0],
+                replay: $replay[0]
+              }' > "${REPLAY_OUTPUT}/comparison.json"
+          else
+            jq -n '{matches: null, reason: "original detection result was not available"}' > "${REPLAY_OUTPUT}/comparison.json"
+          fi
+
+      - name: Sanitize replay outputs
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import pathlib
+
+          output = pathlib.Path(os.environ['REPLAY_OUTPUT'])
+          secret_values = [
+              os.environ.get('GH_TOKEN'),
+              os.environ.get('GH_AW_COPILOT_TOKEN'),
+              os.environ.get('ANTHROPIC_API_KEY'),
+              os.environ.get('OPENAI_API_KEY'),
+          ]
+          replacements = [value for value in secret_values if value]
+          for path in output.glob('*'):
+              if not path.is_file():
+                  continue
+              try:
+                  text = path.read_text(errors='strict')
+              except UnicodeDecodeError:
+                  continue
+              for value in replacements:
+                  text = text.replace(value, '***')
+              path.write_text(text)
+          PY
+
+      - name: Write sanitized file inventory
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          roots = {
+              'input': pathlib.Path(os.environ['REPLAY_INPUT']),
+              'output': pathlib.Path(os.environ['REPLAY_OUTPUT']),
+          }
+          inventory = []
+          for label, root in roots.items():
+              for path in sorted(p for p in root.rglob('*') if p.is_file()):
+                  if path.name == 'file-inventory.json':
+                      continue
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                  inventory.append({
+                      'area': label,
+                      'path': str(path.relative_to(root)),
+                      'size_in_bytes': path.stat().st_size,
+                      'sha256': digest,
+                  })
+          (pathlib.Path(os.environ['REPLAY_OUTPUT']) / 'file-inventory.json').write_text(json.dumps(inventory, indent=2) + '\n')
+          PY
+
+      - name: Summarize replay
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Threat detection replay"
+            echo
+            echo "- Source run: ${SOURCE_OWNER}/${SOURCE_REPO_NAME}#${SOURCE_RUN_ID}"
+            echo "- Detector source: ${DETECTOR_SOURCE}${DETECTOR_REF:+ (${DETECTOR_REF})}"
+            echo "- Engine: ${ENGINE}${MODEL:+ / ${MODEL}}"
+            echo "- AWF mode: ${USE_AWF}"
+            echo "- Replay exit code: ${{ steps.replay.outputs.exit_code || 'not completed' }}"
+            echo "- Replay outcome: ${{ steps.replay.outputs.outcome || 'not completed' }}"
+            if [ -f "${REPLAY_OUTPUT}/comparison.json" ]; then
+              echo "- Original comparison: $(jq -r 'if .matches == null then .reason elif .matches then "matches" else "differs" end' "${REPLAY_OUTPUT}/comparison.json")"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload replay artifacts
+        if: ${{ always() && inputs.upload_replay_artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-detection-${{ inputs.run_id }}
+          path: |
+            ${{ runner.temp }}/gh-aw-replay/output/manifest.json
+            ${{ runner.temp }}/gh-aw-replay/output/file-inventory.json
+            ${{ runner.temp }}/gh-aw-replay/output/result.json
+            ${{ runner.temp }}/gh-aw-replay/output/comparison.json
+            ${{ runner.temp }}/gh-aw-replay/output/original-result.json
+            ${{ runner.temp }}/gh-aw-replay/output/replay.log
+            ${{ runner.temp }}/gh-aw-replay/output/awf-replay-config.json
+          if-no-files-found: ignore
+          retention-days: 14

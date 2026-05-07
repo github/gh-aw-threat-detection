@@ -82,10 +82,14 @@ Production AI-backed detection requires the selected engine CLI and its authenti
 ```
 <artifacts-dir>/
 ├── aw-prompts/
-│   └── prompt.txt          # Workflow prompt file
+│   ├── prompt.txt          # Expanded workflow prompt file
+│   ├── prompt-template.txt # Pre-expansion prompt template (optional)
+│   └── prompt-import-tree.json # Runtime-import provenance (optional)
 ├── agent_output.json       # Agent structured output
+├── aw_info.json            # Activation metadata (optional)
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
+├── experiments/            # Experiment assignment/state files (optional)
 └── comment-memory/         # Agent comment memory (optional)
     └── *.md
 ```
@@ -100,6 +104,20 @@ Production AI-backed detection requires the selected engine CLI and its authenti
   "reasons": []
 }
 ```
+
+### Replay workflow
+
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior `github/gh-aw` workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
+
+For private or cross-repository source runs, configure a repository secret named `GH_AW_REPLAY_TOKEN` with read access to the source repository's Actions artifacts. If that secret is not set, the workflow uses the dispatching repository's `GITHUB_TOKEN`, which only works for accessible runs.
+
+Common dispatch examples:
+
+- Current checkout, direct CLI replay: set `run_id`, leave `detector_source=current`, `engine=copilot`, and `use_awf=false`.
+- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v1.0.0`.
+- Model comparison: set `model` to the engine-specific model name to pass through `--model`.
+- Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
+- AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default because the published detector image only contains the Go binary and does not bundle engine or AWF CLIs.
 
 ## Stage Status and Decisions
 
