@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "generated_by": "maintainers",
+  "description": "Lifecycle registry for gh-aw threat detection container releases. The parent orchestrator must check this registry before pulling or running a selected detector version.",
+  "releases": []
+}

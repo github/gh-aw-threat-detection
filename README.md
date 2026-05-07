@@ -10,6 +10,7 @@ Threat Detection component for [GitHub Agentic Workflows](https://github.com/git
 - [Usage](#usage)
 - [Stage Status and Decisions](#stage-status-and-decisions)
 - [Private Container Release Setup](#private-container-release-setup)
+- [Release Lifecycle and Emergency Yanks](#release-lifecycle-and-emergency-yanks)
 - [Development](#development)
 - [Architecture](#architecture)
 - [Integration with gh-aw](#integration-with-gh-aw)
@@ -144,6 +145,26 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_NAME` | Optional local/container runs | Included in the generated prompt. |
 | `WORKFLOW_DESCRIPTION` | Optional local/container runs | Included in the generated prompt. |
 | `CUSTOM_PROMPT` | Optional local/container runs | Appended to the default detection prompt. |
+
+## Release Lifecycle and Emergency Yanks
+
+Release lifecycle metadata is recorded in [`releases/threat-detection-lifecycle.json`](releases/threat-detection-lifecycle.json).
+The registry supports `active`, `deprecated`, `obsolete`, and `yanked` states.
+`yanked` means a release is unsafe to run and is stronger than `obsolete`.
+
+The parent orchestrator (`gh-aw`) must check this registry before pulling or
+running a detector image:
+
+- `latest` must not point at a yanked version. Maintainers use the manual
+  **Yank Release** workflow to retag `latest` to a safe stable replacement.
+- Explicit version or digest pins that match a yanked registry entry must fail
+  closed before detector execution.
+- Explicit pins must not be silently downgraded or upgraded; the failure message
+  should include the yank reason and replacement version.
+
+Yanked release artifacts remain available for audit and forensics unless
+maintainers choose separate package removal. See [DEVGUIDE.md](DEVGUIDE.md#emergency-yank-process)
+for maintainer approval, communication, and workflow details.
 
 ## Development
 

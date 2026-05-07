@@ -1,7 +1,7 @@
 .PHONY: all build test test-coverage lint golint clean docker-build docker-smoke docker-push \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
-	sbom agent-finish help
+	validate-lifecycle sbom agent-finish help
 
 BINARY_NAME=threat-detect
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -100,6 +100,9 @@ test-coverage:
 lint:
 	go vet ./...
 
+validate-lifecycle:
+	go test ./releases
+
 golint:
 	@GOPATH=$$(go env GOPATH); \
 	if command -v golangci-lint >/dev/null 2>&1 || [ -x "$$GOPATH/bin/golangci-lint" ]; then \
@@ -177,6 +180,7 @@ help:
 	@echo "  fmt            - Format Go code"
 	@echo "  fmt-check      - Validate Go formatting"
 	@echo "  lint           - Run go vet"
+	@echo "  validate-lifecycle - Validate release lifecycle metadata"
 	@echo "  golint         - Run golangci-lint"
 	@echo "  deps           - Download and tidy Go modules"
 	@echo "  deps-dev       - Install development dependencies and tools"

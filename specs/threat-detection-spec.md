@@ -195,12 +195,20 @@ The implementation MAY pass through engine-specific authentication variables req
 
 **TD-27**: Private repository status MUST NOT block container publication or consumption. When the source repository or GHCR package is private, the package MUST be configured so approved consuming repositories can pull pinned image tags with `packages: read`.
 
+**TD-28**: Release lifecycle metadata MUST support `active`, `deprecated`, `obsolete`, and `yanked` states. A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected image digest when known.
+
+**TD-29**: The parent orchestrator (`gh-aw`) MUST check release lifecycle metadata before pulling or running the detector image. A selected version or digest whose lifecycle state is `yanked` MUST fail closed before detector execution.
+
+**TD-30**: Explicitly pinned yanked versions or digests MUST NOT silently fall back to another version. The failure message SHOULD explain that the selected detector was yanked and name the safe replacement when one exists.
+
+**TD-31**: Floating `latest` selection MUST NOT resolve to a yanked version. Maintainers MAY retag `latest` to the newest unyanked stable replacement because `latest` is already a floating selector.
+
 ---
 
 ## 10. Security Considerations
 
-**TD-28**: The detection container SHOULD run with no network access (fully blocked egress).
+**TD-32**: The detection container SHOULD run with no network access (fully blocked egress).
 
-**TD-29**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
+**TD-33**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
 
-**TD-30**: Detection results MUST NOT be modifiable by the agent being analyzed.
+**TD-34**: Detection results MUST NOT be modifiable by the agent being analyzed.

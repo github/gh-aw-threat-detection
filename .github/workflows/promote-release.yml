@@ -18,13 +18,21 @@ jobs:
     environment:
       name: release-promote
     steps:
+      - uses: actions/checkout@v4
+
       - name: Verify prerelease exists
         id: verify
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           IMAGE="ghcr.io/github/gh-aw-threat-detection"
+          LIFECYCLE_REGISTRY="releases/threat-detection-lifecycle.json"
           RELEASE_INFO=$(gh release view "${{ inputs.tag }}" --json body,isPrerelease,tagName)
+          LIFECYCLE_STATUS=$(jq -r --arg version "${{ inputs.tag }}" '.releases[]? | select(.version == $version) | .status' "$LIFECYCLE_REGISTRY" | head -n 1)
+          if [ "$LIFECYCLE_STATUS" = "yanked" ] || [ "$LIFECYCLE_STATUS" = "obsolete" ]; then
+            echo "::error::Release ${{ inputs.tag }} is ${LIFECYCLE_STATUS} in ${LIFECYCLE_REGISTRY}. Refusing to promote it to latest."
+            exit 1
+          fi
           IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
           if [ "$IS_PRERELEASE" != "true" ]; then
             echo "::error::Release ${{ inputs.tag }} is not a prerelease. Nothing to promote."
