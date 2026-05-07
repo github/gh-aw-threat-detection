@@ -23,6 +23,11 @@ ENGINES = {
     "smoke-claude.lock.yml": ("claude", "Smoke Claude (Container Detection)"),
     "smoke-codex.lock.yml": ("codex", "Smoke Codex (Container Detection)"),
 }
+EXECUTION_STEPS = {
+    "copilot": "Execute GitHub Copilot CLI",
+    "claude": "Execute Claude Code CLI",
+    "codex": "Execute Codex CLI",
+}
 
 
 def indent(text: str, spaces: int) -> str:
@@ -71,14 +76,9 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
         '[ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; '
         f"args=(--engine {engine}); "
         'if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; '
-        '/tmp/gh-aw/threat-detect-bin/threat-detect "${args[@]}" /tmp/gh-aw/threat-detection'
+        '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" /tmp/gh-aw/threat-detection'
     )
-    shell = f'''- name: Ensure threat-detection directory and log
-  if: always() && steps.detection_guard.outputs.run_detection == 'true'
-  run: |
-    mkdir -p /tmp/gh-aw/threat-detection /tmp/gh-aw/threat-detect-bin
-    touch /tmp/gh-aw/threat-detection/detection.log
-- name: Log in to GHCR for detector image
+    shell = f'''- name: Log in to GHCR for detector image
   if: always() && steps.detection_guard.outputs.run_detection == 'true'
   env:
     GHCR_TOKEN: ${{{{ secrets.GH_AW_GITHUB_TOKEN || github.token }}}}
@@ -96,17 +96,11 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
   env:
     THREAT_DETECTION_IMAGE: ${{{{ vars.GH_AW_THREAT_DETECTION_IMAGE || '{DEFAULT_IMAGE}' }}}}
   run: |
+    mkdir -p "${{{{ RUNNER_TEMP }}}}/gh-aw/threat-detect-bin"
     container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
     trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-    docker cp "$container_id:/usr/local/bin/threat-detect" /tmp/gh-aw/threat-detect-bin/threat-detect
-    chmod 755 /tmp/gh-aw/threat-detect-bin/threat-detect
-- name: Setup Node.js
-  uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-  with:
-    node-version: '24'
-    package-manager-cache: false
-- name: Install AWF binary
-  run: bash "${{RUNNER_TEMP}}/gh-aw/actions/install_awf_binary.sh" v0.25.40
+    docker cp "$container_id:/usr/local/bin/threat-detect" "${{{{ RUNNER_TEMP }}}}/gh-aw/threat-detect-bin/threat-detect"
+    chmod 755 "${{{{ RUNNER_TEMP }}}}/gh-aw/threat-detect-bin/threat-detect"
 - name: Execute threat detection with AWF
   if: always() && steps.detection_guard.outputs.run_detection == 'true'
   continue-on-error: true
@@ -157,10 +151,18 @@ def transform(source: Path) -> str:
     workflow_description = extract_workflow_description(text)
     awf_config_line, awf_command_line = extract_awf_lines(text)
 
-    start = re.search(r"^      - name: Setup threat detection\n", text, flags=re.MULTILINE)
     end = re.search(r"^      - name: Upload threat detection log\n", text, flags=re.MULTILINE)
-    if not start or not end or start.start() >= end.start():
-        raise ValueError(f"could not find generated detection step range in {source}")
+    if not end:
+        raise ValueError(f"could not find generated detection upload step in {source}")
+    step_name = EXECUTION_STEPS[engine]
+    starts = [
+        match
+        for match in re.finditer(rf"^      - name: {re.escape(step_name)}\n", text, flags=re.MULTILINE)
+        if match.start() < end.start()
+    ]
+    start = starts[-1] if starts else None
+    if not start or start.start() >= end.start():
+        raise ValueError(f"could not find generated detection execution step range in {source}")
 
     header = (
         f"# gh-aw-threat-detection-sibling: generated from {source.name} by "

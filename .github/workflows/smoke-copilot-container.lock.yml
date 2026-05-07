@@ -1132,11 +1132,35 @@ jobs:
           done
           echo "Prepared threat detection files:"
           ls -la /tmp/gh-aw/threat-detection/ 2>/dev/null || true
+      - name: Setup threat detection
+        if: always() && steps.detection_guard.outputs.run_detection == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          WORKFLOW_NAME: "Smoke Copilot"
+          WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
+          HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/setup_threat_detection.cjs');
+            await main();
       - name: Ensure threat-detection directory and log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         run: |
-          mkdir -p /tmp/gh-aw/threat-detection /tmp/gh-aw/threat-detect-bin
+          mkdir -p /tmp/gh-aw/threat-detection
           touch /tmp/gh-aw/threat-detection/detection.log
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install GitHub Copilot CLI
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.40
+        env:
+          GH_HOST: github.com
+      - name: Install AWF binary
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.25.40
       - name: Log in to GHCR for detector image
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
@@ -1155,17 +1179,11 @@ jobs:
         env:
           THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
         run: |
+          mkdir -p "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin"
           container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
           trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-          docker cp "$container_id:/usr/local/bin/threat-detect" /tmp/gh-aw/threat-detect-bin/threat-detect
-          chmod 755 /tmp/gh-aw/threat-detect-bin/threat-detect
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
-      - name: Install AWF binary
-        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.25.40
+          docker cp "$container_id:/usr/local/bin/threat-detect" "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin/threat-detect"
+          chmod 755 "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin/threat-detect"
       - name: Execute threat detection with AWF
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true
@@ -1183,7 +1201,7 @@ jobs:
           printf '%s\n' '{"$schema":"https://github.com/github/gh-aw-firewall/releases/download/v0.25.40/awf-config.schema.json","network":{"allowDomains":["api.business.githubcopilot.com","api.enterprise.githubcopilot.com","api.github.com","api.githubcopilot.com","api.individual.githubcopilot.com","github.com","host.docker.internal","telemetry.enterprise.githubcopilot.com"]},"apiProxy":{"enabled":true},"container":{"imageTag":"0.25.40,squid=sha256:b084f4a2c771f584ee68084ced52fa6b3245197a1889645d817462d307d3ac51,agent=sha256:14ff567e8d9d4c2fbc5e55c973488381c71d7e0fdbe72d30ee7b8a738fd86504,api-proxy=sha256:2883ca3e5ae9f330cafdd9345bfd4ae17fc8da36c96d4c9a1f76e922b4c45280,cli-proxy=sha256:3e7152911d4b4b7b97beef9d3d7d924ff7902227e86001ef3838fb728d5d514c"}}' > "${RUNNER_TEMP}/gh-aw/awf-config.json" && cp "${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json
           # shellcheck disable=SC1003
           sudo -E awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" --env-all --exclude-env COPILOT_GITHUB_TOKEN --log-level info --proxy-logs-dir /tmp/gh-aw/sandbox/firewall/logs --audit-dir /tmp/gh-aw/sandbox/firewall/audit --enable-host-access --allow-host-ports 80,443,8080 --skip-pull \
-            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; args=(--engine copilot); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; /tmp/gh-aw/threat-detect-bin/threat-detect "${args[@]}" /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
+            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; args=(--engine copilot); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
       - name: Upload threat detection log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

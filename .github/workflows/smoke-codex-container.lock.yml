@@ -1164,11 +1164,109 @@ jobs:
           done
           echo "Prepared threat detection files:"
           ls -la /tmp/gh-aw/threat-detection/ 2>/dev/null || true
+      - name: Setup threat detection
+        if: always() && steps.detection_guard.outputs.run_detection == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          WORKFLOW_NAME: "Smoke Codex"
+          WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Codex engine execution in this repository"
+          HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
+        with:
+          script: |
+            const { setupGlobals } = require('${{ runner.temp }}/gh-aw/actions/setup_globals.cjs');
+            setupGlobals(core, github, context, exec, io, getOctokit);
+            const { main } = require('${{ runner.temp }}/gh-aw/actions/setup_threat_detection.cjs');
+            await main();
       - name: Ensure threat-detection directory and log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         run: |
-          mkdir -p /tmp/gh-aw/threat-detection /tmp/gh-aw/threat-detect-bin
+          mkdir -p /tmp/gh-aw/threat-detection
           touch /tmp/gh-aw/threat-detection/detection.log
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install Codex CLI
+        run: npm install --ignore-scripts -g @openai/codex@0.128.0
+      - name: Install AWF binary
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.25.40
+      - name: Download container images
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-firewall/agent:0.25.40@sha256:14ff567e8d9d4c2fbc5e55c973488381c71d7e0fdbe72d30ee7b8a738fd86504 ghcr.io/github/gh-aw-firewall/api-proxy:0.25.40@sha256:2883ca3e5ae9f330cafdd9345bfd4ae17fc8da36c96d4c9a1f76e922b4c45280 ghcr.io/github/gh-aw-firewall/squid:0.25.40@sha256:b084f4a2c771f584ee68084ced52fa6b3245197a1889645d817462d307d3ac51 ghcr.io/github/gh-aw-mcpg:v0.3.6@sha256:2bb8eef86006a4c5963c55616a9c51c32f27bfdecb023b8aa6f91f6718d9171c
+      - name: Start MCP Gateway
+        id: start-mcp-gateway
+        env:
+          CODEX_HOME: /tmp/gh-aw/mcp-config
+        run: |
+          set -eo pipefail
+          mkdir -p "${RUNNER_TEMP}/gh-aw/mcp-config"
+          
+          # Export gateway environment variables for MCP config and gateway script
+          export MCP_GATEWAY_PORT="8080"
+          export MCP_GATEWAY_DOMAIN="host.docker.internal"
+          export MCP_GATEWAY_HOST_DOMAIN="localhost"
+          MCP_GATEWAY_API_KEY=$(openssl rand -base64 45 | tr -d '/+=')
+          echo "::add-mask::${MCP_GATEWAY_API_KEY}"
+          export MCP_GATEWAY_API_KEY
+          export MCP_GATEWAY_PAYLOAD_DIR="/tmp/gh-aw/mcp-payloads"
+          mkdir -p "${MCP_GATEWAY_PAYLOAD_DIR}"
+          export MCP_GATEWAY_PAYLOAD_SIZE_THRESHOLD="524288"
+          export DEBUG="*"
+          
+          export GH_AW_ENGINE="codex"
+          MCP_GATEWAY_UID=$(id -u 2>/dev/null || echo '0')
+          MCP_GATEWAY_GID=$(id -g 2>/dev/null || echo '0')
+          DOCKER_SOCK_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo '0')
+          export MCP_GATEWAY_DOCKER_COMMAND='docker run -i --rm --network host --add-host host.docker.internal:127.0.0.1 --user '"${MCP_GATEWAY_UID}"':'"${MCP_GATEWAY_GID}"' --group-add '"${DOCKER_SOCK_GID}"' -v /var/run/docker.sock:/var/run/docker.sock -e MCP_GATEWAY_PORT -e MCP_GATEWAY_DOMAIN -e MCP_GATEWAY_API_KEY -e MCP_GATEWAY_PAYLOAD_DIR -e MCP_GATEWAY_PAYLOAD_SIZE_THRESHOLD -e DEBUG -e MCP_GATEWAY_LOG_DIR -e GH_AW_MCP_LOG_DIR -e GH_AW_SAFE_OUTPUTS -e GH_AW_SAFE_OUTPUTS_CONFIG_PATH -e GH_AW_SAFE_OUTPUTS_TOOLS_PATH -e GH_AW_ASSETS_BRANCH -e GH_AW_ASSETS_MAX_SIZE_KB -e GH_AW_ASSETS_ALLOWED_EXTS -e DEFAULT_BRANCH -e GITHUB_MCP_SERVER_TOKEN -e GITHUB_MCP_GUARD_MIN_INTEGRITY -e GITHUB_MCP_GUARD_REPOS -e GITHUB_REPOSITORY -e GITHUB_SERVER_URL -e GITHUB_SHA -e GITHUB_WORKSPACE -e GITHUB_TOKEN -e GITHUB_RUN_ID -e GITHUB_RUN_NUMBER -e GITHUB_RUN_ATTEMPT -e GITHUB_JOB -e GITHUB_ACTION -e GITHUB_EVENT_NAME -e GITHUB_EVENT_PATH -e GITHUB_ACTOR -e GITHUB_ACTOR_ID -e GITHUB_TRIGGERING_ACTOR -e GITHUB_WORKFLOW -e GITHUB_WORKFLOW_REF -e GITHUB_WORKFLOW_SHA -e GITHUB_REF -e GITHUB_REF_NAME -e GITHUB_REF_TYPE -e GITHUB_HEAD_REF -e GITHUB_BASE_REF -e CODEX_HOME -v /tmp/gh-aw/mcp-payloads:/tmp/gh-aw/mcp-payloads:rw -v /opt:/opt:ro -v /tmp:/tmp:rw -v '"${GITHUB_WORKSPACE}"':'"${GITHUB_WORKSPACE}"':rw ghcr.io/github/gh-aw-mcpg:v0.3.6'
+          
+          cat > "${RUNNER_TEMP}/gh-aw/mcp-config/config.toml" << GH_AW_MCP_CONFIG_eebc7fe6fe43c111_EOF
+          [history]
+          persistence = "none"
+          
+          [shell_environment_policy]
+          inherit = "core"
+          include_only = ["CODEX_API_KEY", "HOME", "OPENAI_API_KEY", "PATH"]
+          GH_AW_MCP_CONFIG_eebc7fe6fe43c111_EOF
+          
+          # Generate JSON config for MCP gateway
+          GH_AW_NODE=$(which node 2>/dev/null || command -v node 2>/dev/null || echo node)
+          cat << GH_AW_MCP_CONFIG_1ef987f0df28cc14_EOF | "$GH_AW_NODE" "${RUNNER_TEMP}/gh-aw/actions/start_mcp_gateway.cjs"
+          {
+            "mcpServers": {
+            },
+            "gateway": {
+              "port": $MCP_GATEWAY_PORT,
+              "domain": "${MCP_GATEWAY_DOMAIN}",
+              "apiKey": "${MCP_GATEWAY_API_KEY}",
+              "payloadDir": "${MCP_GATEWAY_PAYLOAD_DIR}"
+            }
+          }
+          GH_AW_MCP_CONFIG_1ef987f0df28cc14_EOF
+          
+          # Sync converter output to writable CODEX_HOME for Codex
+          mkdir -p /tmp/gh-aw/mcp-config
+          cat > "/tmp/gh-aw/mcp-config/config.toml" << GH_AW_CODEX_SHELL_POLICY_843093f69c692212_EOF
+          model_provider = "openai-proxy"
+          [model_providers.openai-proxy]
+          name = "OpenAI AWF proxy"
+          base_url = "http://172.30.0.30:10000"
+          env_key = "OPENAI_API_KEY"
+          supports_websockets = false
+          [shell_environment_policy]
+          inherit = "core"
+          include_only = ["CODEX_API_KEY", "HOME", "OPENAI_API_KEY", "PATH"]
+          GH_AW_CODEX_SHELL_POLICY_843093f69c692212_EOF
+          awk '
+            BEGIN { skip_openai_proxy = 0 }
+            /^[[:space:]]*model_provider[[:space:]]*=/ { next }
+            /^\[model_providers\.openai-proxy\][[:space:]]*$/ { skip_openai_proxy = 1; next }
+            /^\[/ { skip_openai_proxy = 0 }
+            !skip_openai_proxy { print }
+          ' "${RUNNER_TEMP}/gh-aw/mcp-config/config.toml" >> "/tmp/gh-aw/mcp-config/config.toml"
+          chmod 600 "/tmp/gh-aw/mcp-config/config.toml"
+          mkdir -p "${CODEX_HOME}"
+          if [ "/tmp/gh-aw/mcp-config/config.toml" != "${CODEX_HOME}/config.toml" ]; then cp "/tmp/gh-aw/mcp-config/config.toml" "${CODEX_HOME}/config.toml"; fi
+          chmod 600 "${CODEX_HOME}/config.toml"
       - name: Log in to GHCR for detector image
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
@@ -1187,17 +1285,11 @@ jobs:
         env:
           THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
         run: |
+          mkdir -p "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin"
           container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
           trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-          docker cp "$container_id:/usr/local/bin/threat-detect" /tmp/gh-aw/threat-detect-bin/threat-detect
-          chmod 755 /tmp/gh-aw/threat-detect-bin/threat-detect
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
-      - name: Install AWF binary
-        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.25.40
+          docker cp "$container_id:/usr/local/bin/threat-detect" "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin/threat-detect"
+          chmod 755 "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin/threat-detect"
       - name: Execute threat detection with AWF
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true
@@ -1215,7 +1307,7 @@ jobs:
           printf '%s\n' '{"$schema":"https://github.com/github/gh-aw-firewall/releases/download/v0.25.40/awf-config.schema.json","network":{"allowDomains":["172.30.0.1","api.openai.com","chatgpt.com","host.docker.internal","openai.com"]},"apiProxy":{"enabled":true},"container":{"imageTag":"0.25.40,squid=sha256:b084f4a2c771f584ee68084ced52fa6b3245197a1889645d817462d307d3ac51,agent=sha256:14ff567e8d9d4c2fbc5e55c973488381c71d7e0fdbe72d30ee7b8a738fd86504,api-proxy=sha256:2883ca3e5ae9f330cafdd9345bfd4ae17fc8da36c96d4c9a1f76e922b4c45280,cli-proxy=sha256:3e7152911d4b4b7b97beef9d3d7d924ff7902227e86001ef3838fb728d5d514c"}}' > "${RUNNER_TEMP}/gh-aw/awf-config.json" && cp "${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json
           # shellcheck disable=SC1003
           sudo -E awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" --env-all --exclude-env CODEX_API_KEY --exclude-env OPENAI_API_KEY --log-level info --proxy-logs-dir /tmp/gh-aw/sandbox/firewall/logs --audit-dir /tmp/gh-aw/sandbox/firewall/audit --enable-host-access --allow-host-ports 80,443,8080 --skip-pull \
-            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; args=(--engine codex); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; /tmp/gh-aw/threat-detect-bin/threat-detect "${args[@]}" /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
+            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; args=(--engine codex); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
       - name: Upload threat detection log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
