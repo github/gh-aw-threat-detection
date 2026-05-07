@@ -61,7 +61,7 @@ func run() int {
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.BoolVar(&triage, "triage", envBool("THREAT_DETECTION_TRIAGE", true), "Run fast structured-output triage before full detection")
-	flag.StringVar(&reflectURL, "reflect-url", envFirst("THREAT_DETECTION_REFLECT_URL", "API_PROXY_REFLECT_URL", "REFLECT_URL"), "api-proxy reflect base URL")
+	flag.StringVar(&reflectURL, "reflect-url", envFirstOrDefault("http://127.0.0.1:8080/reflect", "THREAT_DETECTION_REFLECT_URL", "API_PROXY_REFLECT_URL", "REFLECT_URL"), "api-proxy reflect base URL")
 	flag.StringVar(&triageModel, "triage-model", os.Getenv("THREAT_DETECTION_TRIAGE_MODEL"), "Model to use for reflect triage")
 	flag.IntVar(&triageMaxBytes, "triage-max-bytes", envInt("THREAT_DETECTION_TRIAGE_MAX_BYTES", detector.DefaultTriageMaxBytes()), "Maximum bytes per artifact to inline for triage")
 	flag.IntVar(&triageRetries, "triage-retries", envInt("THREAT_DETECTION_TRIAGE_RETRIES", 1), "Retries for malformed structured outputs")
@@ -199,13 +199,13 @@ func writeResult(result *detector.Result, outputJSON string) int {
 	return exitSafe
 }
 
-func envFirst(keys ...string) string {
+func envFirstOrDefault(fallback string, keys ...string) string {
 	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {
 			return value
 		}
 	}
-	return ""
+	return fallback
 }
 
 func envBool(key string, fallback bool) bool {

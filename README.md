@@ -59,19 +59,19 @@ threat-detect [flags] <artifacts-dir>
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--triage` — Enable fast Phase 1 structured-output triage. Default: `true`
-- `--reflect-url` — `api-proxy` `/reflect` base URL for structured-output calls
+- `--reflect-url` — `api-proxy` `/reflect` base URL for structured-output calls. Default: `http://127.0.0.1:8080/reflect`
 - `--triage-model` — Model override for Phase 1 `/reflect` triage
 - `--triage-max-bytes` — Maximum bytes per artifact to inline during triage
 - `--triage-retries` — Retries for malformed structured-output responses
 - `--version` — Print version and exit
 
 `--reflect-url` can also be supplied with `THREAT_DETECTION_REFLECT_URL`,
-`API_PROXY_REFLECT_URL`, or `REFLECT_URL`. When configured, `threat-detect`
-first tries a non-agentic `/reflect` call with a strict JSON schema matching the
-result contract. An all-false valid triage result exits successfully without the
-full detector. Threats, uncertainty, unsupported models, proxy errors, or
-malformed responses fail safe into the full detector. The full detector preserves
-the existing CLI engine behavior and prefers `/reflect` structured output when a
+`API_PROXY_REFLECT_URL`, or `REFLECT_URL`. By default, `threat-detect` first
+tries a non-agentic `/reflect` call with a strict JSON schema matching the result
+contract. An all-false valid triage result exits successfully without the full
+detector. Threats, uncertainty, unsupported models, proxy errors, or malformed
+responses fail safe into the full detector. The full detector preserves the
+existing CLI engine behavior and prefers `/reflect` structured output when a
 schema-capable model is available.
 
 **Exit codes:**
