@@ -19,9 +19,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:latest"
 ENGINES = {
-    "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot (Container Detection)"),
-    "smoke-claude.lock.yml": ("claude", "Smoke Claude (Container Detection)"),
-    "smoke-codex.lock.yml": ("codex", "Smoke Codex (Container Detection)"),
+    "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot Containerized"),
+    "smoke-claude.lock.yml": ("claude", "Smoke Claude Containerized"),
+    "smoke-codex.lock.yml": ("codex", "Smoke Codex Containerized"),
 }
 EXECUTION_STEPS = {
     "copilot": "Execute GitHub Copilot CLI",
@@ -96,11 +96,11 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
   env:
     THREAT_DETECTION_IMAGE: ${{{{ vars.GH_AW_THREAT_DETECTION_IMAGE || '{DEFAULT_IMAGE}' }}}}
   run: |
-    mkdir -p "${{{{ RUNNER_TEMP }}}}/gh-aw/threat-detect-bin"
+    mkdir -p "${{RUNNER_TEMP}}/gh-aw/threat-detect-bin"
     container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
     trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-    docker cp "$container_id:/usr/local/bin/threat-detect" "${{{{ RUNNER_TEMP }}}}/gh-aw/threat-detect-bin/threat-detect"
-    chmod 755 "${{{{ RUNNER_TEMP }}}}/gh-aw/threat-detect-bin/threat-detect"
+    docker cp "$container_id:/usr/local/bin/threat-detect" "${{RUNNER_TEMP}}/gh-aw/threat-detect-bin/threat-detect"
+    chmod 755 "${{RUNNER_TEMP}}/gh-aw/threat-detect-bin/threat-detect"
 - name: Execute threat detection with AWF
   if: always() && steps.detection_guard.outputs.run_detection == 'true'
   continue-on-error: true

@@ -1,0 +1,33 @@
+name: Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch smoke workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          workflows=(
+            smoke-copilot.lock.yml
+            smoke-claude.lock.yml
+            smoke-codex.lock.yml
+            smoke-copilot-container.lock.yml
+            smoke-claude-container.lock.yml
+            smoke-codex-container.lock.yml
+          )
+
+          for workflow in "${workflows[@]}"; do
+            gh workflow run "$workflow" --repo "$REPO" --ref "$REF"
+          done
