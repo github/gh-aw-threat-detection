@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 )
 
 type lifecycleRegistry struct {
@@ -121,6 +122,28 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 			name: "obsolete version missing reason",
 			mutate: func(registry *lifecycleRegistry) {
 				registry.Versions[2].Reason = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "obsolete date before deprecated date",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[2].DeprecatedDate = "2026-05-07"
+				registry.Versions[2].ObsoleteDate = "2026-05-06"
+			},
+			wantErr: true,
+		},
+		{
+			name: "obsolete date may match deprecated date",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[2].DeprecatedDate = "2026-05-07"
+				registry.Versions[2].ObsoleteDate = "2026-05-07"
+			},
+		},
+		{
+			name: "invalid calendar date",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[2].ObsoleteDate = "2026-99-99"
 			},
 			wantErr: true,
 		},
@@ -255,6 +278,17 @@ func validateLifecycleEntry(entry lifecycleEntry, versions map[string]struct{}) 
 		if entry.DeprecatedDate == "" || entry.ObsoleteDate == "" {
 			return fmt.Errorf("%s obsolete entries must include deprecated_date and obsolete_date", entry.Version)
 		}
+		deprecatedDate, ok := parseLifecycleDate(entry.DeprecatedDate)
+		if !ok {
+			return fmt.Errorf("%s deprecated_date must use YYYY-MM-DD", entry.Version)
+		}
+		obsoleteDate, ok := parseLifecycleDate(entry.ObsoleteDate)
+		if !ok {
+			return fmt.Errorf("%s obsolete_date must use YYYY-MM-DD", entry.Version)
+		}
+		if obsoleteDate.Before(deprecatedDate) {
+			return fmt.Errorf("%s obsolete_date must be on or after deprecated_date", entry.Version)
+		}
 		if err := validateReplacement(entry, versions); err != nil {
 			return err
 		}
@@ -293,7 +327,13 @@ func validSemverTag(version string) bool {
 }
 
 func validDate(date string) bool {
-	return regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`).MatchString(date)
+	_, ok := parseLifecycleDate(date)
+	return ok
+}
+
+func parseLifecycleDate(date string) (time.Time, bool) {
+	parsed, err := time.Parse("2006-01-02", date)
+	return parsed, err == nil && parsed.Format("2006-01-02") == date
 }
 
 func validUrgency(urgency string) bool {
