@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: release-promote
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Verify prerelease exists
         id: verify
