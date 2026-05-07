@@ -2,16 +2,15 @@
 description: Smoke test workflow that validates Copilot engine execution in this repository
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 9 * * *"
+  schedule: daily
 permissions:
   contents: read
-  issues: write
+  issues: read
+  pull-requests: read
   actions: read
 name: Smoke Copilot
 engine:
   id: copilot
-  max-turns: 20
 strict: false
 network:
   allowed:

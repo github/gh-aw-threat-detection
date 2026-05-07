@@ -2,11 +2,11 @@
 description: Smoke test workflow that validates Claude engine execution in this repository
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "37 9 * * *"
+  schedule: daily
 permissions:
   contents: read
-  issues: write
+  issues: read
+  pull-requests: read
   actions: read
 name: Smoke Claude
 engine:

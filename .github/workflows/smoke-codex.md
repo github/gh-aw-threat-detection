@@ -2,11 +2,11 @@
 description: Smoke test workflow that validates Codex engine execution in this repository
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "57 9 * * *"
+  schedule: daily
 permissions:
   contents: read
-  issues: write
+  issues: read
+  pull-requests: read
   actions: read
 name: Smoke Codex
 engine: codex
