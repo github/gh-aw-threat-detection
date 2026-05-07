@@ -31,7 +31,7 @@ type lifecycleRelease struct {
 }
 
 var (
-	versionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
+	versionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 	digestPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	validStatuses  = map[string]bool{"active": true, "deprecated": true, "obsolete": true, "yanked": true}
 	validSeverity  = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
