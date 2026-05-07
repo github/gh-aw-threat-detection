@@ -45,7 +45,7 @@ func (c *ReflectClient) AnalyzeStructured(ctx context.Context, prompt string) (*
 			return result, nil
 		}
 		lastErr = err
-		currentPrompt = prompt + "\n\nYour previous response was invalid: " + truncateForCorrection(err.Error()) + "\nReturn only the strict JSON object matching the requested schema."
+		currentPrompt = prompt + "\n\nYour previous response was invalid: " + detector.TruncateCorrectionMessage(err.Error()) + "\nReturn only the strict JSON object matching the requested schema."
 	}
 	return nil, lastErr
 }
@@ -295,12 +295,4 @@ func firstString(raw map[string]any, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func truncateForCorrection(message string) string {
-	const maxCorrectionBytes = 512
-	if len(message) <= maxCorrectionBytes {
-		return message
-	}
-	return message[:maxCorrectionBytes] + "...(truncated)"
 }

@@ -171,7 +171,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt string, r
 			return result, nil
 		}
 		lastErr = err
-		currentPrompt = prompt + "\n\nYour previous response did not contain a valid " + detector.ResultPrefix + " JSON object: " + truncateForCorrection(err.Error()) + "\nReturn exactly one corrected result line."
+		currentPrompt = prompt + "\n\nYour previous response did not contain a valid " + detector.ResultPrefix + " JSON object: " + detector.TruncateCorrectionMessage(err.Error()) + "\nReturn exactly one corrected result line."
 	}
 	return nil, lastErr
 }
@@ -239,12 +239,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func truncateForCorrection(message string) string {
-	const maxCorrectionBytes = 512
-	if len(message) <= maxCorrectionBytes {
-		return message
-	}
-	return message[:maxCorrectionBytes] + "...(truncated)"
 }
