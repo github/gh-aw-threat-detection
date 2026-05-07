@@ -187,8 +187,9 @@ The main CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) run
 ### Release Steps
 
 1. Go to **Actions → Create Release Tag → Run workflow**.
-2. Select `patch` or `minor`. The visible `major` option is disabled until
-   major releases are enabled.
+2. Select `patch` or `minor`. The visible `major` option may still appear in
+   the workflow UI, but it is currently rejected by the workflow until major
+   releases are enabled.
 3. Run the workflow. It validates `main`, computes the next semantic-version
    tag, and pushes it to trigger the release workflow.
 
