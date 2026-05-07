@@ -284,6 +284,14 @@ jobs:
             exit 1
           fi
 
+      - name: Log in to GHCR
+        if: ${{ inputs.detector_source == 'image' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build or fetch detector
         run: |
           set -euo pipefail
@@ -307,7 +315,21 @@ jobs:
               ;;
             image)
               image_tag="${DETECTOR_REF:-latest}"
-              echo "DETECTOR_IMAGE=ghcr.io/github/gh-aw-threat-detection:${image_tag}" >> "$GITHUB_ENV"
+              detector_image="ghcr.io/github/gh-aw-threat-detection:${image_tag}"
+              detector_bin="${RUNNER_TEMP}/gh-aw-replay/bin/threat-detect-image"
+              container_id=""
+              cleanup() {
+                if [ -n "$container_id" ]; then
+                  docker rm "$container_id" >/dev/null
+                fi
+              }
+              trap cleanup EXIT
+              docker pull "$detector_image"
+              container_id=$(docker create "$detector_image")
+              docker cp "${container_id}:/usr/local/bin/threat-detect" "$detector_bin"
+              chmod +x "$detector_bin"
+              echo "DETECTOR_IMAGE=${detector_image}" >> "$GITHUB_ENV"
+              echo "DETECTOR_BIN=${detector_bin}" >> "$GITHUB_ENV"
               ;;
             *)
               echo "::error::Unsupported detector_source '${DETECTOR_SOURCE}'."
@@ -315,16 +337,7 @@ jobs:
               ;;
           esac
 
-      - name: Log in to GHCR
-        if: ${{ inputs.detector_source == 'image' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install selected engine CLI
-        if: ${{ inputs.detector_source != 'image' }}
         run: |
           set -euo pipefail
           case "$ENGINE" in
@@ -424,24 +437,7 @@ jobs:
           args+=("$REPLAY_INPUT")
 
           run_status=0
-          if [ "$DETECTOR_SOURCE" = "image" ]; then
-            docker pull "$DETECTOR_IMAGE"
-            docker_args=(--engine "$ENGINE" --output /workspace/output/result.json)
-            if [ -n "$MODEL" ]; then
-              docker_args+=(--model "$MODEL")
-            fi
-            docker_args+=(/workspace/artifacts)
-            set +e
-            docker run --rm \
-              -e "CUSTOM_PROMPT=${CUSTOM_PROMPT}" \
-              -e "WORKFLOW_NAME=${WORKFLOW_NAME}" \
-              -e "WORKFLOW_DESCRIPTION=${WORKFLOW_DESCRIPTION}" \
-              -v "${REPLAY_INPUT}:/workspace/artifacts:ro" \
-              -v "${REPLAY_OUTPUT}:/workspace/output" \
-              "$DETECTOR_IMAGE" "${docker_args[@]}" 2>&1 | tee "$log_path"
-            run_status=${PIPESTATUS[0]}
-            set -e
-          elif [ "$USE_AWF" = "true" ]; then
+          if [ "$USE_AWF" = "true" ]; then
             if ! command -v awf >/dev/null 2>&1; then
               echo "::error::AWF mode requires an awf CLI on PATH. Re-run with use_awf=false for direct replay or use a runner image that includes AWF."
               exit 2

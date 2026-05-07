@@ -115,9 +115,10 @@ Common dispatch examples:
 
 - Current checkout, direct CLI replay: set `run_id`, leave `detector_source=current`, `engine=copilot`, and `use_awf=false`.
 - Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v1.0.0`.
+- Image detector replay: set `detector_source=image` and optionally set `detector_ref` to an image tag. The workflow extracts the `threat-detect` binary from the image and runs it on the host so the selected engine CLI can be installed there.
 - Model comparison: set `model` to the engine-specific model name to pass through `--model`.
 - Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
-- AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default because the published detector image only contains the Go binary and does not bundle engine or AWF CLIs.
+- AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default.
 
 The `run_attempt` input is only safe for the latest attempt of a source run because GitHub artifact downloads are not attempt-scoped. The workflow fails with a clear error if an older attempt is requested.
 
