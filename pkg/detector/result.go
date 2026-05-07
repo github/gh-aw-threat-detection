@@ -57,7 +57,7 @@ func ParseStructuredResult(data []byte) (*Result, error) {
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("structured result JSON must contain exactly one object")
+		return nil, fmt.Errorf("structured result JSON must contain exactly one object, found additional data")
 	}
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("structured result JSON must be a non-empty object")
@@ -174,8 +174,12 @@ func resultFromRaw(raw map[string]any) *Result {
 		MaliciousPatch:  raw["malicious_patch"].(bool),
 		Reasons:         []string{},
 	}
-	for _, r := range raw["reasons"].([]any) {
-		result.Reasons = append(result.Reasons, r.(string))
+	if reasons, ok := raw["reasons"].([]any); ok {
+		for _, r := range reasons {
+			if reason, ok := r.(string); ok {
+				result.Reasons = append(result.Reasons, reason)
+			}
+		}
 	}
 	return result
 }

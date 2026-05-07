@@ -97,6 +97,8 @@ func truthy(v any) bool {
 	case bool:
 		return typed
 	case string:
+		// /reflect capability metadata is provider-normalized but may use strings
+		// for supported features; these values all indicate advertised support.
 		switch strings.ToLower(typed) {
 		case "true", "supported", "strict", "json_schema", "schema", "required":
 			return true
