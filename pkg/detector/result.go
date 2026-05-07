@@ -57,7 +57,8 @@ func ParseStructuredResult(data []byte) (*Result, error) {
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("structured result JSON must contain exactly one object, found additional data after JSON object")
+		preview, _ := json.Marshal(extra)
+		return nil, fmt.Errorf("structured result JSON must contain exactly one object, found additional data after JSON object: %s", TruncateCorrectionMessage(string(preview)))
 	}
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("structured result JSON must be a non-empty object")

@@ -45,7 +45,7 @@ func (c *ReflectClient) AnalyzeStructured(ctx context.Context, prompt string) (*
 			return result, nil
 		}
 		lastErr = err
-		currentPrompt = prompt + "\n\nYour previous response was invalid: " + detector.TruncateCorrectionMessage(err.Error()) + "\nReturn only the strict JSON object matching the requested schema."
+		currentPrompt = detector.BuildCorrectionPrompt(prompt, "Your previous response was invalid", err.Error(), "Return only the strict JSON object matching the requested schema.")
 	}
 	return nil, lastErr
 }
@@ -134,7 +134,7 @@ func (c *ReflectClient) postReflect(ctx context.Context, payload map[string]any)
 func (c *ReflectClient) endpoint() string {
 	base := strings.TrimSpace(c.BaseURL)
 	if base == "" {
-		base = "http://127.0.0.1:8080/reflect"
+		base = DefaultReflectURL
 	}
 	u, err := url.Parse(base)
 	if err != nil {

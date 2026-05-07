@@ -60,8 +60,8 @@ func run() int {
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
-	flag.BoolVar(&triage, "triage", envBool("THREAT_DETECTION_TRIAGE", true), "Run fast structured-output triage before full detection")
-	flag.StringVar(&reflectURL, "reflect-url", envFirstOrDefault("http://127.0.0.1:8080/reflect", "THREAT_DETECTION_REFLECT_URL", "API_PROXY_REFLECT_URL", "REFLECT_URL"), "api-proxy reflect base URL")
+	flag.BoolVar(&triage, "triage", envBool("THREAT_DETECTION_TRIAGE", true), "Run fast structured-output triage before full detection (env: THREAT_DETECTION_TRIAGE)")
+	flag.StringVar(&reflectURL, "reflect-url", envFirstOrDefault(engine.DefaultReflectURL, "THREAT_DETECTION_REFLECT_URL", "API_PROXY_REFLECT_URL", "REFLECT_URL"), "api-proxy reflect base URL")
 	flag.StringVar(&triageModel, "triage-model", os.Getenv("THREAT_DETECTION_TRIAGE_MODEL"), "Model to use for reflect triage")
 	flag.IntVar(&triageMaxBytes, "triage-max-bytes", envInt("THREAT_DETECTION_TRIAGE_MAX_BYTES", detector.DefaultTriageMaxBytes()), "Maximum bytes per artifact to inline for triage")
 	flag.IntVar(&triageRetries, "triage-retries", envInt("THREAT_DETECTION_TRIAGE_RETRIES", 1), "Retries for malformed structured outputs")
@@ -171,7 +171,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt string, r
 			return result, nil
 		}
 		lastErr = err
-		currentPrompt = prompt + "\n\nYour previous response did not contain a valid " + detector.ResultPrefix + " JSON object: " + detector.TruncateCorrectionMessage(err.Error()) + "\nReturn exactly one corrected result line."
+		currentPrompt = detector.BuildCorrectionPrompt(prompt, "Your previous response did not contain a valid "+detector.ResultPrefix+" JSON object", err.Error(), "Return exactly one corrected result line.")
 	}
 	return nil, lastErr
 }

@@ -8,3 +8,8 @@ func TruncateCorrectionMessage(message string) string {
 	}
 	return message[:maxCorrectionBytes] + "...(truncated)"
 }
+
+// BuildCorrectionPrompt appends bounded parser feedback to an original prompt.
+func BuildCorrectionPrompt(prompt, prefix, message, instruction string) string {
+	return prompt + "\n\n" + prefix + ": " + TruncateCorrectionMessage(message) + "\n" + instruction
+}
