@@ -21,6 +21,7 @@ type ReflectClient struct {
 	HTTPClient *http.Client
 	Model      string
 	Retries    int
+	Timeout    time.Duration
 }
 
 // AnalyzeStructured sends a prompt through /reflect and parses a strict Result.
@@ -150,7 +151,11 @@ func (c *ReflectClient) httpClient() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	timeout := c.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	return &http.Client{Timeout: timeout}
 }
 
 func normalizeModels(decoded any) []ReflectModel {

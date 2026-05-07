@@ -171,7 +171,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt string, r
 			return result, nil
 		}
 		lastErr = err
-		currentPrompt = detector.BuildCorrectionPrompt(prompt, "Your previous response did not contain a valid "+detector.ResultPrefix+" JSON object", err.Error(), "Return exactly one corrected result line.")
+		currentPrompt = detector.BuildCorrectionPrompt(prompt, fmt.Sprintf("Your previous response did not contain a valid %s JSON object", detector.ResultPrefix), err.Error(), "Return exactly one corrected result line.")
 	}
 	return nil, lastErr
 }

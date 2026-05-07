@@ -4,6 +4,17 @@ import (
 	"strings"
 )
 
+// truthyCapabilityStrings are string encodings used by /reflect capability
+// metadata to denote supported structured-output features.
+var truthyCapabilityStrings = map[string]bool{
+	"true":        true,
+	"supported":   true,
+	"strict":      true,
+	"json_schema": true,
+	"schema":      true,
+	"required":    true,
+}
+
 // ReflectModel describes one model advertised by api-proxy /reflect.
 type ReflectModel struct {
 	ID           string
@@ -97,14 +108,7 @@ func truthy(v any) bool {
 	case bool:
 		return typed
 	case string:
-		// /reflect capability metadata is provider-normalized but may use strings:
-		// "true"/"supported" mark general availability, "strict"/"required"
-		// mark schema/tool enforcement, and "json_schema"/"schema" name the
-		// structured-output mode exposed by the provider.
-		switch strings.ToLower(typed) {
-		case "true", "supported", "strict", "json_schema", "schema", "required":
-			return true
-		}
+		return truthyCapabilityStrings[strings.ToLower(typed)]
 	case map[string]any:
 		return len(typed) > 0
 	case []any:
