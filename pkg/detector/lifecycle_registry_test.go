@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var semverTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+
 type lifecycleRegistry struct {
 	SchemaVersion        string           `json:"schema_version"`
 	LastUpdated          string           `json:"last_updated"`
@@ -112,6 +114,13 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "leading zero version component",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[0].Version = "v01.2.3"
+			},
+			wantErr: true,
+		},
+		{
 			name: "deprecated version missing replacement",
 			mutate: func(registry *lifecycleRegistry) {
 				registry.Versions[1].ReplacementVersion = ""
@@ -160,6 +169,14 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				registry.Versions[1].ReplacementVersion = "v2.0.0"
 				registry.Versions[1].ReplacementKind = "future"
 			},
+		},
+		{
+			name: "future replacement rejects leading zero version component",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[1].ReplacementVersion = "v02.0.0"
+				registry.Versions[1].ReplacementKind = "future"
+			},
+			wantErr: true,
 		},
 		{
 			name: "external replacement may be outside registry",
@@ -323,7 +340,7 @@ func validateReplacement(entry lifecycleEntry, versions map[string]struct{}) err
 }
 
 func validSemverTag(version string) bool {
-	return regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`).MatchString(version)
+	return semverTagPattern.MatchString(version)
 }
 
 func validDate(date string) bool {
