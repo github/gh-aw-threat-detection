@@ -62,7 +62,7 @@ func ParseStructuredResult(data []byte) (*Result, error) {
 		if marshalErr != nil {
 			preview = []byte(fmt.Sprintf("<%T>", extra))
 		}
-		previewText := TruncateCorrectionMessage(string(preview))
+		previewText := string(TruncateCorrectionBytes(preview))
 		return nil, fmt.Errorf("structured result JSON must contain exactly one object with no trailing data; found trailing content after JSON object: %s", previewText)
 	}
 	if len(raw) == 0 {
