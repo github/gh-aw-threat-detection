@@ -1,0 +1,112 @@
+name: Create Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Release bump type
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  create-release-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject disabled major releases
+        if: ${{ inputs.bump == 'major' }}
+        run: |
+          echo "::error::Major releases are not enabled yet. Choose patch or minor."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Run tests
+        run: make test
+
+      - name: Run container smoke test
+        run: make docker-smoke IMAGE_TAG=release-candidate
+
+      - name: Compute next tag
+        id: next-tag
+        run: |
+          set -euo pipefail
+
+          git fetch --force --tags origin
+
+          latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)
+          if [ -z "$latest_tag" ]; then
+            latest_tag="v0.0.0"
+          fi
+
+          version="${latest_tag#v}"
+          IFS=. read -r major minor patch <<< "$version"
+
+          case "${{ inputs.bump }}" in
+            patch)
+              patch=$((10#$patch + 1))
+              ;;
+            minor)
+              minor=$((10#$minor + 1))
+              patch=0
+              ;;
+            *)
+              echo "::error::Unsupported bump type: ${{ inputs.bump }}"
+              exit 1
+              ;;
+          esac
+
+          next_tag="v$((10#$major)).${minor}.${patch}"
+          if ! echo "$next_tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::Computed tag ${next_tag} is not a strict semver tag."
+            exit 1
+          fi
+
+          if git rev-parse --verify --quiet "refs/tags/${next_tag}" >/dev/null; then
+            echo "::error::Tag ${next_tag} already exists locally."
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${next_tag}" >/dev/null 2>&1; then
+            echo "::error::Tag ${next_tag} already exists on origin."
+            exit 1
+          fi
+
+          echo "tag=${next_tag}" >> "$GITHUB_OUTPUT"
+          echo "Computed next release tag: ${next_tag}"
+
+      - name: Create and push tag
+        env:
+          TAG_NAME: ${{ steps.next-tag.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      - name: Write summary
+        env:
+          TAG_NAME: ${{ steps.next-tag.outputs.tag }}
+        run: |
+          {
+            echo "## Release tag created"
+            echo
+            echo "- Tag: \`${TAG_NAME}\`"
+            echo "- Bump: \`${{ inputs.bump }}\`"
+            echo
+            echo "The existing tag-triggered release workflow will publish the prerelease from this pushed tag."
+          } >> "$GITHUB_STEP_SUMMARY"
