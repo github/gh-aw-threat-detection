@@ -119,6 +119,8 @@ Common dispatch examples:
 - Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
 - AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default because the published detector image only contains the Go binary and does not bundle engine or AWF CLIs.
 
+The `run_attempt` input is only safe for the latest attempt of a source run because GitHub artifact downloads are not attempt-scoped. The workflow fails with a clear error if an older attempt is requested.
+
 ## Stage Status and Decisions
 
 The extraction staging model is:
