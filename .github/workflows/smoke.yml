@@ -28,6 +28,18 @@ jobs:
             smoke-codex-container.lock.yml
           )
 
+          failures=()
           for workflow in "${workflows[@]}"; do
-            gh workflow run "$workflow" --repo "$REPO" --ref "$REF"
+            if gh workflow run "$workflow" --repo "$REPO" --ref "$REF"; then
+              echo "Dispatched $workflow"
+            else
+              echo "Failed to dispatch $workflow" >&2
+              failures+=("$workflow")
+            fi
           done
+
+          if [ "${#failures[@]}" -gt 0 ]; then
+            printf 'Failed to dispatch %d workflow(s):\n' "${#failures[@]}" >&2
+            printf '  %s\n' "${failures[@]}" >&2
+            exit 1
+          fi
