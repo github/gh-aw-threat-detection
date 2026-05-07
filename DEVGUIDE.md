@@ -153,13 +153,18 @@ This section stays in place even though the release flow is still being built ou
 
 Releases follow a **prerelease → promote** model:
 
-1. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
+1. **Create tag (manual)** — a maintainer triggers the
+   [Create Release Tag workflow](.github/workflows/create-release-tag.yml) via
+   **Actions → Create Release Tag → Run workflow** and selects a patch or minor
+   bump. The workflow validates `main` and pushes the next `vX.Y.Z` tag.
+
+2. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
    [release workflow](.github/workflows/release.yml). It builds artifacts,
    pushes a version-tagged container image (e.g. `ghcr.io/github/gh-aw-threat-detection:v1.2.3`),
    and creates a **prerelease** on GitHub that records the image digest. The `release-publish` environment gate
    pauses the workflow before publishing so maintainers can abort if needed.
 
-2. **Promote (manual)** — after verifying the prerelease, a maintainer triggers
+3. **Promote (manual)** — after verifying the prerelease, a maintainer triggers
    the [promote-release workflow](.github/workflows/promote-release.yml) via
    **Actions → Promote Release → Run workflow**, entering the tag name. This
    workflow (gated by the `release-promote` environment):
@@ -243,16 +248,14 @@ The main CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) run
 
 ### Release Steps
 
-```bash
-# 1. Tag and push — triggers the release workflow
-git checkout main
-git pull
-make agent-finish
-git tag -a vX.Y.Z -m "Release vX.Y.Z"
-git push origin vX.Y.Z
-```
+1. Go to **Actions → Create Release Tag → Run workflow**.
+2. Select `patch` or `minor`. The visible `major` option may still appear in
+   the workflow UI, but it is currently rejected by the workflow until major
+   releases are enabled.
+3. Run the workflow. It validates `main`, computes the next semantic-version
+   tag, and pushes it to trigger the release workflow.
 
-After pushing the tag:
+After the tag is pushed:
 
 1. Approve the `release-publish` environment gate when the workflow pauses.
 2. Verify the prerelease on the [Releases page](../../releases) and test the
