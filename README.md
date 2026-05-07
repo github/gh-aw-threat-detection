@@ -58,7 +58,21 @@ threat-detect [flags] <artifacts-dir>
 - `--model` — Model override for the engine
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
+- `--triage` — Enable fast Phase 1 structured-output triage. Default: `true`
+- `--reflect-url` — `api-proxy` `/reflect` base URL for structured-output calls
+- `--triage-model` — Model override for Phase 1 `/reflect` triage
+- `--triage-max-bytes` — Maximum bytes per artifact to inline during triage
+- `--triage-retries` — Retries for malformed structured-output responses
 - `--version` — Print version and exit
+
+`--reflect-url` can also be supplied with `THREAT_DETECTION_REFLECT_URL`,
+`API_PROXY_REFLECT_URL`, or `REFLECT_URL`. When configured, `threat-detect`
+first tries a non-agentic `/reflect` call with a strict JSON schema matching the
+result contract. An all-false valid triage result exits successfully without the
+full detector. Threats, uncertainty, unsupported models, proxy errors, or
+malformed responses fail safe into the full detector. The full detector preserves
+the existing CLI engine behavior and prefers `/reflect` structured output when a
+schema-capable model is available.
 
 **Exit codes:**
 - `0` — Safe (no threats detected)
@@ -109,13 +123,13 @@ The extraction staging model is:
 - Stage 3: `github/gh-aw` integration
 
 Stage 1 is functionally represented in this repository.
-The standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present.
+The standalone Go CLI, artifact reader, prompt builder, two-phase `/reflect` triage, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present.
 Remaining work involves integration with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
 
 Decisions for the unresolved extraction questions:
 
 - **JavaScript scripts**: detection setup and result parsing are implemented in Go here; the old GitHub Actions JavaScript scripts should not be needed once `gh-aw` switches to the container contract.
-- **Engine CLIs**: the detector invokes the selected engine CLI from `PATH` and forwards the `--model` value. Stage 2 should either bundle the supported CLIs into the image or publish an image variant that installs them at runtime before invoking `threat-detect`.
+- **Engine CLIs and `/reflect`**: the detector invokes the selected engine CLI from `PATH` and forwards the `--model` value when full CLI analysis is needed. When `--reflect-url` is configured, the detector can call `api-proxy` directly for structured-output triage and schema-capable full analysis before falling back to CLI behavior.
 - **Custom steps**: custom `threat-detection.steps` remain orchestrator-owned. They should run before or after the container in the `gh-aw` job rather than being passed into this container as arbitrary scripts.
 - **Backward compatibility**: `gh-aw` should pin a specific image tag and may temporarily keep inline detection behind a compatibility flag until the container path is validated.
 - **Ollama/LlamaGuard**: keep this as a custom-step pattern unless a dedicated image variant is explicitly required.
