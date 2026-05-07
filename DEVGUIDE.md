@@ -149,6 +149,44 @@ If tooling is missing:
 
 This section stays in place even though the release flow is still being built out.
 
+### Threat Detection Version Lifecycle
+
+Maintainers manage the lifecycle for version-tagged threat detection releases in
+[releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json).
+The registry is the machine-readable source of truth consumed or vendored by the
+parent `gh-aw` orchestrator before it pulls or runs the detector container.
+
+Lifecycle statuses:
+
+| Status | Meaning | Expected behavior |
+|--------|---------|-------------------|
+| `active` | Supported and safe to use | Run normally. |
+| `deprecated` | Still supported, but users should migrate | Emit a GitHub Actions warning annotation and job summary text, then continue. |
+| `obsolete` | No longer safe or supported | Fail closed before the detector container runs. |
+
+Each lifecycle entry must include the version, status, reason, replacement
+guidance, relevant deprecation or obsolescence dates, an advisory or release URL,
+urgency, and a maintainer note. Replacement guidance must point to another
+registry entry or be explicitly marked as a future or external replacement.
+
+Maintainer responsibilities:
+
+- promoted releases are `active` by default unless the registry says otherwise
+- edit the registry during planned deprecations, before marking a version
+  obsolete, and when promoting a replacement release
+- ensure deprecated versions provide actionable warning text with the reason,
+  replacement version, dates, advisory URL, urgency, and remediation steps
+- ensure obsolete versions include enough guidance for `gh-aw` to fail before
+  invoking the detector container and tell users exactly how to upgrade
+- run `make lifecycle-validate` before release or promotion changes that edit
+  lifecycle metadata
+
+Lifecycle enforcement must not rely only on code inside old detector binaries.
+Previously released detectors cannot learn that they later became obsolete unless
+they receive external metadata or network access, and detector runtime egress may
+be blocked. The parent `gh-aw` orchestrator or generated workflow should perform
+the lifecycle check before pulling or running this container.
+
 ### Promotion Model
 
 Releases follow a **prerelease → promote** model:
@@ -195,6 +233,9 @@ After pushing the tag:
 1. Approve the `release-publish` environment gate when the workflow pauses.
 2. Verify the prerelease on the [Releases page](../../releases) and test the
    version-tagged container image.
-3. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
+3. Confirm the lifecycle registry is correct for the release being promoted and
+   any versions it replaces; update and validate it with `make lifecycle-validate`
+   if statuses changed.
+4. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
    the workflow. Approve the `release-promote` environment gate.
-4. Confirm `latest` now resolves to the new version.
+5. Confirm `latest` now resolves to the new version.

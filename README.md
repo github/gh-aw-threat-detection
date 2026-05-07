@@ -204,6 +204,16 @@ const DefaultThreatDetectionVersion  = "v1.0.0"
 
 The detection job in compiled workflows uses this container instead of inline AI engine invocation.
 
+`gh-aw` should also fetch or vendor
+[releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json)
+and evaluate the pinned `DefaultThreatDetectionVersion` before pulling or
+running the detector container. Active versions run normally. Deprecated versions
+should emit a GitHub Actions warning annotation and job summary text that include
+the reason, replacement version, dates, advisory URL, urgency, and upgrade
+instructions, then continue. Obsolete versions should fail closed before the
+detector runs and print the same remediation guidance. Unknown versions should
+follow the registry policy, currently `fail-closed`.
+
 ## Specification
 
 See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification.
