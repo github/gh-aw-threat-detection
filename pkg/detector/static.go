@@ -181,6 +181,8 @@ func ExtractUntrustedRegions(template, rendered string) []string {
 			}
 		}
 
+		// Whitespace-only regions are not meaningful untrusted content and
+		// would add noise to the analysis, so filter them out.
 		trimmed := strings.TrimSpace(untrusted)
 		if trimmed != "" {
 			regions = append(regions, trimmed)

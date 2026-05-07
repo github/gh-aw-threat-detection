@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
@@ -182,7 +183,7 @@ func TestPromptAnalysis_FormatForPrompt_AllSections(t *testing.T) {
 		"{{name}}",
 		"Alice",
 	} {
-		if !contains(formatted, expected) {
+		if !strings.Contains(formatted, expected) {
 			t.Errorf("expected formatted output to contain %q", expected)
 		}
 	}
@@ -225,17 +226,4 @@ func TestMergeResults(t *testing.T) {
 	if len(result.Reasons) != 2 || result.Reasons[0] != "model" || result.Reasons[1] != "static" {
 		t.Fatalf("unexpected merged reasons: %#v", result.Reasons)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
