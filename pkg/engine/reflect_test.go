@@ -82,6 +82,25 @@ func TestReflectClient_RetriesMalformedResponse(t *testing.T) {
 	}
 }
 
+func TestReflectClient_DoesNotParseEchoedInput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"models":[{"id":"schema","provider":"openai","capabilities":{"json_schema":true}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"input":"{\"prompt_injection\":false,\"secret_leak\":false,\"malicious_patch\":false,\"reasons\":[]}",
+			"output_text":"not json"
+		}`))
+	}))
+	defer server.Close()
+
+	_, err := (&ReflectClient{BaseURL: server.URL}).AnalyzeStructured(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("expected echoed request input to be ignored")
+	}
+}
+
 func TestReflectClient_GeminiAndAnthropicRequests(t *testing.T) {
 	tests := []struct {
 		name         string

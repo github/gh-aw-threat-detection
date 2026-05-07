@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -50,7 +51,7 @@ func (r *Result) IsSafe() bool {
 // ParseStructuredResult parses a strict JSON object matching ResultJSONSchema.
 func ParseStructuredResult(data []byte) (*Result, error) {
 	var raw map[string]any
-	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("failed to parse structured result JSON: %w", err)

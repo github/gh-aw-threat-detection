@@ -68,3 +68,32 @@ func TestBuildTriagePrompt_RepresentsBundleByMetadata(t *testing.T) {
 		t.Fatalf("expected bundle metadata, got:\n%s", prompt)
 	}
 }
+
+func TestReadBoundedText_ReadsThroughLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.txt")
+	if err := os.WriteFile(path, []byte("0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, truncated, err := readBoundedText(path, 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if truncated {
+		t.Fatal("did not expect truncation at exact limit")
+	}
+	if got != "0123456789" {
+		t.Fatalf("got %q, want full file", got)
+	}
+
+	got, truncated, err = readBoundedText(path, 9)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !truncated {
+		t.Fatal("expected truncation beyond limit")
+	}
+	if got != "012345678" {
+		t.Fatalf("got %q, want bounded prefix", got)
+	}
+}
