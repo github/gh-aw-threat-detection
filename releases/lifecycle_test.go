@@ -57,9 +57,8 @@ func TestValidateLifecycleRegistryRequiresYankMetadata(t *testing.T) {
 	registry := lifecycleRegistry{
 		SchemaVersion: 1,
 		Releases: []lifecycleRelease{{
-			Version:     "v1.2.3",
-			ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Status:      "yanked",
+			Version: "v1.2.3",
+			Status:  "yanked",
 		}},
 	}
 
@@ -67,8 +66,31 @@ func TestValidateLifecycleRegistryRequiresYankMetadata(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing yank metadata to fail validation")
 	}
-	if !strings.Contains(err.Error(), "yanked_date") {
-		t.Fatalf("expected yanked_date validation error, got %v", err)
+	if !strings.Contains(err.Error(), "image_digest") {
+		t.Fatalf("expected image_digest validation error, got %v", err)
+	}
+}
+
+func TestValidateLifecycleRegistryRequiresYankReason(t *testing.T) {
+	registry := lifecycleRegistry{
+		SchemaVersion: 1,
+		Releases: []lifecycleRelease{{
+			Version:            "v1.2.3",
+			ImageDigest:        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Status:             "yanked",
+			YankedDate:         "2026-05-07",
+			Severity:           "high",
+			ReplacementVersion: "v1.2.4",
+			ReplacementDigest:  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		}},
+	}
+
+	err := validateLifecycleRegistry(registry)
+	if err == nil {
+		t.Fatal("expected missing yank reason to fail validation")
+	}
+	if !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("expected reason validation error, got %v", err)
 	}
 }
 
@@ -162,6 +184,9 @@ func validateReleaseShape(release lifecycleRelease) error {
 
 	if release.Status != "yanked" {
 		return nil
+	}
+	if release.ImageDigest == "" {
+		return fmt.Errorf("%s yanked releases require image_digest", release.Version)
 	}
 	if strings.TrimSpace(release.YankedDate) == "" {
 		return fmt.Errorf("%s yanked releases require yanked_date", release.Version)

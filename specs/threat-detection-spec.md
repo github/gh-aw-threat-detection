@@ -195,7 +195,7 @@ The implementation MAY pass through engine-specific authentication variables req
 
 **TD-27**: Private repository status MUST NOT block container publication or consumption. When the source repository or GHCR package is private, the package MUST be configured so approved consuming repositories can pull pinned image tags with `packages: read`.
 
-**TD-28**: Release lifecycle metadata MUST support `active`, `deprecated`, `obsolete`, and `yanked` states. A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected image digest when known.
+**TD-28**: Release lifecycle metadata MUST support `active`, `deprecated`, `obsolete`, and `yanked` states. A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected image digest.
 
 **TD-29**: The parent orchestrator (`gh-aw`) MUST check release lifecycle metadata before pulling or running the detector image. A selected version or digest whose lifecycle state is `yanked` MUST fail closed before detector execution.
 
