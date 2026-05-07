@@ -2,6 +2,8 @@ package detector
 
 // TruncateCorrectionMessage limits parser feedback included in retry prompts.
 func TruncateCorrectionMessage(message string) string {
+	// maxCorrectionBytes applies to the original parser message before the
+	// truncation suffix is appended.
 	const maxCorrectionBytes = 512
 	if len(message) <= maxCorrectionBytes {
 		return message

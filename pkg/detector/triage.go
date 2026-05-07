@@ -79,7 +79,7 @@ func triageFileBlock(path string, maxBytes int) string {
 		return fmt.Sprintf("%s: unavailable: %v", path, err)
 	}
 	if strings.HasSuffix(path, ".bundle") {
-		return fmt.Sprintf("%s (%d bytes, git-bundle binary; content omitted from fast triage)", path, info.Size())
+		return fmt.Sprintf("%s (%d bytes, git-bundle binary; content omitted from Phase 1 triage)", path, info.Size())
 	}
 	data, truncated, err := readBoundedText(path, maxBytes)
 	if err != nil {

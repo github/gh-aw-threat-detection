@@ -24,6 +24,11 @@ type ReflectClient struct {
 	Timeout    time.Duration
 }
 
+const (
+	maxModelListBytes       = 4 << 20
+	maxReflectResponseBytes = 8 << 20
+)
+
 // AnalyzeStructured sends a prompt through /reflect and parses a strict Result.
 func (c *ReflectClient) AnalyzeStructured(ctx context.Context, prompt string) (*detector.Result, error) {
 	model, err := c.selectModel(ctx)
@@ -93,7 +98,7 @@ func (c *ReflectClient) ListModels(ctx context.Context) ([]ReflectModel, error) 
 		return nil, fmt.Errorf("listing reflect models: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelListBytes))
 	if err != nil {
 		return nil, fmt.Errorf("reading reflect model list: %w", err)
 	}
@@ -122,7 +127,7 @@ func (c *ReflectClient) postReflect(ctx context.Context, payload map[string]any)
 		return nil, fmt.Errorf("calling reflect: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReflectResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("reading reflect response: %w", err)
 	}

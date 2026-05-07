@@ -64,7 +64,7 @@ func TestBuildTriagePrompt_RepresentsBundleByMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(prompt, "git-bundle binary; content omitted") {
+	if !strings.Contains(prompt, "git-bundle binary; content omitted from Phase 1 triage") {
 		t.Fatalf("expected bundle metadata, got:\n%s", prompt)
 	}
 }
