@@ -321,7 +321,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install selected engine CLI
         if: ${{ inputs.detector_source != 'image' }}
