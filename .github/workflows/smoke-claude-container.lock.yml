@@ -67,7 +67,7 @@ permissions: {}
 concurrency:
   group: "gh-aw-${{ github.workflow }}"
 
-run-name: "Smoke Claude"
+run-name: "Smoke Claude (Container Detection)"
 
 jobs:
   activation:
@@ -1184,7 +1184,7 @@ jobs:
       - name: Ensure threat-detection directory and log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         run: |
-          mkdir -p /tmp/gh-aw/threat-detection
+          mkdir -p /tmp/gh-aw/threat-detection /tmp/gh-aw/threat-detect-bin
           touch /tmp/gh-aw/threat-detection/detection.log
       - name: Log in to GHCR for detector image
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
@@ -1199,39 +1199,40 @@ jobs:
         env:
           THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
         run: docker pull "$THREAT_DETECTION_IMAGE"
-      - name: Execute threat detection container
+      - name: Extract threat detection binary from container
+        if: always() && steps.detection_guard.outputs.run_detection == 'true'
+        env:
+          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
+        run: |
+          container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container_id:/usr/local/bin/threat-detect" /tmp/gh-aw/threat-detect-bin/threat-detect
+          chmod 755 /tmp/gh-aw/threat-detect-bin/threat-detect
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install AWF binary
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.25.40
+      - name: Execute threat detection with AWF
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true
         id: detection_agentic_execution
         timeout-minutes: 20
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || secrets.GH_AW_COPILOT_TOKEN || secrets.GH_AW_GITHUB_TOKEN }}
-          GH_AW_COPILOT_TOKEN: ${{ secrets.GH_AW_COPILOT_TOKEN || secrets.COPILOT_GITHUB_TOKEN || secrets.GH_AW_GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_CLAUDE || '' }}
-          WORKFLOW_DESCRIPTION: ${{ github.workflow }}
+          WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Claude engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set -o pipefail
-          args=(--engine claude)
-          if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then
-            args+=(--model "$THREAT_DETECTION_MODEL")
-          fi
-          docker run --rm \
-            -e ANTHROPIC_API_KEY \
-            -e CODEX_API_KEY \
-            -e COPILOT_GITHUB_TOKEN \
-            -e GH_AW_COPILOT_TOKEN \
-            -e GITHUB_TOKEN \
-            -e OPENAI_API_KEY \
-            -e WORKFLOW_DESCRIPTION \
-            -e WORKFLOW_NAME \
-            -v /tmp/gh-aw/threat-detection:/workspace/artifacts \
-            "$THREAT_DETECTION_IMAGE" "${args[@]}" /workspace/artifacts 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
+          touch /tmp/gh-aw/agent-step-summary.md
+          (umask 177 && touch /tmp/gh-aw/threat-detection/detection.log)
+          printf '%s\n' '{"$schema":"https://github.com/github/gh-aw-firewall/releases/download/v0.25.40/awf-config.schema.json","network":{"allowDomains":["*.githubusercontent.com","anthropic.com","api.anthropic.com","api.github.com","api.snapcraft.io","archive.ubuntu.com","azure.archive.ubuntu.com","cdn.playwright.dev","codeload.github.com","crl.geotrust.com","crl.globalsign.com","crl.identrust.com","crl.sectigo.com","crl.thawte.com","crl.usertrust.com","crl.verisign.com","crl3.digicert.com","crl4.digicert.com","crls.ssl.com","files.pythonhosted.org","ghcr.io","github-cloud.githubusercontent.com","github-cloud.s3.amazonaws.com","github.com","host.docker.internal","json-schema.org","json.schemastore.org","keyserver.ubuntu.com","lfs.github.com","objects.githubusercontent.com","ocsp.digicert.com","ocsp.geotrust.com","ocsp.globalsign.com","ocsp.identrust.com","ocsp.sectigo.com","ocsp.ssl.com","ocsp.thawte.com","ocsp.usertrust.com","ocsp.verisign.com","packagecloud.io","packages.cloud.google.com","packages.microsoft.com","playwright.download.prss.microsoft.com","ppa.launchpad.net","pypi.org","raw.githubusercontent.com","registry.npmjs.org","s.symcb.com","s.symcd.com","security.ubuntu.com","sentry.io","statsig.anthropic.com","ts-crl.ws.symantec.com","ts-ocsp.ws.symantec.com"]},"apiProxy":{"enabled":true},"container":{"imageTag":"0.25.40,squid=sha256:b084f4a2c771f584ee68084ced52fa6b3245197a1889645d817462d307d3ac51,agent=sha256:14ff567e8d9d4c2fbc5e55c973488381c71d7e0fdbe72d30ee7b8a738fd86504,api-proxy=sha256:2883ca3e5ae9f330cafdd9345bfd4ae17fc8da36c96d4c9a1f76e922b4c45280,cli-proxy=sha256:3e7152911d4b4b7b97beef9d3d7d924ff7902227e86001ef3838fb728d5d514c"}}' > "${RUNNER_TEMP}/gh-aw/awf-config.json" && cp "${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json
+          # shellcheck disable=SC1003
+          sudo -E awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" --tty --env-all --exclude-env ANTHROPIC_API_KEY --log-level info --proxy-logs-dir /tmp/gh-aw/sandbox/firewall/logs --audit-dir /tmp/gh-aw/sandbox/firewall/audit --enable-host-access --allow-host-ports 80,443,8080 --skip-pull \
+            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; args=(--engine claude); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; /tmp/gh-aw/threat-detect-bin/threat-detect "${args[@]}" /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
       - name: Upload threat detection log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
