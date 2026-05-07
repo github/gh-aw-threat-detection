@@ -163,7 +163,7 @@ Releases follow a **prerelease → promote** two-phase model. See [DEVGUIDE.md](
 
 ### Steps
 
-1. **Push a version tag** — pushing a tag matching `v*` (e.g. `v1.2.3`) automatically triggers the [release workflow](.github/workflows/release.yml). It builds and pushes a version-tagged container image, records its digest, and creates a **prerelease** on GitHub (gated by the `release-publish` environment).
+1. **Create a version tag** — trigger the [Create Release Tag workflow](.github/workflows/create-release-tag.yml) via **Actions → Create Release Tag → Run workflow** and select a patch or minor bump. The workflow validates `main` and pushes the next `vX.Y.Z` tag, which automatically triggers the [release workflow](.github/workflows/release.yml). It builds and pushes a version-tagged container image, records its digest, and creates a **prerelease** on GitHub (gated by the `release-publish` environment).
 
 2. **Verify the prerelease** — confirm the prerelease behaves correctly before promoting. The `latest` container image and the GitHub "Latest" release badge do not move until promotion.
 
@@ -175,6 +175,9 @@ Releases follow a **prerelease → promote** two-phase model. See [DEVGUIDE.md](
 ### Summary
 
 ```
+create-release-tag workflow
+        │
+        ▼
 push tag (v*)
         │
         ▼
