@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -101,11 +102,14 @@ func readBoundedText(path string, maxBytes int) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	defer f.Close()
 
 	buf, err := io.ReadAll(io.LimitReader(f, int64(maxBytes+1)))
+	closeErr := f.Close()
 	if err != nil {
-		return "", false, err
+		return "", false, errors.Join(err, closeErr)
+	}
+	if closeErr != nil {
+		return "", false, closeErr
 	}
 	n := len(buf)
 	truncated := n > maxBytes

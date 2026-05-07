@@ -266,6 +266,8 @@ func collectResultCandidates(v any) []string {
 				out = append(out, string(data))
 			}
 		}
+		// Intentionally search only response/output fields. Do not recurse into
+		// request echo fields such as "input", or prompt examples could be parsed.
 		for _, key := range []string{"output_text", "output", "content", "text", "result"} {
 			if val, ok := typed[key]; ok {
 				out = append(out, collectResultCandidates(val)...)
