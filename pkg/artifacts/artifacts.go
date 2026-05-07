@@ -17,6 +17,14 @@ type Artifacts struct {
 	// PromptFilePath is the path to the workflow prompt file.
 	PromptFilePath string
 
+	// PromptTemplatePath is the path to the prompt template file (before variable expansion).
+	// This is used to distinguish trusted template content from untrusted user inputs.
+	PromptTemplatePath string
+
+	// PromptImportTreePath is the path to the prompt import tree JSON file.
+	// This maps each runtime-import macro to its source file and content.
+	PromptImportTreePath string
+
 	// AgentOutputFilePath is the path to the agent output JSON file.
 	AgentOutputFilePath string
 
@@ -59,6 +67,18 @@ func Load(dir string) (*Artifacts, error) {
 		arts.PromptFilePath = promptPath
 	} else {
 		arts.PromptFilePath = "No prompt file found"
+	}
+
+	// Check for prompt template file (pre-expansion template)
+	promptTemplatePath := filepath.Join(dir, "aw-prompts", "prompt-template.txt")
+	if fileExists(promptTemplatePath) {
+		arts.PromptTemplatePath = promptTemplatePath
+	}
+
+	// Check for prompt import tree file (runtime-import provenance)
+	promptImportTreePath := filepath.Join(dir, "aw-prompts", "prompt-import-tree.json")
+	if fileExists(promptImportTreePath) {
+		arts.PromptImportTreePath = promptImportTreePath
 	}
 
 	// Check for agent output file
