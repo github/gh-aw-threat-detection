@@ -97,3 +97,21 @@ func TestReadBoundedText_ReadsThroughLimit(t *testing.T) {
 		t.Fatalf("got %q, want bounded prefix", got)
 	}
 }
+
+func TestReadBoundedText_TrimsSplitUTF8Suffix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact.txt")
+	if err := os.WriteFile(path, []byte("safe ☃"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, truncated, err := readBoundedText(path, len("safe ")+1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	if got != "safe " {
+		t.Fatalf("got %q, want valid UTF-8 prefix", got)
+	}
+}

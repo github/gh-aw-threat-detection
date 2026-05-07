@@ -112,10 +112,20 @@ func readBoundedText(path string, maxBytes int) (string, bool, error) {
 	if truncated {
 		n = maxBytes
 	}
-	text := string(buf[:n])
-	for !utf8.ValidString(text) && len(text) > 0 {
-		text = text[:len(text)-1]
+	textBytes := buf[:n]
+	if !utf8.Valid(textBytes) {
+		for len(textBytes) > 0 {
+			r, size := utf8.DecodeLastRune(textBytes)
+			if r != utf8.RuneError || size != 1 {
+				break
+			}
+			textBytes = textBytes[:len(textBytes)-size]
+		}
+		if !utf8.Valid(textBytes) {
+			return "[binary or invalid UTF-8 content omitted]", truncated, nil
+		}
 	}
+	text := string(textBytes)
 	if strings.IndexByte(text, 0) >= 0 {
 		return "[binary or NUL-containing content omitted]", truncated, nil
 	}
