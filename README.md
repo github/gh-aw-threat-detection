@@ -174,6 +174,7 @@ Configure these Actions secrets to enable all smoke workflows:
 | Secret | Required for | Notes |
 |--------|--------------|-------|
 | `COPILOT_GITHUB_TOKEN` | Copilot smoke workflow and base Copilot detection | The container-detection Copilot sibling additionally falls back to `GH_AW_COPILOT_TOKEN`, then `GH_AW_GITHUB_TOKEN`. |
+| `GH_AW_COPILOT_TOKEN` | Optional Copilot token fallback for the container-detection sibling | Used only if `COPILOT_GITHUB_TOKEN` is not configured. |
 | `ANTHROPIC_API_KEY` | Claude smoke workflow and Claude detection | Used by the Claude CLI. |
 | `OPENAI_API_KEY` or `CODEX_API_KEY` | Codex smoke workflow and Codex detection | Configure whichever token your Codex CLI setup expects. |
 | `GH_AW_GITHUB_TOKEN` | Recommended for GitHub MCP access, safe outputs, and private GHCR pulls | The generated workflows fall back to `GITHUB_TOKEN` where possible. |
