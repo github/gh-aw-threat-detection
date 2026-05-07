@@ -152,6 +152,44 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 - Go 1.23+
 - Docker (for container builds)
 
+### AW Smoke Workflows
+
+This repository includes three Agentic Workflows smoke tests:
+
+- `.github/workflows/smoke-copilot.md`
+- `.github/workflows/smoke-claude.md`
+- `.github/workflows/smoke-codex.md`
+
+Each runs daily and by `workflow_dispatch`. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job.
+
+After recompiling the smoke workflows with `gh aw compile`, regenerate and verify the sibling workflows:
+
+```bash
+scripts/create-threat-detection-sibling-workflows.py
+scripts/create-threat-detection-sibling-workflows.py --check
+```
+
+Configure these Actions secrets to enable all smoke workflows:
+
+| Secret | Required for | Notes |
+|--------|--------------|-------|
+| `COPILOT_GITHUB_TOKEN` | Copilot smoke workflow and base Copilot detection | See Copilot fallback note below. |
+| `GH_AW_COPILOT_TOKEN` | Optional Copilot token fallback for the container-detection sibling | Used only if `COPILOT_GITHUB_TOKEN` is not configured. |
+| `ANTHROPIC_API_KEY` | Claude smoke workflow and Claude detection | Used by the Claude CLI. |
+| `OPENAI_API_KEY` or `CODEX_API_KEY` | Codex smoke workflow and Codex detection | Configure whichever token your Codex CLI setup expects. |
+| `GH_AW_GITHUB_TOKEN` | Recommended for GitHub MCP access, safe outputs, and private GHCR pulls | The generated workflows fall back to `GITHUB_TOKEN` where possible. |
+| `GH_AW_GITHUB_MCP_SERVER_TOKEN` | Optional GitHub MCP override | Falls back to `GITHUB_TOKEN` in the compiled workflows. |
+
+Copilot fallback note: the base workflow uses only `secrets.COPILOT_GITHUB_TOKEN`. The container-detection Copilot sibling checks `secrets.COPILOT_GITHUB_TOKEN`, then `secrets.GH_AW_COPILOT_TOKEN`, then `secrets.GH_AW_GITHUB_TOKEN`.
+
+Optional Actions variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
+| `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. |
+| `GH_AW_THREAT_DETECTION_IMAGE` | Override the detector image used by the `*-container.lock.yml` siblings. Defaults to `ghcr.io/github/gh-aw-threat-detection:latest`. |
+
 ### Build
 
 ```bash
