@@ -49,7 +49,7 @@
 #   - ghcr.io/github/github-mcp-server:v1.0.3@sha256:2ac27ef03461ef2b877031b838a7d1fd7f12b12d4ace7796d8cad91446d55959
 #   - node:lts-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f
 
-name: "Smoke Claude (Container Detection)"
+name: "Smoke Claude Containerized"
 "on":
   schedule:
   - cron: "9 19 * * *"
@@ -67,7 +67,7 @@ permissions: {}
 concurrency:
   group: "gh-aw-${{ github.workflow }}"
 
-run-name: "Smoke Claude (Container Detection)"
+run-name: "Smoke Claude Containerized"
 
 jobs:
   activation:
@@ -1226,11 +1226,11 @@ jobs:
         env:
           THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
         run: |
-          mkdir -p "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin"
+          mkdir -p "${RUNNER_TEMP}/gh-aw/threat-detect-bin"
           container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
           trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-          docker cp "$container_id:/usr/local/bin/threat-detect" "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin/threat-detect"
-          chmod 755 "${{ RUNNER_TEMP }}/gh-aw/threat-detect-bin/threat-detect"
+          docker cp "$container_id:/usr/local/bin/threat-detect" "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect"
+          chmod 755 "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect"
       - name: Execute threat detection with AWF
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true
