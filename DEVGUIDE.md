@@ -240,9 +240,10 @@ make lifecycle-validate
 ```
 
 Yanked entries must include the version, image digest, yank date, severity,
-reason, replacement version, replacement digest, advisory or release URL, and
-maintainer note. Use `no_safe_replacement: true` only when maintainers have
-confirmed there is no safe replacement to recommend.
+reason, advisory or release URL, and maintainer note. Provide replacement version
+and replacement digest when a safe replacement exists. Use
+`no_safe_replacement: true` only when maintainers have confirmed there is no safe
+replacement to recommend.
 
 ### Emergency Yank Process
 
@@ -254,7 +255,8 @@ by a core maintainer or incident commander.
 Before yanking:
 
 1. Identify the bad version and immutable image digest.
-2. Select the most recent safe stable replacement.
+2. Select the most recent safe stable replacement, or confirm that no safe
+   replacement exists yet.
 3. Record the severity, user-facing reason, advisory or incident link when
    available, and any maintainer-only note.
 4. Prepare user communication that explains the failure mode and replacement.
@@ -262,15 +264,20 @@ Before yanking:
 To yank a release, run **Actions → Yank Release → Run workflow** from the default
 branch. The workflow:
 
-1. verifies the yanked and replacement releases exist and record sha256 image
-   digests
-2. rejects replacement releases that are prerelease, yanked, or obsolete
-3. verifies both images are still pullable
+1. verifies the yanked release exists and records a sha256 image digest
+2. when a replacement is provided, verifies it exists, records a sha256 image
+   digest, and is not prerelease, yanked, or obsolete
+3. verifies required images are still pullable
 4. records the yanked status in the lifecycle registry
-5. retags `latest` to the replacement digest
+5. retags `latest` to the replacement digest when a replacement is provided
 6. marks the yanked GitHub release title and notes with a warning
 7. removes the yanked release from GitHub's Latest selection and marks the
-   replacement as Latest
+   replacement as Latest when a replacement is provided
+
+Set `no_safe_replacement: true` and leave `replacement_tag` empty only when no
+safe replacement exists. In that case the workflow records
+`no_safe_replacement: true`, skips retagging `latest`, and leaves replacement
+selection until a safe stable release is available.
 
 Keep yanked artifacts available for audit and forensics unless legal or security
 policy requires package deletion. If branch protection prevents the workflow from

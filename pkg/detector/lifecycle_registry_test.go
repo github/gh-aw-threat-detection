@@ -233,6 +233,15 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "yanked version may have no safe replacement",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[3].NoSafeReplacement = true
+				registry.Versions[3].ReplacementVersion = ""
+				registry.Versions[3].ReplacementKind = ""
+				registry.Versions[3].ReplacementDigest = ""
+			},
+		},
 	}
 
 	for _, tt := range tests {

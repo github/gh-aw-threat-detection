@@ -8,9 +8,14 @@ on:
         required: true
         type: string
       replacement_tag:
-        description: 'Stable safe replacement tag to use for latest (e.g. v1.2.4)'
-        required: true
+        description: 'Stable safe replacement tag to use for latest (required unless no_safe_replacement is true)'
+        required: false
         type: string
+      no_safe_replacement:
+        description: 'Record that no safe replacement exists; skips latest retagging'
+        required: true
+        default: false
+        type: boolean
       severity:
         description: 'Severity of the unsafe release behavior'
         required: true
@@ -47,6 +52,7 @@ jobs:
       LIFECYCLE_REGISTRY: releases/threat-detection-lifecycle.json
       YANKED_TAG: ${{ inputs.tag }}
       REPLACEMENT_TAG: ${{ inputs.replacement_tag }}
+      NO_SAFE_REPLACEMENT: ${{ inputs.no_safe_replacement }}
       YANK_REASON: ${{ inputs.reason }}
       YANK_SEVERITY: ${{ inputs.severity }}
       ADVISORY_URL: ${{ inputs.advisory_url }}
@@ -105,9 +111,20 @@ jobs:
           }
 
           validate_tag "$YANKED_TAG"
-          validate_tag "$REPLACEMENT_TAG"
+          if [ "$NO_SAFE_REPLACEMENT" = "true" ]; then
+            if [ -n "$(printf '%s' "$REPLACEMENT_TAG" | tr -d '[:space:]')" ]; then
+              echo "::error::Do not set replacement_tag when no_safe_replacement is true."
+              exit 1
+            fi
+          else
+            if [ -z "$(printf '%s' "$REPLACEMENT_TAG" | tr -d '[:space:]')" ]; then
+              echo "::error::replacement_tag is required unless no_safe_replacement is true."
+              exit 1
+            fi
+            validate_tag "$REPLACEMENT_TAG"
+          fi
 
-          if [ "$YANKED_TAG" = "$REPLACEMENT_TAG" ]; then
+          if [ -n "$REPLACEMENT_TAG" ] && [ "$YANKED_TAG" = "$REPLACEMENT_TAG" ]; then
             echo "::error::The yanked tag and replacement tag must be different."
             exit 1
           fi
@@ -117,29 +134,37 @@ jobs:
           fi
 
           yanked_release=$(gh release view "$YANKED_TAG" --json body,isPrerelease,name,tagName)
-          replacement_release=$(gh release view "$REPLACEMENT_TAG" --json body,isPrerelease,name,tagName)
+          replacement_ref=""
+          replacement_digest=""
 
-          replacement_status=$(jq -r --arg version "$REPLACEMENT_TAG" '.versions[]? | select(.version == $version) | .status' "$LIFECYCLE_REGISTRY" | head -n 1)
-          if [ "$replacement_status" = "yanked" ] || [ "$replacement_status" = "obsolete" ]; then
-            echo "::error::Replacement ${REPLACEMENT_TAG} is ${replacement_status} in ${LIFECYCLE_REGISTRY}."
-            exit 1
-          fi
+          if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
+            replacement_release=$(gh release view "$REPLACEMENT_TAG" --json body,isPrerelease,name,tagName)
 
-          if [ "$(printf '%s' "$replacement_release" | jq -r '.isPrerelease')" = "true" ]; then
-            echo "::error::Replacement ${REPLACEMENT_TAG} must already be a stable, promoted release."
-            exit 1
+            replacement_status=$(jq -r --arg version "$REPLACEMENT_TAG" '.versions[]? | select(.version == $version) | .status' "$LIFECYCLE_REGISTRY" | head -n 1)
+            if [ "$replacement_status" = "yanked" ] || [ "$replacement_status" = "obsolete" ]; then
+              echo "::error::Replacement ${REPLACEMENT_TAG} is ${replacement_status} in ${LIFECYCLE_REGISTRY}."
+              exit 1
+            fi
+
+            if [ "$(printf '%s' "$replacement_release" | jq -r '.isPrerelease')" = "true" ]; then
+              echo "::error::Replacement ${REPLACEMENT_TAG} must already be a stable, promoted release."
+              exit 1
+            fi
           fi
 
           yanked_body=$(printf '%s' "$yanked_release" | jq -r '.body // ""')
-          replacement_body=$(printf '%s' "$replacement_release" | jq -r '.body // ""')
           yanked_ref=$(extract_image_ref "$YANKED_TAG" "$yanked_body")
-          replacement_ref=$(extract_image_ref "$REPLACEMENT_TAG" "$replacement_body")
+          if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
+            replacement_body=$(printf '%s' "$replacement_release" | jq -r '.body // ""')
+            replacement_ref=$(extract_image_ref "$REPLACEMENT_TAG" "$replacement_body")
+            replacement_digest="${replacement_ref#${IMAGE}@}"
+          fi
 
           {
             echo "yanked_ref=${yanked_ref}"
             echo "replacement_ref=${replacement_ref}"
             echo "yanked_digest=${yanked_ref#${IMAGE}@}"
-            echo "replacement_digest=${replacement_ref#${IMAGE}@}"
+            echo "replacement_digest=${replacement_digest}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
@@ -152,7 +177,9 @@ jobs:
       - name: Verify images are pullable
         run: |
           docker pull "${{ steps.verify.outputs.yanked_ref }}"
-          docker pull "${{ steps.verify.outputs.replacement_ref }}"
+          if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
+            docker pull "${{ steps.verify.outputs.replacement_ref }}"
+          fi
 
       - name: Update lifecycle registry
         env:
@@ -188,11 +215,19 @@ jobs:
               "severity": os.environ["YANK_SEVERITY"],
               # Yanks are emergency safety events, so default user-facing urgency to the assessed severity.
               "urgency": os.environ["YANK_SEVERITY"],
-              "replacement_version": os.environ["REPLACEMENT_TAG"],
-              "replacement_kind": "registry",
-              "replacement_digest": os.environ["REPLACEMENT_DIGEST"],
           })
-          yanked.pop("no_safe_replacement", None)
+          if os.environ["NO_SAFE_REPLACEMENT"] == "true":
+              yanked["no_safe_replacement"] = True
+              yanked.pop("replacement_version", None)
+              yanked.pop("replacement_kind", None)
+              yanked.pop("replacement_digest", None)
+          else:
+              yanked.update({
+                  "replacement_version": os.environ["REPLACEMENT_TAG"],
+                  "replacement_kind": "registry",
+                  "replacement_digest": os.environ["REPLACEMENT_DIGEST"],
+              })
+              yanked.pop("no_safe_replacement", None)
           if os.environ.get("ADVISORY_URL", "").strip():
               yanked["advisory_url"] = os.environ["ADVISORY_URL"].strip()
           else:
@@ -204,20 +239,21 @@ jobs:
               # Keep the audit trail explicit even when maintainers do not provide extra private context.
               yanked["maintainer_note"] = "Yanked by the emergency yank workflow."
 
-          replacement = find(os.environ["REPLACEMENT_TAG"])
-          if replacement.get("status") in {"yanked", "obsolete"}:
-              raise SystemExit(f"replacement {replacement['version']} is {replacement['status']}")
-          replacement.setdefault("status", "active")
-          # If the safe replacement is not already in the registry, populate the required active-entry fields.
-          replacement.setdefault("reason", "Safe replacement for yanked release.")
-          replacement.setdefault("replacement_version", "")
-          replacement.setdefault("replacement_kind", "none")
-          replacement.setdefault("deprecated_date", "")
-          replacement.setdefault("obsolete_date", "")
-          replacement.setdefault("advisory_url", f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{os.environ['REPLACEMENT_TAG']}")
-          replacement.setdefault("urgency", "none")
-          replacement.setdefault("maintainer_note", "Promoted safe replacement release.")
-          replacement["image_digest"] = os.environ["REPLACEMENT_DIGEST"]
+          if os.environ["NO_SAFE_REPLACEMENT"] != "true":
+              replacement = find(os.environ["REPLACEMENT_TAG"])
+              if replacement.get("status") in {"yanked", "obsolete"}:
+                  raise SystemExit(f"replacement {replacement['version']} is {replacement['status']}")
+              replacement.setdefault("status", "active")
+              # If the safe replacement is not already in the registry, populate the required active-entry fields.
+              replacement.setdefault("reason", "Safe replacement for yanked release.")
+              replacement.setdefault("replacement_version", "")
+              replacement.setdefault("replacement_kind", "none")
+              replacement.setdefault("deprecated_date", "")
+              replacement.setdefault("obsolete_date", "")
+              replacement.setdefault("advisory_url", f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{os.environ['REPLACEMENT_TAG']}")
+              replacement.setdefault("urgency", "none")
+              replacement.setdefault("maintainer_note", "Promoted safe replacement release.")
+              replacement["image_digest"] = os.environ["REPLACEMENT_DIGEST"]
 
           def version_key(release):
               match = re.match(r"^v(\d+)\.(\d+)\.(\d+)(.*)$", release["version"])
@@ -232,6 +268,7 @@ jobs:
           make lifecycle-validate
 
       - name: Retag latest to replacement
+        if: ${{ inputs.no_safe_replacement != true }}
         run: |
           docker tag "${{ steps.verify.outputs.replacement_ref }}" "${IMAGE}:latest"
           docker push "${IMAGE}:latest"
@@ -256,12 +293,20 @@ jobs:
             echo
             echo "- Severity: ${YANK_SEVERITY}"
             echo "- Reason: ${YANK_REASON}"
-            echo "- Safe replacement: ${REPLACEMENT_TAG} (${{ steps.verify.outputs.replacement_digest }})"
+            if [ "$NO_SAFE_REPLACEMENT" = "true" ]; then
+              echo "- Safe replacement: none available"
+            else
+              echo "- Safe replacement: ${REPLACEMENT_TAG} (${{ steps.verify.outputs.replacement_digest }})"
+            fi
             if [ -n "${ADVISORY_URL}" ]; then
               echo "- Advisory: ${ADVISORY_URL}"
             fi
             echo
-            echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. The yanked image remains available for audit and forensics unless maintainers remove the package separately."
+            if [ "$NO_SAFE_REPLACEMENT" = "true" ]; then
+              echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. No safe replacement is currently available, so latest was not retagged by this workflow."
+            else
+              echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. The yanked image remains available for audit and forensics unless maintainers remove the package separately."
+            fi
             echo
             echo "---"
             echo
@@ -271,7 +316,9 @@ jobs:
           gh release edit "$YANKED_TAG" --title "$new_title" --notes-file /tmp/yanked-release-notes.md
           release_id=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${YANKED_TAG}" --jq '.id')
           gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" -F make_latest=false >/dev/null
-          gh release edit "$REPLACEMENT_TAG" --latest
+          if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
+            gh release edit "$REPLACEMENT_TAG" --latest
+          fi
 
       - name: Commit lifecycle registry update
         run: |
