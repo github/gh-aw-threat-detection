@@ -174,7 +174,7 @@ This repository includes three Agentic Workflows smoke tests:
 - `.github/workflows/smoke-claude.md`
 - `.github/workflows/smoke-codex.md`
 
-Each runs daily and by `workflow_dispatch`. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job.
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three containerized siblings. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job.
 
 After recompiling the smoke workflows with `gh aw compile`, regenerate and verify the sibling workflows:
 
@@ -255,6 +255,16 @@ const DefaultThreatDetectionVersion  = "v1.0.0"
 ```
 
 The detection job in compiled workflows uses this container instead of inline AI engine invocation.
+
+`gh-aw` should also fetch or vendor
+[releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json)
+and evaluate the pinned `DefaultThreatDetectionVersion` before pulling or
+running the detector container. Active versions run normally. Deprecated versions
+should emit a GitHub Actions warning annotation and job summary text that include
+the reason, replacement version, dates, advisory URL, urgency, and upgrade
+instructions, then continue. Obsolete versions should fail closed before the
+detector runs and print the same remediation guidance. Unknown versions should
+follow the registry policy, currently `fail-closed`.
 
 ## Specification
 
