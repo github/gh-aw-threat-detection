@@ -27,6 +27,7 @@ type ReflectClient struct {
 const (
 	maxModelListBytes       = 4 << 20
 	maxReflectResponseBytes = 8 << 20
+	maxErrorPreviewBytes    = 512
 )
 
 // AnalyzeStructured sends a prompt through /reflect and parses a strict Result.
@@ -103,7 +104,7 @@ func (c *ReflectClient) ListModels(ctx context.Context) ([]ReflectModel, error) 
 		return nil, fmt.Errorf("reading reflect model list: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("listing reflect models returned %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("listing reflect models returned %s: %s", resp.Status, responseBodyPreview(body))
 	}
 	var decoded any
 	if err := json.Unmarshal(body, &decoded); err != nil {
@@ -132,7 +133,7 @@ func (c *ReflectClient) postReflect(ctx context.Context, payload map[string]any)
 		return nil, fmt.Errorf("reading reflect response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("reflect returned %s: %s", resp.Status, string(body))
+		return nil, fmt.Errorf("reflect returned %s: %s", resp.Status, responseBodyPreview(body))
 	}
 	return body, nil
 }
@@ -146,10 +147,18 @@ func (c *ReflectClient) endpoint() string {
 	if err != nil {
 		return base
 	}
+	u.Path = strings.TrimRight(u.Path, "/")
 	if !strings.HasSuffix(u.Path, "/reflect") {
-		u.Path = strings.TrimRight(u.Path, "/") + "/reflect"
+		u.Path += "/reflect"
 	}
 	return u.String()
+}
+
+func responseBodyPreview(body []byte) string {
+	if len(body) <= maxErrorPreviewBytes {
+		return string(body)
+	}
+	return string(body[:maxErrorPreviewBytes]) + "...(truncated)"
 }
 
 func (c *ReflectClient) httpClient() *http.Client {

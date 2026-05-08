@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +58,33 @@ func TestReflectClient_RejectsUnsupportedPreferredModel(t *testing.T) {
 	}
 }
 
+func TestReflectClient_EndpointNormalizesReflectTrailingSlash(t *testing.T) {
+	client := &ReflectClient{BaseURL: "http://example.test/reflect/"}
+	if got, want := client.endpoint(), "http://example.test/reflect"; got != want {
+		t.Fatalf("endpoint() = %q, want %q", got, want)
+	}
+}
+
+func TestReflectClient_TruncatesNon2xxModelListError(t *testing.T) {
+	body := strings.Repeat("a", maxErrorPreviewBytes) + "secret tail"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, body, http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, err := (&ReflectClient{BaseURL: server.URL}).ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected model-list error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "secret tail") {
+		t.Fatalf("error included unbounded response body: %q", msg)
+	}
+	if !strings.Contains(msg, "...(truncated)") {
+		t.Fatalf("expected truncated preview in error: %q", msg)
+	}
+}
+
 func TestReflectClient_RetriesMalformedResponse(t *testing.T) {
 	posts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +107,30 @@ func TestReflectClient_RetriesMalformedResponse(t *testing.T) {
 	}
 	if !result.PromptInjection || posts != 2 {
 		t.Fatalf("expected retry with prompt_injection=true, posts=%d result=%#v", posts, result)
+	}
+}
+
+func TestReflectClient_TruncatesNon2xxReflectError(t *testing.T) {
+	body := strings.Repeat("b", maxErrorPreviewBytes) + "secret prompt echo"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"models":[{"id":"schema","provider":"openai","capabilities":{"json_schema":true}}]}`))
+			return
+		}
+		http.Error(w, body, http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	_, err := (&ReflectClient{BaseURL: server.URL}).AnalyzeStructured(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("expected reflect error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "secret prompt echo") {
+		t.Fatalf("error included unbounded response body: %q", msg)
+	}
+	if !strings.Contains(msg, "...(truncated)") {
+		t.Fatalf("expected truncated preview in error: %q", msg)
 	}
 }
 
