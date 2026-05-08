@@ -19,6 +19,9 @@ jobs:
         with:
           go-version: '1.23'
 
+      - name: Validate lifecycle registry
+        run: make lifecycle-validate
+
       - name: Run tests
         run: go test -v -race ./...
 
