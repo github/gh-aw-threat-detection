@@ -115,9 +115,9 @@ Remaining work involves integration with `github/gh-aw` and production hardening
 Decisions for the unresolved extraction questions:
 
 - **JavaScript scripts**: detection setup and result parsing are implemented in Go here; the old GitHub Actions JavaScript scripts should not be needed once `gh-aw` switches to the container contract.
-- **Engine CLIs**: the detector invokes the selected engine CLI from `PATH` and forwards the `--model` value. Stage 2 should either bundle the supported CLIs into the image or publish an image variant that installs them at runtime before invoking `threat-detect`.
+- **Engine CLIs**: do not bundle Copilot, Claude, or Codex CLIs into the detector image. The detector invokes the selected engine CLI from `PATH` and forwards the `--model` value. Production `gh-aw` integration should install or provide the selected engine CLI in the detection job, then run the pinned detector binary extracted from the detector image in that same runner/AWF environment. This keeps the image small, avoids runtime installation inside the image, and reuses the existing engine installation/authentication path.
 - **Custom steps**: custom `threat-detection.steps` remain orchestrator-owned. They should run before or after the container in the `gh-aw` job rather than being passed into this container as arbitrary scripts.
-- **Backward compatibility**: `gh-aw` should pin a specific image tag and may temporarily keep inline detection behind a compatibility flag until the container path is validated.
+- **Backward compatibility**: do not ship a long-lived dual-mode compatibility window. Stage 3 should switch `gh-aw` to the pinned detector image path after Stage 4 validation passes; users that need inline detection can pin an older `gh-aw` release. A temporary internal fallback is acceptable during implementation only, but should not become a documented public feature flag unless Stage 4 exposes a blocking compatibility issue.
 - **Ollama/LlamaGuard**: keep this as a custom-step pattern unless a dedicated image variant is explicitly required.
 - **Version coupling**: use strict, semver-compatible image tags and have `gh-aw` pin a specific `DefaultThreatDetectionVersion`, matching the firewall pattern.
 - **Isolation**: the detector should run in the standard detection job initially. Running the detector itself inside an additional firewall/isolation layer can be evaluated later.
@@ -138,7 +138,7 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 
 | Variable | Required when | Notes |
 |----------|---------------|-------|
-| `GH_AW_COPILOT_TOKEN` | Running `--engine copilot` in an environment that needs explicit token-based Copilot authentication | If the Copilot CLI uses device, browser, or host-provided authentication instead, configure that mechanism before running the container. |
+| `COPILOT_GITHUB_TOKEN` | Running `--engine copilot` in an environment that needs explicit token-based Copilot authentication | Use a fine-grained PAT owned by a user account with **Account permissions → Copilot Requests: Read**. `GITHUB_TOKEN` is not sufficient for Copilot inference. |
 | `ANTHROPIC_API_KEY` | Running `--engine claude` with the Claude CLI | Not used by unit tests. |
 | `OPENAI_API_KEY` | Running `--engine codex` with the Codex CLI | Not used by unit tests. |
 | `WORKFLOW_NAME` | Optional local/container runs | Included in the generated prompt. |
@@ -173,14 +173,11 @@ Configure these Actions secrets to enable all smoke workflows:
 
 | Secret | Required for | Notes |
 |--------|--------------|-------|
-| `COPILOT_GITHUB_TOKEN` | Copilot smoke workflow and base Copilot detection | See Copilot fallback note below. |
-| `GH_AW_COPILOT_TOKEN` | Optional Copilot token fallback for the container-detection sibling | Used only if `COPILOT_GITHUB_TOKEN` is not configured. |
+| `COPILOT_GITHUB_TOKEN` | Copilot smoke workflow and Copilot detection | Use a fine-grained PAT owned by a user account with **Account permissions → Copilot Requests: Read**. |
 | `ANTHROPIC_API_KEY` | Claude smoke workflow and Claude detection | Used by the Claude CLI. |
 | `OPENAI_API_KEY` or `CODEX_API_KEY` | Codex smoke workflow and Codex detection | Configure whichever token your Codex CLI setup expects. |
 | `GH_AW_GITHUB_TOKEN` | Recommended for GitHub MCP access, safe outputs, and private GHCR pulls | The generated workflows fall back to `GITHUB_TOKEN` where possible. |
 | `GH_AW_GITHUB_MCP_SERVER_TOKEN` | Optional GitHub MCP override | Falls back to `GITHUB_TOKEN` in the compiled workflows. |
-
-Copilot fallback note: the base workflow uses only `secrets.COPILOT_GITHUB_TOKEN`. The container-detection Copilot sibling checks `secrets.COPILOT_GITHUB_TOKEN`, then `secrets.GH_AW_COPILOT_TOKEN`, then `secrets.GH_AW_GITHUB_TOKEN`.
 
 Optional Actions variables:
 

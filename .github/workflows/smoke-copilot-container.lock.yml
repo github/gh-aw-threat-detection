@@ -1190,7 +1190,7 @@ jobs:
         id: detection_agentic_execution
         timeout-minutes: 20
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || secrets.GH_AW_COPILOT_TOKEN || secrets.GH_AW_GITHUB_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT || '' }}
           WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
