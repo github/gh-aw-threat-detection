@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-var semverTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+var semverTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
 var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type lifecycleRegistry struct {
@@ -248,6 +248,12 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				t.Fatalf("validateLifecycleRegistry() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidSemverTagAcceptsPrereleaseAndBuild(t *testing.T) {
+	if !validSemverTag("v1.2.3-alpha.1+build.5") {
+		t.Fatal("expected prerelease and build metadata semver tag to be valid")
 	}
 }
 

@@ -186,6 +186,7 @@ jobs:
               "yanked_date": datetime.date.today().isoformat(),
               "reason": os.environ["YANK_REASON"].strip(),
               "severity": os.environ["YANK_SEVERITY"],
+              # Yanks are emergency safety events, so default user-facing urgency to the assessed severity.
               "urgency": os.environ["YANK_SEVERITY"],
               "replacement_version": os.environ["REPLACEMENT_TAG"],
               "replacement_kind": "registry",
@@ -195,16 +196,19 @@ jobs:
           if os.environ.get("ADVISORY_URL", "").strip():
               yanked["advisory_url"] = os.environ["ADVISORY_URL"].strip()
           else:
+              # The registry requires a stable URL; use the yanked release page when no incident URL is available yet.
               yanked["advisory_url"] = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{os.environ['YANKED_TAG']}"
           if os.environ.get("MAINTAINER_NOTE", "").strip():
               yanked["maintainer_note"] = os.environ["MAINTAINER_NOTE"].strip()
           else:
+              # Keep the audit trail explicit even when maintainers do not provide extra private context.
               yanked["maintainer_note"] = "Yanked by the emergency yank workflow."
 
           replacement = find(os.environ["REPLACEMENT_TAG"])
           if replacement.get("status") in {"yanked", "obsolete"}:
               raise SystemExit(f"replacement {replacement['version']} is {replacement['status']}")
           replacement.setdefault("status", "active")
+          # If the safe replacement is not already in the registry, populate the required active-entry fields.
           replacement.setdefault("reason", "Safe replacement for yanked release.")
           replacement.setdefault("replacement_version", "")
           replacement.setdefault("replacement_kind", "none")
