@@ -32,6 +32,9 @@ const (
 	exitSafe   = 0
 	exitThreat = 1
 	exitError  = 2
+
+	fullDetectionCorrectionSummaryFormat     = "Your previous response did not contain a valid %s JSON object"
+	fullDetectionCorrectionInstructionFormat = "Return exactly one corrected result line using the required %s prefix."
 )
 
 func main() {
@@ -171,8 +174,8 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt string, r
 			return result, nil
 		}
 		lastErr = err
-		summary := fmt.Sprintf("Your previous response did not contain a valid %s JSON object", detector.ResultPrefix)
-		instruction := "Return exactly one corrected result line using the required " + detector.ResultPrefix + " prefix."
+		summary := fmt.Sprintf(fullDetectionCorrectionSummaryFormat, detector.ResultPrefix)
+		instruction := fmt.Sprintf(fullDetectionCorrectionInstructionFormat, detector.ResultPrefix)
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, summary, err.Error(), instruction)
 	}
 	return nil, lastErr

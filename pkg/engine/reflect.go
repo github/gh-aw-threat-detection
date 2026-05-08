@@ -28,6 +28,9 @@ const (
 	maxModelListBytes       = 4 << 20
 	maxReflectResponseBytes = 8 << 20
 	maxErrorPreviewBytes    = 512
+
+	reflectCorrectionSummary     = "Your previous response was invalid"
+	reflectCorrectionInstruction = "Return only the strict JSON object matching the requested schema."
 )
 
 // AnalyzeStructured sends a prompt through /reflect and parses a strict Result.
@@ -52,7 +55,7 @@ func (c *ReflectClient) AnalyzeStructured(ctx context.Context, prompt string) (*
 			return result, nil
 		}
 		lastErr = err
-		currentPrompt = detector.BuildCorrectionPrompt(prompt, "Your previous response was invalid", err.Error(), "Return only the strict JSON object matching the requested schema.")
+		currentPrompt = detector.BuildCorrectionPrompt(prompt, reflectCorrectionSummary, err.Error(), reflectCorrectionInstruction)
 	}
 	return nil, lastErr
 }

@@ -103,8 +103,8 @@ func readBoundedText(path string, maxBytes int) (string, bool, error) {
 		return "", false, err
 	}
 
-	// Read one extra byte so truncation can be detected without reading the
-	// entire artifact into memory.
+	// Read one extra byte so truncation can be detected while still preventing
+	// large artifacts from being loaded entirely into memory.
 	buf, err := io.ReadAll(io.LimitReader(f, int64(maxBytes+1)))
 	closeErr := f.Close()
 	if err != nil {
