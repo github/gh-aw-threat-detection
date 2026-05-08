@@ -114,7 +114,7 @@ jobs:
       CUSTOM_PROMPT: ${{ inputs.custom_prompt }}
       WORKFLOW_NAME_OVERRIDE: ${{ inputs.workflow_name_override }}
       WORKFLOW_DESCRIPTION_OVERRIDE: ${{ inputs.workflow_description_override }}
-      GH_TOKEN: ${{ secrets.GH_AW_REPLAY_TOKEN || github.token }}
+      GH_TOKEN: ${{ github.token }}
       GH_AW_COPILOT_TOKEN: ${{ secrets.GH_AW_COPILOT_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -255,6 +255,14 @@ jobs:
               cp "$src" "$dst"
             fi
           }
+          copy_file_if_missing() {
+            local src="$1"
+            local dst="$2"
+            if [ -f "$src" ] && [ ! -f "$dst" ]; then
+              mkdir -p "$(dirname "$dst")"
+              cp "$src" "$dst"
+            fi
+          }
           copy_dir_if_exists() {
             local src="$1"
             local dst="$2"
@@ -266,7 +274,9 @@ jobs:
 
           mkdir -p "${REPLAY_INPUT}/aw-prompts"
           copy_dir_if_exists "${REPLAY_DOWNLOADS}/activation/aw-prompts" "${REPLAY_INPUT}/aw-prompts"
+          copy_file_if_missing "${REPLAY_DOWNLOADS}/activation/prompt.txt" "${REPLAY_INPUT}/aw-prompts/prompt.txt"
           copy_dir_if_exists "${REPLAY_DOWNLOADS}/agent/aw-prompts" "${REPLAY_INPUT}/aw-prompts"
+          copy_file_if_missing "${REPLAY_DOWNLOADS}/agent/prompt.txt" "${REPLAY_INPUT}/aw-prompts/prompt.txt"
           copy_file_if_exists "${REPLAY_DOWNLOADS}/agent/agent_output.json" "${REPLAY_INPUT}/agent_output.json"
           copy_file_if_exists "${REPLAY_DOWNLOADS}/activation/aw_info.json" "${REPLAY_INPUT}/aw_info.json"
           copy_file_if_exists "${REPLAY_DOWNLOADS}/agent/awf-config.json" "${REPLAY_INPUT}/awf-config.json"

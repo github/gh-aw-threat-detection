@@ -107,9 +107,9 @@ Production AI-backed detection requires the selected engine CLI and its authenti
 
 ### Replay workflow
 
-Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior `github/gh-aw` workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
 
-For private or cross-repository source runs, configure a repository secret named `GH_AW_REPLAY_TOKEN` with read access to the source repository's Actions artifacts. If that secret is not set, the workflow uses the dispatching repository's `GITHUB_TOKEN`, which only works for accessible runs.
+Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
 
 Common dispatch examples:
 
