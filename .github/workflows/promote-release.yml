@@ -19,6 +19,7 @@ jobs:
       name: release-promote
     env:
       PROMOTE_TAG: ${{ inputs.tag }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
 
