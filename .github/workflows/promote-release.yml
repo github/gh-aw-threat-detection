@@ -31,7 +31,7 @@ jobs:
           IMAGE="ghcr.io/github/gh-aw-threat-detection"
           LIFECYCLE_REGISTRY="releases/threat-detection-lifecycle.json"
           RELEASE_INFO=$(gh release view "$PROMOTE_TAG" --json body,isPrerelease,tagName)
-          LIFECYCLE_STATUS=$(jq -r --arg version "$PROMOTE_TAG" '.releases[]? | select(.version == $version) | .status' "$LIFECYCLE_REGISTRY" | head -n 1)
+          LIFECYCLE_STATUS=$(jq -r --arg version "$PROMOTE_TAG" '.versions[]? | select(.version == $version) | .status' "$LIFECYCLE_REGISTRY" | head -n 1)
           if [ "$LIFECYCLE_STATUS" = "yanked" ] || [ "$LIFECYCLE_STATUS" = "obsolete" ]; then
             echo "::error::Release ${PROMOTE_TAG} is ${LIFECYCLE_STATUS} in ${LIFECYCLE_REGISTRY}. Refusing to promote it to latest."
             exit 1

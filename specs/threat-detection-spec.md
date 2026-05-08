@@ -195,20 +195,28 @@ The implementation MAY pass through engine-specific authentication variables req
 
 **TD-27**: Private repository status MUST NOT block container publication or consumption. When the source repository or GHCR package is private, the package MUST be configured so approved consuming repositories can pull pinned image tags with `packages: read`.
 
-**TD-28**: Release lifecycle metadata MUST support `active`, `deprecated`, `obsolete`, and `yanked` states. A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected image digest.
+**TD-28**: The repository MUST publish a machine-readable threat detection lifecycle registry that identifies each governed version as `active`, `deprecated`, `obsolete`, or `yanked`.
 
-**TD-29**: The parent orchestrator (`gh-aw`) MUST check release lifecycle metadata before pulling or running the detector image. A selected version or digest whose lifecycle state is `yanked` MUST fail closed before detector execution.
+**TD-29**: Promoted versions are `active` by default unless the lifecycle registry explicitly marks them otherwise.
 
-**TD-30**: Explicitly pinned yanked versions or digests MUST NOT silently fall back to another version. The failure message SHOULD explain that the selected detector was yanked and name the safe replacement when one exists.
+**TD-30**: Deprecated versions MUST be allowed to run, but the parent orchestrator or generated workflow MUST emit warning annotations and job summary text with the reason, replacement guidance, relevant dates, advisory URL, urgency, and remediation steps.
 
-**TD-31**: Floating `latest` selection MUST NOT resolve to a yanked version. Maintainers MAY retag `latest` to the newest unyanked stable replacement because `latest` is already a floating selector.
+**TD-31**: Obsolete versions MUST NOT run. The parent orchestrator or generated workflow MUST fail closed before pulling or invoking the detector container and MUST print actionable upgrade guidance.
+
+**TD-32**: A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected image digest. Selected yanked versions or digests MUST fail closed before detector execution.
+
+**TD-33**: Explicitly pinned yanked versions or digests MUST NOT silently fall back to another version. The failure message SHOULD explain that the selected detector was yanked and name the safe replacement when one exists.
+
+**TD-34**: Floating `latest` selection MUST NOT resolve to a yanked version. Maintainers MAY retag `latest` to the newest unyanked stable replacement because `latest` is already a floating selector.
+
+**TD-35**: Lifecycle enforcement SHOULD happen before invoking the detector container and MUST NOT require detector container runtime network access. Implementations MUST NOT rely only on checks inside previously released detector binaries.
 
 ---
 
 ## 10. Security Considerations
 
-**TD-32**: The detection container SHOULD run with no network access (fully blocked egress).
+**TD-36**: The detection container SHOULD run with no network access (fully blocked egress).
 
-**TD-33**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
+**TD-37**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
 
-**TD-34**: Detection results MUST NOT be modifiable by the agent being analyzed.
+**TD-38**: Detection results MUST NOT be modifiable by the agent being analyzed.

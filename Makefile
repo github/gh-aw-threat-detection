@@ -1,7 +1,7 @@
 .PHONY: all build test test-coverage lint golint clean docker-build docker-smoke docker-push \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
-	validate-lifecycle sbom agent-finish help
+	sbom lifecycle-validate validate-lifecycle agent-finish help
 
 BINARY_NAME=threat-detect
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -97,11 +97,14 @@ test-coverage:
 	go test -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
+lifecycle-validate:
+	go test ./pkg/detector -run TestThreatDetectionLifecycleRegistry -count=1
+
 lint:
 	go vet ./...
 
 validate-lifecycle:
-	go test ./releases
+	$(MAKE) lifecycle-validate
 
 golint:
 	@GOPATH=$$(go env GOPATH); \
@@ -180,7 +183,6 @@ help:
 	@echo "  fmt            - Format Go code"
 	@echo "  fmt-check      - Validate Go formatting"
 	@echo "  lint           - Run go vet"
-	@echo "  validate-lifecycle - Validate release lifecycle metadata"
 	@echo "  golint         - Run golangci-lint"
 	@echo "  deps           - Download and tidy Go modules"
 	@echo "  deps-dev       - Install development dependencies and tools"
@@ -188,6 +190,8 @@ help:
 	@echo "  license-report - Generate CSV license report"
 	@echo "  security-scan  - Run gosec and govulncheck"
 	@echo "  sbom           - Generate SPDX and CycloneDX SBOMs"
+	@echo "  lifecycle-validate - Validate threat detection lifecycle metadata"
+	@echo "  validate-lifecycle - Alias for lifecycle-validate"
 	@echo "  docker-build   - Build the Docker image"
 	@echo "  docker-smoke   - Build the Docker image and run a CLI smoke test"
 	@echo "  docker-push    - Push the Docker image"
