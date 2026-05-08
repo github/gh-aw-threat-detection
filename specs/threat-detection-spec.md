@@ -195,12 +195,22 @@ The implementation MAY pass through engine-specific authentication variables req
 
 **TD-27**: Private repository status MUST NOT block container publication or consumption. When the source repository or GHCR package is private, the package MUST be configured so approved consuming repositories can pull pinned image tags with `packages: read`.
 
+**TD-28**: The repository MUST publish a machine-readable threat detection lifecycle registry that identifies each governed version as `active`, `deprecated`, or `obsolete`.
+
+**TD-29**: Promoted versions are `active` by default unless the lifecycle registry explicitly marks them otherwise.
+
+**TD-30**: Deprecated versions MUST be allowed to run, but the parent orchestrator or generated workflow MUST emit warning annotations and job summary text with the reason, replacement guidance, relevant dates, advisory URL, urgency, and remediation steps.
+
+**TD-31**: Obsolete versions MUST NOT run. The parent orchestrator or generated workflow MUST fail closed before pulling or invoking the detector container and MUST print actionable upgrade guidance.
+
+**TD-32**: Lifecycle enforcement SHOULD happen before invoking the detector container and MUST NOT require detector container runtime network access. Implementations MUST NOT rely only on checks inside previously released detector binaries.
+
 ---
 
 ## 10. Security Considerations
 
-**TD-28**: The detection container SHOULD run with no network access (fully blocked egress).
+**TD-33**: The detection container SHOULD run with no network access (fully blocked egress).
 
-**TD-29**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
+**TD-34**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
 
-**TD-30**: Detection results MUST NOT be modifiable by the agent being analyzed.
+**TD-35**: Detection results MUST NOT be modifiable by the agent being analyzed.
