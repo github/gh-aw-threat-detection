@@ -83,10 +83,14 @@ Production AI-backed detection requires the selected engine CLI and its authenti
 ```
 <artifacts-dir>/
 ├── aw-prompts/
-│   └── prompt.txt          # Workflow prompt file
+│   ├── prompt.txt          # Expanded workflow prompt file
+│   ├── prompt-template.txt # Pre-expansion prompt template (optional)
+│   └── prompt-import-tree.json # Runtime-import provenance (optional)
 ├── agent_output.json       # Agent structured output
+├── aw_info.json            # Activation metadata (optional)
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
+├── experiments/            # Experiment assignment/state files (optional)
 └── comment-memory/         # Agent comment memory (optional)
     └── *.md
 ```
@@ -101,6 +105,23 @@ Production AI-backed detection requires the selected engine CLI and its authenti
   "reasons": []
 }
 ```
+
+### Replay workflow
+
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
+
+Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
+
+Common dispatch examples:
+
+- Current checkout, direct CLI replay: set `run_id`, leave `detector_source=current`, `engine=copilot`, and `use_awf=false`.
+- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v1.0.0`.
+- Image detector replay: set `detector_source=image` and optionally set `detector_ref` to an image tag. The workflow extracts the `threat-detect` binary from the image and runs it on the host so the selected engine CLI can be installed there.
+- Model comparison: set `model` to the engine-specific model name to pass through `--model`.
+- Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
+- AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default.
+
+The `run_attempt` input is only safe for the latest attempt of a source run because GitHub artifact downloads are not attempt-scoped. The workflow fails with a clear error if an older attempt is requested.
 
 ## Stage Status and Decisions
 
