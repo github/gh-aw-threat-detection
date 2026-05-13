@@ -7,6 +7,7 @@ Threat Detection component for [GitHub Agentic Workflows](https://github.com/git
 - [Quick Start](#quick-start)
 - [Overview](#overview)
 - [Guardrails and Security Considerations](#guardrails-and-security-considerations)
+- [Optional GitHub MCP Security Scanning](#optional-github-mcp-security-scanning)
 - [Usage](#usage)
 - [Stage Status and Decisions](#stage-status-and-decisions)
 - [Private Container Release Setup](#private-container-release-setup)
@@ -45,6 +46,44 @@ This tool runs as a standalone binary or container that analyzes artifacts produ
 This project is designed to help reduce risk when running AI agent workflows by inspecting generated artifacts before they are accepted as safe output. Detection is advisory and should be combined with defense-in-depth controls such as least-privilege permissions, human review, and repository protections.
 
 Do not treat a "safe" result as a security guarantee. Use the output as one signal in a broader security review process.
+
+## Optional GitHub MCP Security Scanning
+
+GitHub MCP secret scanning and dependency scanning are a good defense-in-depth
+fit for the threat detection pipeline, but they should stay outside the
+detector binary/container. The detector should continue to operate on artifacts
+without direct GitHub network access, while the parent `gh-aw` orchestration can
+optionally run MCP validation before invoking `threat-detect`.
+
+Recommended integration:
+
+1. Add an orchestrator-owned MCP validation phase before AI-backed detection.
+2. Run GitHub MCP secret scanning for the current changes when the repository
+   has Secret Protection enabled. Treat confirmed secret findings as blocking by
+   default because safe outputs should not proceed with exposed credentials.
+3. Run GitHub MCP dependency scanning as an opt-in or warn-only check while the
+   tool remains in public preview. Allow repositories to promote it to blocking
+   once the signal and tool availability are acceptable for their workflow.
+4. Normalize MCP results into optional detector artifacts such as
+   `mcp-security/secret-scanning.json` and
+   `mcp-security/dependency-scanning.json`, and include a concise summary in the
+   detector prompt so the AI analysis can correlate scanner findings with
+   prompt-injection and malicious-patch context.
+5. If the MCP server or required repository features are unavailable, continue
+   with the existing detector unless the workflow explicitly configured that
+   scanner as required.
+
+Tradeoffs:
+
+- **Pros:** uses GitHub-native detectors, honors existing push-protection
+  customization, catches deterministic secret/dependency findings before model
+  review, and gives the detector structured evidence to reason about.
+- **Cons:** requires MCP server/toolset availability and GitHub feature
+  enablement, introduces additional token/network dependencies in the
+  orchestrator job, and dependency scanning is still preview-quality.
+
+This keeps the detector's no-network/container-isolation posture intact while
+making MCP security scans an optional pre-validation layer in `gh-aw`.
 
 ## Usage
 
@@ -104,6 +143,9 @@ Production AI-backed detection requires the selected engine CLI and its authenti
 ├── aw_info.json            # Activation metadata (optional)
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
+├── mcp-security/           # GitHub MCP scanner results (optional)
+│   ├── secret-scanning.json
+│   └── dependency-scanning.json
 ├── experiments/            # Experiment assignment/state files (optional)
 └── comment-memory/         # Agent comment memory (optional)
     └── *.md

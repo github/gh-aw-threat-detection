@@ -73,6 +73,20 @@ threat-detection:
       uses: trufflesecurity/trufflehog@main
 ```
 
+**TD-07a**: GitHub MCP security scanning SHOULD be an optional
+orchestrator-owned pre-validation phase, not a requirement inside the detector
+container. Implementations SHOULD run GitHub MCP secret scanning before
+AI-backed detection when Secret Protection is enabled and SHOULD fail closed on
+confirmed secret findings unless the workflow explicitly configures warn-only
+behavior. Implementations MAY run GitHub MCP dependency scanning as an opt-in or
+warn-only check while the tool remains in public preview, with a repository
+option to make findings blocking.
+
+MCP scanner outputs SHOULD be normalized into optional artifacts under
+`mcp-security/` and summarized for the detector prompt. Missing MCP server
+support, disabled repository features, or unavailable toolsets SHOULD NOT block
+the existing detector unless the scanner is explicitly configured as required.
+
 ---
 
 ## 5. Detection Output
@@ -167,6 +181,9 @@ MUST NOT allow Phase 1 to conclude safe.
 ├── agent_output.json       # Agent structured output
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
+├── mcp-security/           # GitHub MCP scanner results (optional)
+│   ├── secret-scanning.json
+│   └── dependency-scanning.json
 └── comment-memory/         # Agent comment memory (optional)
     └── *.md
 ```
