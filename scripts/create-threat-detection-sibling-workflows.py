@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
-DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:latest"
+DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:v1.0.0"
 ENGINES = {
     "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot Containerized"),
     "smoke-claude.lock.yml": ("claude", "Smoke Claude Containerized"),
@@ -77,9 +77,16 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
         'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin '
         '2>/dev/null | paste -sd: -):$PATH"; '
         '[ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; '
+        'result_path="/tmp/gh-aw/threat-detection/result.json"; '
         f"args=(--engine {engine}); "
         'if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; '
-        '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" /tmp/gh-aw/threat-detection'
+        'run_status=0; '
+        '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection || run_status=$?; '
+        'if [ -f "$result_path" ]; then '
+        "python3 -c 'import json,sys; print(\"THREAT_DETECTION_RESULT:\" + json.dumps(json.load(open(sys.argv[1])), separators=(\",\", \":\")))' "
+        '"$result_path" >> /tmp/gh-aw/threat-detection/detection.log; '
+        'fi; '
+        'exit "$run_status"'
     )
     shell = f'''- name: Log in to GHCR for detector image
   if: always() && steps.detection_guard.outputs.run_detection == 'true'
@@ -112,6 +119,7 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
   env:
 {indent(engine_env(engine), 4)}
     THREAT_DETECTION_MODEL: ${{{{ vars.GH_AW_MODEL_DETECTION_{engine.upper()} || '' }}}}
+    THREAT_DETECTION_REFLECT_URL: http://127.0.0.1:8080/reflect
     WORKFLOW_DESCRIPTION: {workflow_description}
     WORKFLOW_NAME: ${{{{ github.workflow }}}}
   run: |

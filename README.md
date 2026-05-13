@@ -85,7 +85,7 @@ schema-capable model is available.
 ```bash
 docker run --rm \
   -v /path/to/artifacts:/workspace/artifacts \
-  ghcr.io/github/gh-aw-threat-detection:latest \
+  ghcr.io/github/gh-aw-threat-detection:v1.0.0 \
   /workspace/artifacts
 ```
 
@@ -241,7 +241,7 @@ Optional Actions variables:
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. |
-| `GH_AW_THREAT_DETECTION_IMAGE` | Override the detector image used by the `*-container.lock.yml` siblings. Defaults to `ghcr.io/github/gh-aw-threat-detection:latest`. |
+| `GH_AW_THREAT_DETECTION_IMAGE` | Override the detector image used by the `*-container.lock.yml` siblings. Defaults to `ghcr.io/github/gh-aw-threat-detection:v1.0.0`. |
 
 ### Build
 

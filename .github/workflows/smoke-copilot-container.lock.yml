@@ -1181,12 +1181,12 @@ jobs:
       - name: Pull threat detection container
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
+          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:v1.0.0' }}
         run: docker pull "$THREAT_DETECTION_IMAGE"
       - name: Extract threat detection binary from container
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
+          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:v1.0.0' }}
         run: |
           mkdir -p "${RUNNER_TEMP}/gh-aw/threat-detect-bin"
           container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
@@ -1201,6 +1201,7 @@ jobs:
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT || '' }}
+          THREAT_DETECTION_REFLECT_URL: http://127.0.0.1:8080/reflect
           WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
@@ -1210,7 +1211,7 @@ jobs:
           printf '%s\n' '{"$schema":"https://github.com/github/gh-aw-firewall/releases/download/v0.25.41/awf-config.schema.json","network":{"allowDomains":["api.business.githubcopilot.com","api.enterprise.githubcopilot.com","api.github.com","api.githubcopilot.com","api.individual.githubcopilot.com","github.com","host.docker.internal","telemetry.enterprise.githubcopilot.com"]},"apiProxy":{"enabled":true},"container":{"imageTag":"0.25.41"}}' > "${RUNNER_TEMP}/gh-aw/awf-config.json" && cp "${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json
           # shellcheck disable=SC1003
           sudo -E awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" --env-all --exclude-env COPILOT_GITHUB_TOKEN --log-level info --proxy-logs-dir /tmp/gh-aw/sandbox/firewall/logs --audit-dir /tmp/gh-aw/sandbox/firewall/audit --enable-host-access --allow-host-ports 80,443,8080 --skip-pull \
-            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; args=(--engine copilot); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
+            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; result_path="/tmp/gh-aw/threat-detection/result.json"; args=(--engine copilot); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; run_status=0; "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection || run_status=$?; if [ -f "$result_path" ]; then python3 -c '\''import json,sys; print("THREAT_DETECTION_RESULT:" + json.dumps(json.load(open(sys.argv[1])), separators=(",", ":")))'\'' "$result_path" >> /tmp/gh-aw/threat-detection/detection.log; fi; exit "$run_status"' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
       - name: Upload threat detection log
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
