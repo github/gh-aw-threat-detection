@@ -109,4 +109,19 @@ func TestEngineCommandArgs(t *testing.T) {
 			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
 		}
 	})
+
+	t.Run("codex default model", func(t *testing.T) {
+		got := codexArgs("", "/tmp/prompt.txt")
+		want := []string{
+			"exec",
+			"-c", "web_search=disabled",
+			"-c", "fetch=disabled",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--skip-git-repo-check",
+			"--prompt-file", "/tmp/prompt.txt",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
+		}
+	})
 }
