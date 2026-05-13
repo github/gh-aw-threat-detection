@@ -59,7 +59,21 @@ threat-detect [flags] <artifacts-dir>
 - `--model` — Model override for the engine
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
+- `--triage` — Enable fast Phase 1 structured-output triage. Default: `true`
+- `--reflect-url` — `api-proxy` `/reflect` base URL for structured-output calls. Default: `http://127.0.0.1:8080/reflect`
+- `--triage-model` — Model override for Phase 1 `/reflect` triage
+- `--triage-max-bytes` — Maximum bytes per artifact to inline during triage
+- `--triage-retries` — Retries for malformed structured-output responses
 - `--version` — Print version and exit
+
+`--reflect-url` can also be supplied with `THREAT_DETECTION_REFLECT_URL`,
+`API_PROXY_REFLECT_URL`, or `REFLECT_URL`. By default, `threat-detect` first
+tries a non-agentic `/reflect` call with a strict JSON schema matching the result
+contract. An all-false valid triage result exits successfully without the full
+detector. Threats, uncertainty, unsupported models, proxy errors, or malformed
+responses fail safe into the full detector. The full detector preserves the
+existing CLI engine behavior and prefers `/reflect` structured output when a
+schema-capable model is available.
 
 **Exit codes:**
 - `0` — Safe (no threats detected)
@@ -131,13 +145,13 @@ The extraction staging model is:
 - Stage 3: `github/gh-aw` integration
 
 Stage 1 is functionally represented in this repository.
-The standalone Go CLI, artifact reader, prompt builder, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present.
+The standalone Go CLI, artifact reader, prompt builder, two-phase `/reflect` triage, result parser, engine abstraction, W3C-style specification, unit tests, CI, Dockerfile, and release workflow are present.
 Remaining work involves integration with `github/gh-aw` and production hardening of the container runtime in Stage 2/3, not additional JavaScript porting in this repository.
 
 Decisions for the unresolved extraction questions:
 
 - **JavaScript scripts**: detection setup and result parsing are implemented in Go here; the old GitHub Actions JavaScript scripts should not be needed once `gh-aw` switches to the container contract.
-- **Engine CLIs**: do not bundle Copilot, Claude, or Codex CLIs into the detector image. The detector invokes the selected engine CLI from `PATH` and forwards the `--model` value. Production `gh-aw` integration should install or provide the selected engine CLI in the detection job, then run the pinned detector binary extracted from the detector image in that same runner/AWF environment. This keeps the image small, avoids runtime installation inside the image, and reuses the existing engine installation/authentication path.
+- **Engine CLIs and `/reflect`**: do not bundle Copilot, Claude, or Codex CLIs into the detector image. The detector invokes the selected engine CLI from `PATH` and forwards the `--model` value when full CLI analysis is needed. When `--reflect-url` is configured, the detector can call `api-proxy` directly for structured-output triage and schema-capable full analysis before falling back to CLI behavior. Production `gh-aw` integration should install or provide the selected engine CLI in the detection job, then run the pinned detector binary extracted from the detector image in that same runner/AWF environment. This keeps the image small, avoids runtime installation inside the image, and reuses the existing engine installation/authentication path.
 - **Custom steps**: custom `threat-detection.steps` remain orchestrator-owned. They should run before or after the container in the `gh-aw` job rather than being passed into this container as arbitrary scripts.
 - **Backward compatibility**: do not ship a long-lived dual-mode compatibility window. Stage 3 should switch `gh-aw` to the pinned detector image path after Stage 4 validation passes; users that need inline detection can pin an older `gh-aw` release. A temporary internal fallback is acceptable during implementation only, but should not become a documented public feature flag unless Stage 4 exposes a blocking compatibility issue.
 - **Ollama/LlamaGuard**: keep this as a custom-step pattern unless a dedicated image variant is explicitly required.

@@ -17,6 +17,9 @@ type Engine interface {
 	Analyze(ctx context.Context, prompt string) (string, error)
 }
 
+// DefaultReflectURL is the default local api-proxy reflect endpoint.
+const DefaultReflectURL = "http://127.0.0.1:8080/reflect"
+
 // New creates a new engine instance based on the engine ID.
 // If engineID is empty, it defaults to "copilot".
 func New(engineID, model string) (Engine, error) {
