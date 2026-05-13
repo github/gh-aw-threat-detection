@@ -61,7 +61,7 @@ def extract_awf_lines(text: str) -> tuple[str, str]:
 
 def engine_env(engine: str) -> str:
     if engine == "copilot":
-        return """COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || secrets.GH_AW_COPILOT_TOKEN || secrets.GH_AW_GITHUB_TOKEN }}"""
+        return """COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}"""
     if engine == "claude":
         return """ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}"""
     if engine == "codex":
