@@ -124,13 +124,17 @@ func runCLI(ctx context.Context, name string, args []string, stdinData string) (
 	return runCLIEnv(ctx, name, args, stdinData, nil)
 }
 
-func runCLIWithPromptFile(ctx context.Context, name string, prompt string, argsForPrompt func(string) []string, env []string) (string, error) {
+func runCLIWithPromptFile(ctx context.Context, name string, prompt string, argsForPrompt func(string) []string, env []string) (output string, err error) {
 	promptFile, err := os.CreateTemp("", "threat-detect-prompt-*.txt")
 	if err != nil {
 		return "", fmt.Errorf("creating temporary prompt file: %w", err)
 	}
 	promptPath := promptFile.Name()
-	defer os.Remove(promptPath)
+	defer func() {
+		if removeErr := os.Remove(promptPath); err == nil && removeErr != nil {
+			err = fmt.Errorf("removing temporary prompt file: %w", removeErr)
+		}
+	}()
 	if _, err := promptFile.WriteString(prompt); err != nil {
 		promptFile.Close()
 		return "", fmt.Errorf("writing temporary prompt file: %w", err)
