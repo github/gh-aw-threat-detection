@@ -50,7 +50,7 @@
 #   - ghcr.io/github/github-mcp-server:v1.0.3@sha256:2ac27ef03461ef2b877031b838a7d1fd7f12b12d4ace7796d8cad91446d55959
 #   - node:lts-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f
 
-name: "Smoke Codex"
+name: "Smoke Codex Containerized"
 "on":
   schedule:
   - cron: "19 16 * * *"
@@ -68,7 +68,7 @@ permissions: {}
 concurrency:
   group: "gh-aw-${{ github.workflow }}"
 
-run-name: "Smoke Codex"
+run-name: "Smoke Codex Containerized"
 
 jobs:
   activation:
