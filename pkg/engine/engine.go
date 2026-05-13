@@ -102,18 +102,17 @@ func claudeArgs(model string) []string {
 }
 
 func codexArgs(model, promptPath string) []string {
-	args := make([]string, 0, 12)
-	if model != "" {
-		args = append(args, "-c", "model="+model)
-	}
-	args = append(args,
+	args := []string{
 		"exec",
 		"-c", "web_search=disabled",
 		"-c", "fetch=disabled",
 		"--dangerously-bypass-approvals-and-sandbox",
 		"--skip-git-repo-check",
 		"--prompt-file", promptPath,
-	)
+	}
+	if model != "" {
+		args = append([]string{"-c", "model=" + model}, args...)
+	}
 	return args
 }
 
