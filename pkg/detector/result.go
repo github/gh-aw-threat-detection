@@ -1,8 +1,10 @@
 package detector
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -17,9 +19,59 @@ type Result struct {
 	Reasons         []string `json:"reasons"`
 }
 
+// ResultJSONSchema is the strict JSON Schema used for structured model output.
+var ResultJSONSchema = map[string]any{
+	"type":                 "object",
+	"additionalProperties": false,
+	"required":             []string{"prompt_injection", "secret_leak", "malicious_patch", "reasons"},
+	"properties": map[string]any{
+		"prompt_injection": map[string]any{"type": "boolean"},
+		"secret_leak":      map[string]any{"type": "boolean"},
+		"malicious_patch":  map[string]any{"type": "boolean"},
+		"reasons": map[string]any{
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+		},
+	},
+}
+
 // HasThreats returns true if any threat category was detected.
 func (r *Result) HasThreats() bool {
+	if r == nil {
+		return false
+	}
 	return r.PromptInjection || r.SecretLeak || r.MaliciousPatch
+}
+
+// IsSafe returns true when the result is valid and all threat categories are false.
+func (r *Result) IsSafe() bool {
+	return r != nil && !r.HasThreats()
+}
+
+// ParseStructuredResult parses a strict JSON object matching ResultJSONSchema.
+func ParseStructuredResult(data []byte) (*Result, error) {
+	var raw map[string]any
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("failed to parse structured result JSON: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		preview, marshalErr := json.Marshal(extra)
+		if marshalErr != nil {
+			preview = []byte(fmt.Sprintf("<%T>", extra))
+		}
+		previewText := string(TruncateCorrectionBytes(preview))
+		return nil, fmt.Errorf("structured result must be exactly one JSON object; found: %s", previewText)
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("structured result JSON must be a non-empty object")
+	}
+	if err := validateRawResult(raw, "structured result"); err != nil {
+		return nil, err
+	}
+	return resultFromRaw(raw), nil
 }
 
 // ParseResult extracts and parses the THREAT_DETECTION_RESULT from raw engine output.
@@ -81,36 +133,61 @@ func ParseResult(output string) (*Result, error) {
 		return nil, fmt.Errorf("THREAT_DETECTION_RESULT JSON must be an object, got null")
 	}
 
-	// Validate boolean fields
+	if err := validateRawResult(raw, "THREAT_DETECTION_RESULT"); err != nil {
+		return nil, err
+	}
+
+	return resultFromRaw(raw), nil
+}
+
+func validateRawResult(raw map[string]any, label string) error {
+	for field := range raw {
+		switch field {
+		case "prompt_injection", "secret_leak", "malicious_patch", "reasons":
+		default:
+			return fmt.Errorf("unexpected field %q in %s", field, label)
+		}
+	}
 	for _, field := range []string{"prompt_injection", "secret_leak", "malicious_patch"} {
 		val, exists := raw[field]
 		if !exists {
-			return nil, fmt.Errorf("missing required field %q in THREAT_DETECTION_RESULT", field)
+			return fmt.Errorf("missing required field %q in %s", field, label)
 		}
 		if _, ok := val.(bool); !ok {
-			return nil, fmt.Errorf("invalid type for %q: expected boolean, got %T (%v)", field, val, val)
+			return fmt.Errorf("invalid type for %q: expected boolean, got %T (%v)", field, val, val)
 		}
 	}
+	reasons, exists := raw["reasons"]
+	if !exists {
+		return fmt.Errorf("missing required field %q in %s", "reasons", label)
+	}
+	reasonsArr, ok := reasons.([]any)
+	if !ok {
+		return fmt.Errorf("invalid type for %q: expected array, got %T (%v)", "reasons", reasons, reasons)
+	}
+	for i, reason := range reasonsArr {
+		if _, ok := reason.(string); !ok {
+			return fmt.Errorf("invalid type for %q[%d]: expected string, got %T (%v)", "reasons", i, reason, reason)
+		}
+	}
+	return nil
+}
 
+func resultFromRaw(raw map[string]any) *Result {
 	result := &Result{
 		PromptInjection: raw["prompt_injection"].(bool),
 		SecretLeak:      raw["secret_leak"].(bool),
 		MaliciousPatch:  raw["malicious_patch"].(bool),
 		Reasons:         []string{},
 	}
-
-	// Parse reasons
-	if reasons, exists := raw["reasons"]; exists {
-		if reasonsArr, ok := reasons.([]any); ok {
-			for _, r := range reasonsArr {
-				if s, ok := r.(string); ok {
-					result.Reasons = append(result.Reasons, s)
-				}
+	if reasons, ok := raw["reasons"].([]any); ok {
+		for _, r := range reasons {
+			if reason, ok := r.(string); ok {
+				result.Reasons = append(result.Reasons, reason)
 			}
 		}
 	}
-
-	return result, nil
+	return result
 }
 
 // extractFromStreamJSON attempts to extract a THREAT_DETECTION_RESULT from a stream-json line.

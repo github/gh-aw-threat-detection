@@ -141,6 +141,23 @@ func TestParseResult_MissingField(t *testing.T) {
 	}
 }
 
+func TestParseStructuredResult_Strict(t *testing.T) {
+	result, err := ParseStructuredResult([]byte(`{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsSafe() {
+		t.Fatal("expected safe result")
+	}
+
+	if _, err := ParseStructuredResult([]byte(`{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[],"extra":true}`)); err == nil {
+		t.Fatal("expected extra field error")
+	}
+	if _, err := ParseStructuredResult([]byte(`{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[1]}`)); err == nil {
+		t.Fatal("expected non-string reason error")
+	}
+}
+
 func TestExtractResultFromText(t *testing.T) {
 	tests := []struct {
 		name     string
