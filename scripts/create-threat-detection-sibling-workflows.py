@@ -4,7 +4,9 @@
 The sibling files are derived from gh-aw-generated *.lock.yml files. They keep the
 compiled workflow structure intact, but replace the generated detection engine
 steps with a detector binary extracted from ghcr.io/github/gh-aw-threat-detection
-and executed under the same AWF wrapper as the source workflow.
+and executed under the same AWF wrapper as the source workflow. Matching
+*-container.md source sidecars are copied from the original smoke workflow sources
+so gh-aw's stale lock-file check can verify the inherited frontmatter hash.
 """
 
 from __future__ import annotations
@@ -176,6 +178,25 @@ def transform(source: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def markdown_source(source: Path) -> Path:
+    return source.with_name(source.name.replace(".lock.yml", ".md"))
+
+
+def markdown_output(source: Path) -> Path:
+    return source.with_name(source.name.replace(".lock.yml", "-container.md"))
+
+
+def generated_outputs(source: Path) -> list[tuple[Path, str]]:
+    md_source = markdown_source(source)
+    if not md_source.exists():
+        raise FileNotFoundError(md_source)
+    lock_output = source.with_name(source.name.replace(".lock.yml", "-container.lock.yml"))
+    return [
+        (lock_output, transform(source)),
+        (markdown_output(source), md_source.read_text()),
+    ]
+
+
 def sources() -> list[Path]:
     return [WORKFLOWS_DIR / name for name in ENGINES]
 
@@ -189,22 +210,21 @@ def main() -> int:
     for source in sources():
         if not source.exists():
             raise FileNotFoundError(source)
-        output = source.with_name(source.name.replace(".lock.yml", "-container.lock.yml"))
-        generated = transform(source)
-        if args.check:
-            existing = output.read_text() if output.exists() else ""
-            if existing != generated:
-                failed = True
-                diff = difflib.unified_diff(
-                    existing.splitlines(keepends=True),
-                    generated.splitlines(keepends=True),
-                    fromfile=str(output),
-                    tofile=f"{output} (expected)",
-                )
-                sys.stderr.writelines(diff)
-        else:
-            output.write_text(generated)
-            print(f"wrote {output.relative_to(REPO_ROOT)}")
+        for output, generated in generated_outputs(source):
+            if args.check:
+                existing = output.read_text() if output.exists() else ""
+                if existing != generated:
+                    failed = True
+                    diff = difflib.unified_diff(
+                        existing.splitlines(keepends=True),
+                        generated.splitlines(keepends=True),
+                        fromfile=str(output),
+                        tofile=f"{output} (expected)",
+                    )
+                    sys.stderr.writelines(diff)
+            else:
+                output.write_text(generated)
+                print(f"wrote {output.relative_to(REPO_ROOT)}")
     return 1 if failed else 0
 
 

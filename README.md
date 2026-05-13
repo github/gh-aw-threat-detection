@@ -258,7 +258,7 @@ This repository includes three Agentic Workflows smoke tests:
 - `.github/workflows/smoke-claude.md`
 - `.github/workflows/smoke-codex.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three containerized siblings. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job.
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three containerized siblings. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job. The script also copies matching `*-container.md` source sidecars from the original smoke markdown files so gh-aw's stale lock-file check can resolve and verify the inherited frontmatter hash.
 
 After recompiling the smoke workflows with `gh aw compile`, regenerate and verify the sibling workflows:
 
