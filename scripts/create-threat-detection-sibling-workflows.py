@@ -4,7 +4,9 @@
 The sibling files are derived from gh-aw-generated *.lock.yml files. They keep the
 compiled workflow structure intact, but replace the generated detection engine
 steps with a detector binary extracted from ghcr.io/github/gh-aw-threat-detection
-and executed under the same AWF wrapper as the source workflow.
+and executed under the same AWF wrapper as the source workflow. Matching
+*-container.md source sidecars are copied from the original smoke workflow sources
+so gh-aw's stale lock-file check can verify the inherited frontmatter hash.
 """
 
 from __future__ import annotations
