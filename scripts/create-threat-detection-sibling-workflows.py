@@ -19,9 +19,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:latest"
 ENGINES = {
-    "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot Containerized"),
-    "smoke-claude.lock.yml": ("claude", "Smoke Claude Containerized"),
-    "smoke-codex.lock.yml": ("codex", "Smoke Codex Containerized"),
+    "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot"),
+    "smoke-claude.lock.yml": ("claude", "Smoke Claude"),
+    "smoke-codex.lock.yml": ("codex", "Smoke Codex"),
 }
 EXECUTION_STEPS = {
     "copilot": "Execute GitHub Copilot CLI",
