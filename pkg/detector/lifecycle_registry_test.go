@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-var semverTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+var semverTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type lifecycleRegistry struct {
 	SchemaVersion        string           `json:"schema_version"`
@@ -22,15 +23,20 @@ type lifecycleRegistry struct {
 
 type lifecycleEntry struct {
 	Version            string `json:"version"`
+	ImageDigest        string `json:"image_digest"`
 	Status             string `json:"status"`
 	Reason             string `json:"reason"`
 	ReplacementVersion string `json:"replacement_version"`
 	ReplacementKind    string `json:"replacement_kind"`
+	ReplacementDigest  string `json:"replacement_digest"`
 	DeprecatedDate     string `json:"deprecated_date"`
 	ObsoleteDate       string `json:"obsolete_date"`
+	YankedDate         string `json:"yanked_date"`
 	AdvisoryURL        string `json:"advisory_url"`
+	Severity           string `json:"severity"`
 	Urgency            string `json:"urgency"`
 	MaintainerNote     string `json:"maintainer_note"`
+	NoSafeReplacement  bool   `json:"no_safe_replacement"`
 }
 
 func TestThreatDetectionLifecycleRegistry(t *testing.T) {
@@ -85,6 +91,20 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				DeprecatedDate:     "2026-04-01",
 				ObsoleteDate:       "2026-05-07",
 				AdvisoryURL:        "https://github.com/github/gh-aw-threat-detection/releases/tag/v1.1.0",
+				Urgency:            "high",
+				MaintainerNote:     "Fail closed before detector execution.",
+			},
+			{
+				Version:            "v0.8.0",
+				ImageDigest:        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Status:             "yanked",
+				Reason:             "Unsafe detector behavior.",
+				ReplacementVersion: "v1.1.0",
+				ReplacementKind:    "registry",
+				ReplacementDigest:  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				YankedDate:         "2026-05-07",
+				AdvisoryURL:        "https://github.com/github/gh-aw-threat-detection/releases/tag/v1.1.0",
+				Severity:           "high",
 				Urgency:            "high",
 				MaintainerNote:     "Fail closed before detector execution.",
 			},
@@ -192,6 +212,36 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "yanked version missing image digest",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[3].ImageDigest = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "yanked version missing reason",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[3].Reason = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "yanked replacement cannot be obsolete",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[3].ReplacementVersion = "v0.9.0"
+			},
+			wantErr: true,
+		},
+		{
+			name: "yanked version may have no safe replacement",
+			mutate: func(registry *lifecycleRegistry) {
+				registry.Versions[3].NoSafeReplacement = true
+				registry.Versions[3].ReplacementVersion = ""
+				registry.Versions[3].ReplacementKind = ""
+				registry.Versions[3].ReplacementDigest = ""
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +260,12 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 	}
 }
 
+func TestValidSemverTagAcceptsPrereleaseAndBuild(t *testing.T) {
+	if !validSemverTag("v1.2.3-alpha.1+build.5") {
+		t.Fatal("expected prerelease and build metadata semver tag to be valid")
+	}
+}
+
 func validateLifecycleRegistry(registry lifecycleRegistry) error {
 	if registry.SchemaVersion == "" {
 		return fmt.Errorf("schema_version is required")
@@ -224,7 +280,7 @@ func validateLifecycleRegistry(registry lifecycleRegistry) error {
 		return fmt.Errorf("at least one lifecycle entry is required")
 	}
 
-	versions := make(map[string]struct{}, len(registry.Versions))
+	versions := make(map[string]lifecycleEntry, len(registry.Versions))
 	for _, entry := range registry.Versions {
 		if entry.Version == "" {
 			return fmt.Errorf("version is required")
@@ -235,7 +291,7 @@ func validateLifecycleRegistry(registry lifecycleRegistry) error {
 		if _, ok := versions[entry.Version]; ok {
 			return fmt.Errorf("duplicate lifecycle entry for %s", entry.Version)
 		}
-		versions[entry.Version] = struct{}{}
+		versions[entry.Version] = entry
 	}
 
 	for _, entry := range registry.Versions {
@@ -247,16 +303,20 @@ func validateLifecycleRegistry(registry lifecycleRegistry) error {
 	return nil
 }
 
-func validateLifecycleEntry(entry lifecycleEntry, versions map[string]struct{}) error {
+func validateLifecycleEntry(entry lifecycleEntry, versions map[string]lifecycleEntry) error {
 	allowedStatuses := map[string]struct{}{
 		"active":     {},
 		"deprecated": {},
 		"obsolete":   {},
+		"yanked":     {},
 	}
 	if _, ok := allowedStatuses[entry.Status]; !ok {
 		return fmt.Errorf("%s has unsupported status %q", entry.Version, entry.Status)
 	}
 
+	if entry.ImageDigest != "" && !digestPattern.MatchString(entry.ImageDigest) {
+		return fmt.Errorf("%s image_digest must be sha256:<64 lowercase hex characters>", entry.Version)
+	}
 	if entry.Reason == "" {
 		return fmt.Errorf("%s must include a reason", entry.Version)
 	}
@@ -309,12 +369,42 @@ func validateLifecycleEntry(entry lifecycleEntry, versions map[string]struct{}) 
 		if err := validateReplacement(entry, versions); err != nil {
 			return err
 		}
+	case "yanked":
+		if entry.ImageDigest == "" {
+			return fmt.Errorf("%s yanked entries must include image_digest", entry.Version)
+		}
+		if !validDate(entry.YankedDate) {
+			return fmt.Errorf("%s yanked_date must use YYYY-MM-DD", entry.Version)
+		}
+		if !validSeverity(entry.Severity) {
+			return fmt.Errorf("%s has unsupported severity %q", entry.Version, entry.Severity)
+		}
+		if entry.NoSafeReplacement {
+			if entry.ReplacementVersion != "" || entry.ReplacementDigest != "" || entry.ReplacementKind != "" {
+				return fmt.Errorf("%s cannot set replacement guidance when no_safe_replacement is true", entry.Version)
+			}
+		} else {
+			if err := validateReplacement(entry, versions); err != nil {
+				return err
+			}
+			if !digestPattern.MatchString(entry.ReplacementDigest) {
+				return fmt.Errorf("%s replacement_digest must be sha256:<64 lowercase hex characters>", entry.Version)
+			}
+			if replacement, ok := versions[entry.ReplacementVersion]; ok {
+				if replacement.Status == "yanked" || replacement.Status == "obsolete" {
+					return fmt.Errorf("%s replacement_version %s is %s", entry.Version, replacement.Version, replacement.Status)
+				}
+				if replacement.ImageDigest != "" && entry.ReplacementDigest != replacement.ImageDigest {
+					return fmt.Errorf("%s replacement_digest does not match %s image_digest", entry.Version, replacement.Version)
+				}
+			}
+		}
 	}
 
 	return nil
 }
 
-func validateReplacement(entry lifecycleEntry, versions map[string]struct{}) error {
+func validateReplacement(entry lifecycleEntry, versions map[string]lifecycleEntry) error {
 	if entry.ReplacementVersion == "" {
 		return fmt.Errorf("%s must include replacement guidance", entry.Version)
 	}
@@ -337,6 +427,17 @@ func validateReplacement(entry lifecycleEntry, versions map[string]struct{}) err
 	}
 
 	return nil
+}
+
+func validSeverity(severity string) bool {
+	allowedSeverities := map[string]struct{}{
+		"low":      {},
+		"medium":   {},
+		"high":     {},
+		"critical": {},
+	}
+	_, ok := allowedSeverities[severity]
+	return ok
 }
 
 func validSemverTag(version string) bool {
