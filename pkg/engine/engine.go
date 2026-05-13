@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -45,12 +47,9 @@ type copilotEngine struct {
 }
 
 func (e *copilotEngine) Analyze(ctx context.Context, prompt string) (string, error) {
-	args := []string{"--print"}
-	if e.model != "" {
-		args = append(args, "--model", e.model)
-	}
-	args = append(args, "-")
-	return runCLI(ctx, "copilot", args, prompt)
+	return runCLIWithPromptFile(ctx, "copilot", prompt, func(promptPath string) []string {
+		return copilotArgs(promptPath)
+	}, copilotEnv(e.model))
 }
 
 // claudeEngine implements Engine using the Claude CLI.
@@ -59,12 +58,7 @@ type claudeEngine struct {
 }
 
 func (e *claudeEngine) Analyze(ctx context.Context, prompt string) (string, error) {
-	args := []string{"--print", "--output-format", "stream-json"}
-	if e.model != "" {
-		args = append(args, "--model", e.model)
-	}
-	args = append(args, "-")
-	return runCLI(ctx, "claude", args, prompt)
+	return runCLI(ctx, "claude", claudeArgs(e.model), prompt)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -73,20 +67,88 @@ type codexEngine struct {
 }
 
 func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error) {
-	args := []string{"--print"}
-	if e.model != "" {
-		args = append(args, "--model", e.model)
+	return runCLIWithPromptFile(ctx, "codex", prompt, func(promptPath string) []string {
+		return codexArgs(e.model, promptPath)
+	}, nil)
+}
+
+func copilotArgs(promptPath string) []string {
+	args := []string{
+		"--add-dir", filepath.Dir(promptPath),
+		"--log-level", "all",
+		"--disable-builtin-mcps",
+		"--no-ask-user",
+		"--allow-all-tools",
 	}
-	args = append(args, "-")
-	return runCLI(ctx, "codex", args, prompt)
+	if workspace := os.Getenv("GITHUB_WORKSPACE"); workspace != "" {
+		args = append(args, "--add-dir", workspace)
+	}
+	return append(args, "--prompt-file", promptPath)
+}
+
+func copilotEnv(model string) []string {
+	if model == "" {
+		return nil
+	}
+	return []string{"COPILOT_MODEL=" + model}
+}
+
+func claudeArgs(model string) []string {
+	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return append(args, "-")
+}
+
+func codexArgs(model, promptPath string) []string {
+	args := []string{}
+	if model != "" {
+		args = append(args, "-c", "model="+model)
+	}
+	args = append(args,
+		"exec",
+		"-c", "web_search=disabled",
+		"-c", "fetch=disabled",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--skip-git-repo-check",
+		"--prompt-file", promptPath,
+	)
+	return args
 }
 
 // runCLI executes a CLI command, passing the prompt via stdin, and returns its
 // stdout output. Using stdin avoids OS argument length limits and prevents the
 // prompt content from appearing in process listings.
 func runCLI(ctx context.Context, name string, args []string, stdinData string) (string, error) {
+	return runCLIEnv(ctx, name, args, stdinData, nil)
+}
+
+func runCLIWithPromptFile(ctx context.Context, name string, prompt string, argsForPrompt func(string) []string, env []string) (string, error) {
+	promptFile, err := os.CreateTemp("", "threat-detect-prompt-*.txt")
+	if err != nil {
+		return "", fmt.Errorf("creating temporary prompt file: %w", err)
+	}
+	promptPath := promptFile.Name()
+	defer os.Remove(promptPath)
+	if _, err := promptFile.WriteString(prompt); err != nil {
+		promptFile.Close()
+		return "", fmt.Errorf("writing temporary prompt file: %w", err)
+	}
+	if err := promptFile.Close(); err != nil {
+		return "", fmt.Errorf("closing temporary prompt file: %w", err)
+	}
+	return runCLIEnv(ctx, name, argsForPrompt(promptPath), "", env)
+}
+
+func runCLIEnv(ctx context.Context, name string, args []string, stdinData string, env []string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Stdin = strings.NewReader(stdinData)
+	if stdinData != "" {
+		cmd.Stdin = strings.NewReader(stdinData)
+	}
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
