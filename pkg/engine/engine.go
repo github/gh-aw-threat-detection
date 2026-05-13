@@ -102,7 +102,7 @@ func claudeArgs(model string) []string {
 }
 
 func codexArgs(model, promptPath string) []string {
-	args := []string{}
+	args := make([]string, 0, 12)
 	if model != "" {
 		args = append(args, "-c", "model="+model)
 	}
