@@ -19,7 +19,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
-DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:v1.0.0"
+DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:v0.0.2"
 ENGINES = {
     "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot Containerized"),
     "smoke-claude.lock.yml": ("claude", "Smoke Claude Containerized"),

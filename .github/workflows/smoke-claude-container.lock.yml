@@ -1227,12 +1227,12 @@ jobs:
       - name: Pull threat detection container
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:v1.0.0' }}
+          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:v0.0.2' }}
         run: docker pull "$THREAT_DETECTION_IMAGE"
       - name: Extract threat detection binary from container
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:v1.0.0' }}
+          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:v0.0.2' }}
         run: |
           mkdir -p "${RUNNER_TEMP}/gh-aw/threat-detect-bin"
           container_id="$(docker create "$THREAT_DETECTION_IMAGE")"

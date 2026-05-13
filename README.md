@@ -85,7 +85,7 @@ schema-capable model is available.
 ```bash
 docker run --rm \
   -v /path/to/artifacts:/workspace/artifacts \
-  ghcr.io/github/gh-aw-threat-detection:v1.0.0 \
+  ghcr.io/github/gh-aw-threat-detection:v0.0.2 \
   /workspace/artifacts
 ```
 
@@ -129,7 +129,7 @@ Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token i
 Common dispatch examples:
 
 - Current checkout, direct CLI replay: set `run_id`, leave `detector_source=current`, `engine=copilot`, and `use_awf=false`.
-- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v1.0.0`.
+- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v0.0.2`.
 - Image detector replay: set `detector_source=image` and optionally set `detector_ref` to an image tag. The workflow extracts the `threat-detect` binary from the image and runs it on the host so the selected engine CLI can be installed there.
 - Model comparison: set `model` to the engine-specific model name to pass through `--model`.
 - Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
@@ -168,7 +168,7 @@ Maintainers need to configure the following before the image is consumed by `gh-
 2. Ensure the package created under `ghcr.io/github/gh-aw-threat-detection` inherits repository visibility or is explicitly private.
 3. Grant the consuming `github/gh-aw` repository access to the private package, or configure the organization package settings so `GITHUB_TOKEN` from `gh-aw` can pull it with `packages: read`.
 4. Keep the `release-publish` and `release-promote` environments if manual approval is desired; otherwise update the environment protection rules in repository settings.
-5. Tag releases with semantic versions such as `v1.0.0`. The release workflow publishes the version tag; the promote workflow tags the verified digest as `latest`.
+5. Tag releases with semantic versions such as `v0.0.2`. The release workflow publishes the version tag; the promote workflow tags the verified digest as `latest`.
 
 No additional secrets are required for unit tests, `make build`, `make test`, or the container smoke test. Engine authentication is only needed when running real AI-backed detection:
 
@@ -241,7 +241,7 @@ Optional Actions variables:
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. |
-| `GH_AW_THREAT_DETECTION_IMAGE` | Override the detector image used by the `*-container.lock.yml` siblings. Defaults to `ghcr.io/github/gh-aw-threat-detection:v1.0.0`. |
+| `GH_AW_THREAT_DETECTION_IMAGE` | Override the detector image used by the `*-container.lock.yml` siblings. Defaults to `ghcr.io/github/gh-aw-threat-detection:v0.0.2`. |
 
 ### Build
 
@@ -290,7 +290,7 @@ After containerization, `gh-aw` references this component via:
 
 ```go
 const DefaultThreatDetectionRegistry = "ghcr.io/github/gh-aw-threat-detection"
-const DefaultThreatDetectionVersion  = "v1.0.0"
+const DefaultThreatDetectionVersion  = "v0.0.2"
 ```
 
 The detection job in compiled workflows uses this container instead of inline AI engine invocation.
