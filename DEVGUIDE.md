@@ -163,6 +163,7 @@ Lifecycle statuses:
 | `active` | Supported and safe to use | Run normally. |
 | `deprecated` | Still supported, but users should migrate | Emit a GitHub Actions warning annotation and job summary text, then continue. |
 | `obsolete` | No longer safe or supported | Fail closed before the detector container runs. |
+| `yanked` | Unsafe because of a security or correctness issue | Fail closed before the detector container runs. |
 
 Each lifecycle entry must include the version, status, reason, replacement
 guidance, relevant deprecation or obsolescence dates, an advisory or release URL,
@@ -214,6 +215,75 @@ The `latest` container tag and the GitHub "Latest" release badge only move
 when a maintainer explicitly promotes. This gives the team time to validate a
 release before it becomes the default for users installing with `version: latest`.
 
+### Lifecycle Registry
+
+Release lifecycle metadata lives in
+[releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json).
+Maintainers use one registry for all stable lifecycle states:
+
+- `active` — safe for new and pinned use.
+- `deprecated` — still allowed to run, but users should plan an upgrade.
+- `obsolete` — unsupported and not suitable for new use.
+- `yanked` — unsafe because of a security or correctness issue; stronger than
+  `obsolete` and must fail closed.
+
+`gh-aw` must check this registry before pulling or running a selected detector.
+If a user explicitly pins a yanked version or yanked digest, `gh-aw` must fail
+closed with the yank reason and safe replacement. It must not silently downgrade
+or upgrade explicit pins. `latest` is floating, so maintainers may retag it to a
+safe replacement during a yank.
+
+Validate registry edits with:
+
+```bash
+make lifecycle-validate
+```
+
+Yanked entries must include the version, image digest, yank date, severity,
+reason, advisory or release URL, and maintainer note. Provide replacement version
+and replacement digest when a safe replacement exists. Use
+`no_safe_replacement: true` only when maintainers have confirmed there is no safe
+replacement to recommend.
+
+### Emergency Yank Process
+
+Yank only when a released detector is unsafe to run, such as a detector that can
+miss high-impact malicious behavior, mishandle secrets, or otherwise produce
+unsafe results. A yank requires approval through the `release-yank` environment
+by a core maintainer or incident commander.
+
+Before yanking:
+
+1. Identify the bad version and immutable image digest.
+2. Select the most recent safe stable replacement, or confirm that no safe
+   replacement exists yet.
+3. Record the severity, user-facing reason, advisory or incident link when
+   available, and any maintainer-only note.
+4. Prepare user communication that explains the failure mode and replacement.
+
+To yank a release, run **Actions → Yank Release → Run workflow** from the default
+branch. The workflow:
+
+1. verifies the yanked release exists and records a sha256 image digest
+2. when a replacement is provided, verifies it exists, records a sha256 image
+   digest, and is not prerelease, yanked, or obsolete
+3. verifies required images are still pullable
+4. records the yanked status in the lifecycle registry
+5. retags `latest` to the replacement digest when a replacement is provided
+6. marks the yanked GitHub release title and notes with a warning
+7. removes the yanked release from GitHub's Latest selection and marks the
+   replacement as Latest when a replacement is provided
+
+Set `no_safe_replacement: true` and leave `replacement_tag` empty only when no
+safe replacement exists. In that case the workflow records
+`no_safe_replacement: true`, skips retagging `latest`, and leaves replacement
+selection until a safe stable release is available.
+
+Keep yanked artifacts available for audit and forensics unless legal or security
+policy requires package deletion. If branch protection prevents the workflow from
+committing the lifecycle registry update directly, create and merge an emergency
+PR with the same registry changes before announcing the yank as complete.
+
 ### CI Support
 
 The main CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml) runs:
@@ -242,3 +312,7 @@ After the tag is pushed:
 4. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
    the workflow. Approve the `release-promote` environment gate.
 5. Confirm `latest` now resolves to the new version.
+
+If a promoted release is later found unsafe, follow the emergency yank process
+above instead of deleting tags or relying on GHCR package removal as the primary
+control.

@@ -1,7 +1,7 @@
 .PHONY: all build test test-coverage lint golint clean docker-build docker-smoke docker-push \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
-	sbom lifecycle-validate agent-finish help
+	sbom lifecycle-validate validate-lifecycle agent-finish help
 
 BINARY_NAME=threat-detect
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -103,6 +103,9 @@ lifecycle-validate:
 lint:
 	go vet ./...
 
+validate-lifecycle:
+	$(MAKE) lifecycle-validate
+
 golint:
 	@GOPATH=$$(go env GOPATH); \
 	if command -v golangci-lint >/dev/null 2>&1 || [ -x "$$GOPATH/bin/golangci-lint" ]; then \
@@ -188,6 +191,7 @@ help:
 	@echo "  security-scan  - Run gosec and govulncheck"
 	@echo "  sbom           - Generate SPDX and CycloneDX SBOMs"
 	@echo "  lifecycle-validate - Validate threat detection lifecycle metadata"
+	@echo "  validate-lifecycle - Alias for lifecycle-validate"
 	@echo "  docker-build   - Build the Docker image"
 	@echo "  docker-smoke   - Build the Docker image and run a CLI smoke test"
 	@echo "  docker-push    - Push the Docker image"
