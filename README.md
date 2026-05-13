@@ -10,6 +10,7 @@ Threat Detection component for [GitHub Agentic Workflows](https://github.com/git
 - [Usage](#usage)
 - [Stage Status and Decisions](#stage-status-and-decisions)
 - [Private Container Release Setup](#private-container-release-setup)
+- [Release Lifecycle and Emergency Yanks](#release-lifecycle-and-emergency-yanks)
 - [Development](#development)
 - [Architecture](#architecture)
 - [Integration with gh-aw](#integration-with-gh-aw)
@@ -82,10 +83,14 @@ Production AI-backed detection requires the selected engine CLI and its authenti
 ```
 <artifacts-dir>/
 ├── aw-prompts/
-│   └── prompt.txt          # Workflow prompt file
+│   ├── prompt.txt          # Expanded workflow prompt file
+│   ├── prompt-template.txt # Pre-expansion prompt template (optional)
+│   └── prompt-import-tree.json # Runtime-import provenance (optional)
 ├── agent_output.json       # Agent structured output
+├── aw_info.json            # Activation metadata (optional)
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
+├── experiments/            # Experiment assignment/state files (optional)
 └── comment-memory/         # Agent comment memory (optional)
     └── *.md
 ```
@@ -100,6 +105,23 @@ Production AI-backed detection requires the selected engine CLI and its authenti
   "reasons": []
 }
 ```
+
+### Replay workflow
+
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
+
+Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
+
+Common dispatch examples:
+
+- Current checkout, direct CLI replay: set `run_id`, leave `detector_source=current`, `engine=copilot`, and `use_awf=false`.
+- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v1.0.0`.
+- Image detector replay: set `detector_source=image` and optionally set `detector_ref` to an image tag. The workflow extracts the `threat-detect` binary from the image and runs it on the host so the selected engine CLI can be installed there.
+- Model comparison: set `model` to the engine-specific model name to pass through `--model`.
+- Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
+- AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default.
+
+The `run_attempt` input is only safe for the latest attempt of a source run because GitHub artifact downloads are not attempt-scoped. The workflow fails with a clear error if an older attempt is requested.
 
 ## Stage Status and Decisions
 
@@ -145,6 +167,26 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_DESCRIPTION` | Optional local/container runs | Included in the generated prompt. |
 | `CUSTOM_PROMPT` | Optional local/container runs | Appended to the default detection prompt. |
 
+## Release Lifecycle and Emergency Yanks
+
+Release lifecycle metadata is recorded in [`releases/threat-detection-lifecycle.json`](releases/threat-detection-lifecycle.json).
+The registry supports `active`, `deprecated`, `obsolete`, and `yanked` states.
+`yanked` means a release is unsafe to run and is stronger than `obsolete`.
+
+The parent orchestrator (`gh-aw`) must check this registry before pulling or
+running a detector image:
+
+- `latest` must not point at a yanked version. Maintainers use the manual
+  **Yank Release** workflow to retag `latest` to a safe stable replacement.
+- Explicit version or digest pins that match a yanked registry entry must fail
+  closed before detector execution.
+- Explicit pins must not be silently downgraded or upgraded; the failure message
+  should include the yank reason and replacement version.
+
+Yanked release artifacts remain available for audit and forensics unless
+maintainers choose separate package removal. See [DEVGUIDE.md](DEVGUIDE.md#emergency-yank-process)
+for maintainer approval, communication, and workflow details.
+
 ## Development
 
 ### Prerequisites
@@ -160,7 +202,7 @@ This repository includes three Agentic Workflows smoke tests:
 - `.github/workflows/smoke-claude.md`
 - `.github/workflows/smoke-codex.md`
 
-Each runs daily and by `workflow_dispatch`. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job.
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three containerized siblings. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they pull the `ghcr.io/github/gh-aw-threat-detection` container, extract its detector binary, and execute it under the same AWF wrapper used by the generated detection job.
 
 After recompiling the smoke workflows with `gh aw compile`, regenerate and verify the sibling workflows:
 
