@@ -67,7 +67,7 @@ type codexEngine struct {
 }
 
 func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error) {
-	return runCLIEnv(ctx, "codex", codexArgs(e.model, prompt), "", nil)
+	return runCLIEnv(ctx, "codex", codexArgs(e.model, ""), prompt, nil)
 }
 
 func copilotArgs(promptPath string) []string {
