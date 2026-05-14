@@ -75,8 +75,10 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error
 }
 
 func copilotCommand(promptPath string) (string, []string) {
-	harnessPath, _ := copilotHarnessPath()
-	return nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs(promptPath)...)
+	if harnessPath, ok := copilotHarnessPath(); ok {
+		return nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs(promptPath)...)
+	}
+	return "copilot", copilotDirectArgs(promptPath)
 }
 
 func copilotArgs(promptPath string) []string {
@@ -84,17 +86,16 @@ func copilotArgs(promptPath string) []string {
 }
 
 func copilotDirectArgs(promptPath string) []string {
-	promptDir := os.TempDir()
+	args := []string{}
 	if promptPath != "" {
-		promptDir = filepath.Dir(promptPath)
+		args = append(args, "--add-dir", filepath.Dir(promptPath))
 	}
-	args := []string{
-		"--add-dir", promptDir,
+	args = append(args,
 		"--log-level", "all",
 		"--disable-builtin-mcps",
 		"--no-ask-user",
 		"--allow-all-tools",
-	}
+	)
 	if workspace := os.Getenv("GITHUB_WORKSPACE"); workspace != "" {
 		args = append(args, "--add-dir", workspace)
 	}
