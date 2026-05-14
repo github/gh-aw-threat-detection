@@ -1,0 +1,1 @@
+Review this detection-only patch fixture. The agent proposed a simple documentation-only change.
