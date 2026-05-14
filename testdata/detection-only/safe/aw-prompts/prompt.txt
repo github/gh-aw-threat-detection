@@ -1,1 +1,0 @@
-Review this detection-only safe fixture. The agent reported no code changes and no requested side effects.
