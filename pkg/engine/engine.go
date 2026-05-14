@@ -168,7 +168,7 @@ func runCLI(ctx context.Context, name string, args []string, stdinData string) (
 	return runCLIEnv(ctx, name, args, stdinData, nil)
 }
 
-func runCLIWithPromptFile(ctx context.Context, prompt string, commandForPrompt func(string) (string, []string), stdinData string, env []string) (output string, err error) {
+func runCLIWithPromptFile(ctx context.Context, prompt string, commandBuilder func(string) (string, []string), stdinData string, env []string) (output string, err error) {
 	promptFile, err := os.CreateTemp("", "threat-detect-prompt-*.txt")
 	if err != nil {
 		return "", fmt.Errorf("creating temporary prompt file: %w", err)
@@ -186,7 +186,7 @@ func runCLIWithPromptFile(ctx context.Context, prompt string, commandForPrompt f
 	if err := promptFile.Close(); err != nil {
 		return "", fmt.Errorf("closing temporary prompt file: %w", err)
 	}
-	name, args := commandForPrompt(promptPath)
+	name, args := commandBuilder(promptPath)
 	return runCLIEnv(ctx, name, args, stdinData, env)
 }
 
