@@ -95,7 +95,7 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("codex", func(t *testing.T) {
-		got := codexArgs("gpt-5-codex", "/tmp/prompt.txt")
+		got := codexArgs("gpt-5-codex", "detect threats")
 		want := []string{
 			"-c", "model=gpt-5-codex",
 			"exec",
@@ -103,7 +103,8 @@ func TestEngineCommandArgs(t *testing.T) {
 			"-c", "fetch=disabled",
 			"--dangerously-bypass-approvals-and-sandbox",
 			"--skip-git-repo-check",
-			"--prompt-file", "/tmp/prompt.txt",
+			"--",
+			"detect threats",
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
@@ -111,14 +112,15 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("codex default model", func(t *testing.T) {
-		got := codexArgs("", "/tmp/prompt.txt")
+		got := codexArgs("", "detect threats")
 		want := []string{
 			"exec",
 			"-c", "web_search=disabled",
 			"-c", "fetch=disabled",
 			"--dangerously-bypass-approvals-and-sandbox",
 			"--skip-git-repo-check",
-			"--prompt-file", "/tmp/prompt.txt",
+			"--",
+			"detect threats",
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
