@@ -138,6 +138,43 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("copilot command falls back without harness", func(t *testing.T) {
+		t.Setenv("GITHUB_WORKSPACE", "/workspace/repo")
+		t.Setenv("RUNNER_TEMP", t.TempDir())
+
+		gotName, gotArgs := copilotCommand("/tmp/prompt.txt")
+		wantName := "copilot"
+		wantArgs := []string{
+			"--add-dir", "/tmp",
+			"--log-level", "all",
+			"--disable-builtin-mcps",
+			"--no-ask-user",
+			"--allow-all-tools",
+			"--add-dir", "/workspace/repo",
+		}
+		if gotName != wantName {
+			t.Fatalf("copilotCommand() name = %q, want %q", gotName, wantName)
+		}
+		if !reflect.DeepEqual(gotArgs, wantArgs) {
+			t.Fatalf("copilotCommand() args = %#v, want %#v", gotArgs, wantArgs)
+		}
+	})
+
+	t.Run("node command defaults to node", func(t *testing.T) {
+		oldNode, hadNode := os.LookupEnv("GH_AW_NODE_BIN")
+		os.Unsetenv("GH_AW_NODE_BIN")
+		t.Cleanup(func() {
+			if hadNode {
+				os.Setenv("GH_AW_NODE_BIN", oldNode)
+			} else {
+				os.Unsetenv("GH_AW_NODE_BIN")
+			}
+		})
+		if got, want := nodeCommand(), "node"; got != want {
+			t.Fatalf("nodeCommand() = %q, want %q", got, want)
+		}
+	})
+
 	t.Run("claude", func(t *testing.T) {
 		got := claudeArgs("claude-sonnet-4.6")
 		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "-"}

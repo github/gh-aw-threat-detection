@@ -88,16 +88,13 @@ func copilotArgs(promptPath string) []string {
 }
 
 func copilotDirectArgs(promptPath string) []string {
-	args := []string{}
-	if promptPath != "" {
-		args = append(args, "--add-dir", filepath.Dir(promptPath))
-	}
-	args = append(args,
+	args := []string{
+		"--add-dir", filepath.Dir(promptPath),
 		"--log-level", "all",
 		"--disable-builtin-mcps",
 		"--no-ask-user",
 		"--allow-all-tools",
-	)
+	}
 	if workspace := os.Getenv("GITHUB_WORKSPACE"); workspace != "" {
 		args = append(args, "--add-dir", workspace)
 	}
