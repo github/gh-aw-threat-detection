@@ -10,7 +10,7 @@ permissions:
   actions: read
 name: Smoke Codex
 engine: codex
-strict: false
+strict: true
 network:
   allowed:
     - defaults

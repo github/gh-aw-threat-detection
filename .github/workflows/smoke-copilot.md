@@ -11,7 +11,7 @@ permissions:
 name: Smoke Copilot
 engine:
   id: copilot
-strict: false
+strict: true
 network:
   allowed:
     - defaults
