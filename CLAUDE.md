@@ -153,7 +153,7 @@ See [DEVGUIDE.md](DEVGUIDE.md#release-process) for the prerelease → promote �
 
 ## Release & Promotion Model
 
-Three workflows orchestrate releases:
+Four workflows orchestrate releases:
 
 1. `.github/workflows/create-release-tag.yml` — manual; pushes `vX.Y.Z`.
 2. `.github/workflows/release.yml` — triggered by tag push; gated by `release-publish` environment; builds + publishes container image as a **prerelease**.
