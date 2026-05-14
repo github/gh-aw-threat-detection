@@ -161,15 +161,7 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("node command defaults to node", func(t *testing.T) {
-		oldNode, hadNode := os.LookupEnv("GH_AW_NODE_BIN")
-		os.Unsetenv("GH_AW_NODE_BIN")
-		t.Cleanup(func() {
-			if hadNode {
-				os.Setenv("GH_AW_NODE_BIN", oldNode)
-			} else {
-				os.Unsetenv("GH_AW_NODE_BIN")
-			}
-		})
+		t.Setenv("GH_AW_NODE_BIN", "")
 		if got, want := nodeCommand(), "node"; got != want {
 			t.Fatalf("nodeCommand() = %q, want %q", got, want)
 		}
