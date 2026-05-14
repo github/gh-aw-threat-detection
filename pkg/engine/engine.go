@@ -51,9 +51,11 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string) (string, err
 	if _, ok := copilotHarnessPath(); ok {
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
-		}, env)
+		}, "", env)
 	}
-	return runCLIEnv(ctx, "copilot", copilotDirectArgs(""), prompt, env)
+	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+		return "copilot", copilotDirectArgs(promptPath)
+	}, prompt, env)
 }
 
 // claudeEngine implements Engine using the Claude CLI.
@@ -166,7 +168,7 @@ func runCLI(ctx context.Context, name string, args []string, stdinData string) (
 	return runCLIEnv(ctx, name, args, stdinData, nil)
 }
 
-func runCLIWithPromptFile(ctx context.Context, prompt string, commandForPrompt func(string) (string, []string), env []string) (output string, err error) {
+func runCLIWithPromptFile(ctx context.Context, prompt string, commandForPrompt func(string) (string, []string), stdinData string, env []string) (output string, err error) {
 	promptFile, err := os.CreateTemp("", "threat-detect-prompt-*.txt")
 	if err != nil {
 		return "", fmt.Errorf("creating temporary prompt file: %w", err)
@@ -185,7 +187,7 @@ func runCLIWithPromptFile(ctx context.Context, prompt string, commandForPrompt f
 		return "", fmt.Errorf("closing temporary prompt file: %w", err)
 	}
 	name, args := commandForPrompt(promptPath)
-	return runCLIEnv(ctx, name, args, "", env)
+	return runCLIEnv(ctx, name, args, stdinData, env)
 }
 
 func runCLIEnv(ctx context.Context, name string, args []string, stdinData string, env []string) (string, error) {

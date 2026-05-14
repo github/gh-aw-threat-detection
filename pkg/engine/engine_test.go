@@ -88,7 +88,7 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("copilot direct omits prompt file", func(t *testing.T) {
+	t.Run("copilot direct args omits prompt file", func(t *testing.T) {
 		t.Setenv("GITHUB_WORKSPACE", "/workspace/repo")
 		got := copilotDirectArgs("/tmp/prompt.txt")
 		want := []string{
