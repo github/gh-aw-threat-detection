@@ -11,7 +11,7 @@ permissions:
 name: Smoke Copilot
 engine:
   id: copilot
-strict: true
+strict: false
 network:
   allowed:
     - defaults
@@ -28,6 +28,8 @@ checkout:
   fetch-depth: 1
 safe-outputs:
   allowed-domains: [default-safe-outputs]
+  threat-detection:
+    continue-on-error: false
   create-issue:
     expires: 2h
     close-older-issues: true

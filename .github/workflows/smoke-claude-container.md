@@ -13,7 +13,7 @@ engine:
   id: claude
   max-turns: 20
   bare: true
-strict: true
+strict: false
 network:
   allowed:
     - defaults
@@ -30,6 +30,8 @@ checkout:
   fetch-depth: 1
 safe-outputs:
   allowed-domains: [default-safe-outputs]
+  threat-detection:
+    continue-on-error: false
   create-issue:
     expires: 2h
     close-older-issues: true
