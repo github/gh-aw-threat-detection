@@ -67,9 +67,7 @@ type codexEngine struct {
 }
 
 func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error) {
-	return runCLIWithPromptFile(ctx, "codex", prompt, func(promptPath string) []string {
-		return codexArgs(e.model, promptPath)
-	}, nil)
+	return runCLIEnv(ctx, "codex", codexArgs(e.model, ""), prompt, nil)
 }
 
 func copilotArgs(promptPath string) []string {
@@ -101,14 +99,15 @@ func claudeArgs(model string) []string {
 	return append(args, "-")
 }
 
-func codexArgs(model, promptPath string) []string {
+func codexArgs(model, prompt string) []string {
 	args := []string{
 		"exec",
 		"-c", "web_search=disabled",
 		"-c", "fetch=disabled",
 		"--dangerously-bypass-approvals-and-sandbox",
 		"--skip-git-repo-check",
-		"--prompt-file", promptPath,
+		"--",
+		prompt,
 	}
 	if model != "" {
 		args = append([]string{"-c", "model=" + model}, args...)
