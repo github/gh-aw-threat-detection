@@ -36,7 +36,7 @@ pkg/detector/             Core detection logic
   ├── lifecycle_registry_test.go  Validates releases/threat-detection-lifecycle.json
   └── prompts/            Embedded markdown prompts (threat_detection.md, *_triage.md)
 pkg/engine/               AI engine abstraction
-  ├── engine.go           copilot/claude/codex CLI adapters via runCLIWithPromptFile
+  ├── engine.go           copilot/claude/codex CLI adapters; Copilot uses runCLIWithPromptFile, Claude uses runCLI with stdin, Codex passes prompts via codexArgs/runCLIEnv
   ├── reflect.go          ReflectClient → api-proxy /reflect (structured output)
   └── capabilities.go     Per-provider structured-output mode detection (json_schema, gemini, anthropic tool)
 specs/                    Normative spec (threat-detection-spec.md)
