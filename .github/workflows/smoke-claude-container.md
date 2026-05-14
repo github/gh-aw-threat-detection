@@ -13,7 +13,7 @@ engine:
   id: claude
   max-turns: 20
   bare: true
-strict: false
+strict: true
 network:
   allowed:
     - defaults
