@@ -133,7 +133,7 @@ The full detector expects engine output to contain a line beginning with `THREAT
 
 2. **Phase 2 — Full detection**
    - `pkg/detector/detector.go` (`BuildPrompt`) renders `prompts/threat_detection.md` with placeholders substituted from artifacts and `BuildPromptAnalysis` (untrusted-input breakdown).
-   - Prefers `/reflect` structured output when available; otherwise invokes the engine CLI from `PATH` via `pkg/engine/engine.go` (`copilot`, `claude`, `codex` adapters all use `runCLIWithPromptFile`).
+   - Prefers `/reflect` structured output when available; otherwise invokes the engine CLI from `PATH` via `pkg/engine/engine.go` (`copilot`, `claude`, and `codex` use engine-specific prompt-passing paths; `runCLIWithPromptFile` is used by Copilot).
    - On malformed output, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried.
 
 ## Result Lifecycle Registry
