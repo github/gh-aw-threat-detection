@@ -47,9 +47,13 @@ type copilotEngine struct {
 }
 
 func (e *copilotEngine) Analyze(ctx context.Context, prompt string) (string, error) {
-	return runCLIWithPromptFile(ctx, "copilot", prompt, func(promptPath string) []string {
-		return copilotArgs(promptPath)
-	}, copilotEnv(e.model))
+	env := copilotEnv(e.model)
+	if _, ok := copilotHarnessPath(); ok {
+		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+			return copilotCommand(promptPath)
+		}, env)
+	}
+	return runCLIEnv(ctx, "copilot", copilotDirectArgs(""), prompt, env)
 }
 
 // claudeEngine implements Engine using the Claude CLI.
@@ -70,9 +74,22 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string) (string, error
 	return runCLIEnv(ctx, "codex", codexArgs(e.model, ""), prompt, nil)
 }
 
+func copilotCommand(promptPath string) (string, []string) {
+	harnessPath, _ := copilotHarnessPath()
+	return nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs(promptPath)...)
+}
+
 func copilotArgs(promptPath string) []string {
+	return append(copilotDirectArgs(promptPath), "--prompt-file", promptPath)
+}
+
+func copilotDirectArgs(promptPath string) []string {
+	promptDir := os.TempDir()
+	if promptPath != "" {
+		promptDir = filepath.Dir(promptPath)
+	}
 	args := []string{
-		"--add-dir", filepath.Dir(promptPath),
+		"--add-dir", promptDir,
 		"--log-level", "all",
 		"--disable-builtin-mcps",
 		"--no-ask-user",
@@ -81,7 +98,33 @@ func copilotArgs(promptPath string) []string {
 	if workspace := os.Getenv("GITHUB_WORKSPACE"); workspace != "" {
 		args = append(args, "--add-dir", workspace)
 	}
-	return append(args, "--prompt-file", promptPath)
+	return args
+}
+
+func copilotHarnessPath() (string, bool) {
+	runnerTemp := os.Getenv("RUNNER_TEMP")
+	if runnerTemp == "" {
+		return "", false
+	}
+	harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "copilot_harness.cjs")
+	if _, err := os.Stat(harnessPath); err != nil {
+		return "", false
+	}
+	return harnessPath, true
+}
+
+func nodeCommand() string {
+	if node := os.Getenv("GH_AW_NODE_BIN"); node != "" {
+		return node
+	}
+	return "node"
+}
+
+func copilotBinary() string {
+	if _, err := os.Stat("/usr/local/bin/copilot"); err == nil {
+		return "/usr/local/bin/copilot"
+	}
+	return "copilot"
 }
 
 func copilotEnv(model string) []string {
@@ -122,7 +165,7 @@ func runCLI(ctx context.Context, name string, args []string, stdinData string) (
 	return runCLIEnv(ctx, name, args, stdinData, nil)
 }
 
-func runCLIWithPromptFile(ctx context.Context, name string, prompt string, argsForPrompt func(string) []string, env []string) (output string, err error) {
+func runCLIWithPromptFile(ctx context.Context, prompt string, commandForPrompt func(string) (string, []string), env []string) (output string, err error) {
 	promptFile, err := os.CreateTemp("", "threat-detect-prompt-*.txt")
 	if err != nil {
 		return "", fmt.Errorf("creating temporary prompt file: %w", err)
@@ -140,7 +183,8 @@ func runCLIWithPromptFile(ctx context.Context, name string, prompt string, argsF
 	if err := promptFile.Close(); err != nil {
 		return "", fmt.Errorf("closing temporary prompt file: %w", err)
 	}
-	return runCLIEnv(ctx, name, argsForPrompt(promptPath), "", env)
+	name, args := commandForPrompt(promptPath)
+	return runCLIEnv(ctx, name, args, "", env)
 }
 
 func runCLIEnv(ctx context.Context, name string, args []string, stdinData string, env []string) (string, error) {

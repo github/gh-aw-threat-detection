@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -83,6 +85,56 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 		if gotEnv, wantEnv := copilotEnv("claude-sonnet-4.6"), []string{"COPILOT_MODEL=claude-sonnet-4.6"}; !reflect.DeepEqual(gotEnv, wantEnv) {
 			t.Fatalf("copilotEnv() = %#v, want %#v", gotEnv, wantEnv)
+		}
+	})
+
+	t.Run("copilot direct omits prompt file", func(t *testing.T) {
+		t.Setenv("GITHUB_WORKSPACE", "/workspace/repo")
+		got := copilotDirectArgs("/tmp/prompt.txt")
+		want := []string{
+			"--add-dir", "/tmp",
+			"--log-level", "all",
+			"--disable-builtin-mcps",
+			"--no-ask-user",
+			"--allow-all-tools",
+			"--add-dir", "/workspace/repo",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("copilotDirectArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("copilot harness command", func(t *testing.T) {
+		t.Setenv("GITHUB_WORKSPACE", "/workspace/repo")
+		t.Setenv("GH_AW_NODE_BIN", "/custom/node")
+		runnerTemp := t.TempDir()
+		t.Setenv("RUNNER_TEMP", runnerTemp)
+		harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "copilot_harness.cjs")
+		if err := os.MkdirAll(filepath.Dir(harnessPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(harnessPath, []byte(""), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		gotName, gotArgs := copilotCommand("/tmp/prompt.txt")
+		wantName := "/custom/node"
+		wantArgs := []string{
+			harnessPath,
+			copilotBinary(),
+			"--add-dir", "/tmp",
+			"--log-level", "all",
+			"--disable-builtin-mcps",
+			"--no-ask-user",
+			"--allow-all-tools",
+			"--add-dir", "/workspace/repo",
+			"--prompt-file", "/tmp/prompt.txt",
+		}
+		if gotName != wantName {
+			t.Fatalf("copilotCommand() name = %q, want %q", gotName, wantName)
+		}
+		if !reflect.DeepEqual(gotArgs, wantArgs) {
+			t.Fatalf("copilotCommand() args = %#v, want %#v", gotArgs, wantArgs)
 		}
 	})
 
