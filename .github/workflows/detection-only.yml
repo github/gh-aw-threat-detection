@@ -220,7 +220,7 @@ jobs:
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT || '' }}
-          THREAT_DETECTION_REFLECT_URL: http://127.0.0.1:8080/reflect
+          THREAT_DETECTION_REFLECT_URL: http://host.docker.internal:8080/reflect
           WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
