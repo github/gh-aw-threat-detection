@@ -119,7 +119,7 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
   env:
 {indent(engine_env(engine), 4)}
     THREAT_DETECTION_MODEL: ${{{{ vars.GH_AW_MODEL_DETECTION_{engine.upper()} || '' }}}}
-    THREAT_DETECTION_REFLECT_URL: http://127.0.0.1:8080/reflect
+    THREAT_DETECTION_REFLECT_URL: http://host.docker.internal:8080/reflect
     WORKFLOW_DESCRIPTION: {workflow_description}
     WORKFLOW_NAME: ${{{{ github.workflow }}}}
   run: |

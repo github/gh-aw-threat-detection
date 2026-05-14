@@ -1306,7 +1306,7 @@ jobs:
         env:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_CODEX || '' }}
-          THREAT_DETECTION_REFLECT_URL: http://127.0.0.1:8080/reflect
+          THREAT_DETECTION_REFLECT_URL: http://host.docker.internal:8080/reflect
           WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Codex engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
