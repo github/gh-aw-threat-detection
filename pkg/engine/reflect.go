@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +108,7 @@ func (c *ReflectClient) ListModels(ctx context.Context) ([]ReflectModel, error) 
 	if err != nil {
 		return nil, fmt.Errorf("reading reflect model list: %w", err)
 	}
+	printReflectResponse(os.Stderr, http.MethodGet, resp.Status, body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("listing reflect models returned %s: %s", resp.Status, responseBodyPreview(body))
 	}
@@ -135,10 +138,31 @@ func (c *ReflectClient) postReflect(ctx context.Context, payload map[string]any)
 	if err != nil {
 		return nil, fmt.Errorf("reading reflect response: %w", err)
 	}
+	printReflectResponse(os.Stderr, http.MethodPost, resp.Status, body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("reflect returned %s: %s", resp.Status, responseBodyPreview(body))
 	}
 	return body, nil
+}
+
+func printReflectResponse(w io.Writer, method, status string, body []byte) {
+	if !logReflectResponseEnabled() {
+		return
+	}
+	fmt.Fprintf(w, "::group::/reflect %s response (%s)\n%s", method, status, string(body))
+	if !bytes.HasSuffix(body, []byte("\n")) {
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintln(w, "::endgroup::")
+}
+
+func logReflectResponseEnabled() bool {
+	value := strings.TrimSpace(os.Getenv("THREAT_DETECTION_LOG_REFLECT_RESPONSE"))
+	if value == "" {
+		return false
+	}
+	enabled, err := strconv.ParseBool(value)
+	return err == nil && enabled
 }
 
 func (c *ReflectClient) endpoint() string {

@@ -75,6 +75,10 @@ responses fail safe into the full detector. The full detector preserves the
 existing CLI engine behavior and prefers `/reflect` structured output when a
 schema-capable model is available.
 
+Set `THREAT_DETECTION_LOG_REFLECT_RESPONSE=true` to print raw `/reflect`
+responses to stderr for controlled debugging. Responses may include reflected
+artifact content, so leave this disabled outside targeted diagnostic runs.
+
 **Exit codes:**
 - `0` — Safe (no threats detected)
 - `1` — Threat detected

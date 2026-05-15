@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -131,6 +132,30 @@ func TestReflectClient_TruncatesNon2xxReflectError(t *testing.T) {
 	}
 	if !strings.Contains(msg, "...(truncated)") {
 		t.Fatalf("expected truncated preview in error: %q", msg)
+	}
+}
+
+func TestPrintReflectResponseHonorsEnv(t *testing.T) {
+	var buf bytes.Buffer
+
+	printReflectResponse(&buf, http.MethodGet, "200 OK", []byte(`{"models":[]}`))
+	if buf.Len() != 0 {
+		t.Fatalf("expected no debug output when env var is unset, got %q", buf.String())
+	}
+
+	buf.Reset()
+	t.Setenv("THREAT_DETECTION_LOG_REFLECT_RESPONSE", "true")
+	printReflectResponse(&buf, http.MethodGet, "200 OK", []byte(`{"models":[]}`))
+
+	got := buf.String()
+	for _, want := range []string{
+		"::group::/reflect GET response (200 OK)",
+		`{"models":[]}`,
+		"::endgroup::",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("debug output missing %q: %q", want, got)
+		}
 	}
 }
 
