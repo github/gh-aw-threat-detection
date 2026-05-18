@@ -215,6 +215,22 @@ The `latest` container tag and the GitHub "Latest" release badge only move
 when a maintainer explicitly promotes. This gives the team time to validate a
 release before it becomes the default for users installing with `version: latest`.
 
+#### Branch builds: `:main` and `:main-<shortsha>`
+
+In addition to release tags, every push to `main` triggers the
+[publish-main workflow](.github/workflows/publish-main.yml), which builds the
+container image and pushes two GHCR tags:
+
+- `ghcr.io/github/gh-aw-threat-detection:main` — moving tag that always points
+  to the most recent successful build from `main`.
+- `ghcr.io/github/gh-aw-threat-detection:main-<shortsha>` — immutable tag bound
+  to the specific `main` commit (useful for pinning in downstream workflows).
+
+These are **unverified branch builds**. They are not GitHub Releases, do not
+appear in [releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json),
+and are not eligible for promotion. The `:latest` tag is unaffected by this
+workflow and continues to track the most recently promoted release.
+
 ### Lifecycle Registry
 
 Release lifecycle metadata lives in

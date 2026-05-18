@@ -1,0 +1,58 @@
+name: Publish Main Image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-main:
+    # Only publish from the canonical repository, never from forks.
+    if: github.repository == 'github/gh-aw-threat-detection'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/github/gh-aw-threat-detection"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          {
+            echo "image=${IMAGE}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "version=main-${SHORT_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push :main and :main-<shortsha>
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}
+          tags: |
+            ${{ steps.tags.outputs.image }}:main
+            ${{ steps.tags.outputs.image }}:main-${{ steps.tags.outputs.short_sha }}
+
+      - name: Write summary
+        run: |
+          {
+            echo "## Published main image"
+            echo
+            echo "- \`${{ steps.tags.outputs.image }}:main\` (moving)"
+            echo "- \`${{ steps.tags.outputs.image }}:main-${{ steps.tags.outputs.short_sha }}\` (immutable)"
+            echo
+            echo "These are unverified branch builds. \`:latest\` is unaffected and continues to track the most recently promoted release."
+          } >> "$GITHUB_STEP_SUMMARY"
