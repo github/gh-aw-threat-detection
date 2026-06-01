@@ -34,10 +34,13 @@ const (
 	exitError  = 2
 
 	fullDetectionCorrectionSummaryFormat     = "Your previous response did not contain a valid %s JSON object"
-	fullDetectionCorrectionInstructionFormat = "Return exactly one corrected result line using the required %s prefix."
+	fullDetectionCorrectionInstructionFormat = "Re-run the threat_detection_result command with corrected values, or return exactly one corrected result line using the required %s prefix."
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "report-result" {
+		os.Exit(runReport(os.Args[2:]))
+	}
 	os.Exit(run())
 }
 
@@ -148,7 +151,19 @@ func run() int {
 		return exitError
 	}
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, triageRetries)
+	// Provision an out-of-band result sink for the in-session reporting tool.
+	sinkFile, err := os.CreateTemp("", "threat-detect-result-*.json")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating result sink: %v\n", err)
+		return exitError
+	}
+	sinkPath := sinkFile.Name()
+	sinkFile.Close()
+	// Remove the empty placeholder so ReadResultFile only succeeds once the tool writes it.
+	os.Remove(sinkPath)
+	defer os.Remove(sinkPath)
+
+	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, triageRetries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
 		return exitError
@@ -157,7 +172,7 @@ func run() int {
 	return writeResult(result, outputJSON)
 }
 
-func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt string, retries int) (*detector.Result, error) {
+func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
 	attempts := retries + 1
 	if attempts < 1 {
 		attempts = 1
@@ -165,9 +180,19 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt string, r
 	currentPrompt := prompt
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		rawOutput, err := eng.Analyze(ctx, currentPrompt)
+		// Remove any stale sink result before each attempt.
+		if sinkPath != "" {
+			os.Remove(sinkPath)
+		}
+		rawOutput, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath})
 		if err != nil {
 			return nil, err
+		}
+		// Prefer the out-of-band sink result over transcript scraping.
+		if sinkPath != "" {
+			if result, sinkErr := detector.ReadResultFile(sinkPath); sinkErr == nil {
+				return result, nil
+			}
 		}
 		result, err := detector.ParseResult(rawOutput)
 		if err == nil {

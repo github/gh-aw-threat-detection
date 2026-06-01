@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -171,6 +173,90 @@ func validateRawResult(raw map[string]any, label string) error {
 		}
 	}
 	return nil
+}
+
+// WriteResultFile atomically writes r as canonical THREAT_DETECTION_RESULT JSON
+// to path (temp file in the same dir + rename), with 0o600 permissions.
+func WriteResultFile(path string, r *Result) error {
+	if r == nil {
+		return fmt.Errorf("cannot write nil result")
+	}
+	if r.Reasons == nil {
+		r.Reasons = []string{}
+	}
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling result: %w", err)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".threat-detect-result-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp result file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("setting result file permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("writing result file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("closing result file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("renaming result file: %w", err)
+	}
+	return nil
+}
+
+// ReadResultFile reads path and parses it with ParseStructuredResult, returning
+// a validated *Result. Returns an error if the file is missing, empty, or invalid.
+func ReadResultFile(path string) (*Result, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, fmt.Errorf("result file %q is empty", path)
+	}
+	return ParseStructuredResult(data)
+}
+
+// BuildResultFromReport constructs a *Result from individual report fields.
+// reasons may be nil; it is normalized to a non-nil empty slice.
+func BuildResultFromReport(promptInjection, secretLeak, maliciousPatch bool, reasons []string) *Result {
+	if reasons == nil {
+		reasons = []string{}
+	}
+	return &Result{
+		PromptInjection: promptInjection,
+		SecretLeak:      secretLeak,
+		MaliciousPatch:  maliciousPatch,
+		Reasons:         reasons,
+	}
+}
+
+// ValidateReportFields validates a report payload using the same rules as
+// validateRawResult and returns a single bounded, human-readable error string
+// suitable for feeding back to the model (already passed through
+// TruncateCorrectionMessage). Returns "" when valid.
+func ValidateReportFields(promptInjection, secretLeak, maliciousPatch any, reasons any) string {
+	raw := map[string]any{
+		"prompt_injection": promptInjection,
+		"secret_leak":      secretLeak,
+		"malicious_patch":  maliciousPatch,
+		"reasons":          reasons,
+	}
+	if err := validateRawResult(raw, "report payload"); err != nil {
+		return TruncateCorrectionMessage(err.Error())
+	}
+	return ""
 }
 
 func resultFromRaw(raw map[string]any) *Result {

@@ -99,6 +99,34 @@ When changing artifact handling, review:
 - [specs/threat-detection-spec.md](specs/threat-detection-spec.md)
 - [scratchpad/artifact-naming-compatibility.md](scratchpad/artifact-naming-compatibility.md)
 
+### In-Session Result Reporting (`report-result`)
+
+The agentic CLI engine path (`copilot`, `claude`, `codex`) gives the detection
+model an in-session, validated reporting channel instead of relying solely on
+post-hoc transcript scraping:
+
+- `threat-detect report-result` is an internal subcommand (dispatched in `main()`
+  before global flag parsing; intentionally omitted from `--help`). It validates
+  the verdict against the existing result schema, then atomically records
+  canonical JSON to the path in `--result-file` / `THREAT_DETECTION_RESULT_FILE`.
+  Invalid input prints `THREAT_DETECTION_RESULT_ERROR:` and exits non-zero without
+  recording (exit `2`); a missing sink path exits `3`. The first valid write wins
+  (idempotent); a later valid call prints "already recorded" without overwriting.
+- Before each engine run, `pkg/engine` provisions a `threat_detection_result`
+  wrapper script on `PATH` (`provisionResultTool`) that execs `report-result`,
+  and sets `THREAT_DETECTION_RESULT_FILE`. `watchResultSink` polls the sink and
+  cancels the engine subprocess as soon as a valid result is recorded (early
+  termination). A subprocess kill is treated as success when a valid sink result
+  exists.
+- `analyzeWithRetries` prefers the sink result (`detector.ReadResultFile`) and
+  only falls back to `detector.ParseResult` transcript scraping when the sink is
+  absent or invalid. Helpers live in `pkg/detector/result.go`
+  (`WriteResultFile`, `ReadResultFile`, `BuildResultFromReport`,
+  `ValidateReportFields`).
+- Claude is invoked with `--allowed-tools Bash` when the sink is enabled so it
+  can execute the wrapper; engines that cannot run shell tools fall back to the
+  legacy `THREAT_DETECTION_RESULT:{...}` transcript line, which remains supported.
+
 ### Safe Outputs Context
 
 Threat detection sits upstream of `safe-outputs`. This repo does not implement the full `safe-outputs` system, but changes here should preserve the assumptions made by downstream consumers.
