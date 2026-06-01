@@ -86,7 +86,8 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		return "", err
 	}
 	defer cleanup()
-	return runCLIEnvWithSink(ctx, "claude", claudeArgs(e.model, opts.ResultSinkPath != ""), prompt, toolEnv, opts.ResultSinkPath)
+	enableBashTool := opts.ResultSinkPath != ""
+	return runCLIEnvWithSink(ctx, "claude", claudeArgs(e.model, enableBashTool), prompt, toolEnv, opts.ResultSinkPath)
 }
 
 // codexEngine implements Engine using the Codex CLI.
