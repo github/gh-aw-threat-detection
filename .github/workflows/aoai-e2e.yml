@@ -68,7 +68,7 @@ jobs:
         run: |
           curl --fail-with-body -sS -X POST "${AOAI_ENDPOINT}" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $AOAI_KEY_GITHUBNEXT_EASTUS2" \
+            -H "api-key: $AOAI_KEY_GITHUBNEXT_EASTUS2" \
             -d "$(jq -n --arg model "$AOAI_MODEL" '{
               messages: [
                 { role: "user", content: "Write a random sentence." }
