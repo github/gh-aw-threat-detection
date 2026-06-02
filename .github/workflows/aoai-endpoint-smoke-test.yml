@@ -1,9 +1,11 @@
-name: AOAI E2E
+name: AOAI Endpoint Smoke Test
 
-# End-to-end smoke test that hits an Azure OpenAI (AOAI) model two ways:
+# AOAI endpoint smoke test that hits an Azure OpenAI (AOAI) model two ways:
 #   1. Entra ID / OIDC, via a user-assigned managed identity (no secrets).
 #   2. A static API key stored as a repository secret.
 # Both jobs run in parallel and issue a raw curl against the same endpoint.
+# NOTE: this only checks connectivity to responses API, it does not test Copilot CLI nor end-to-end Agentic workflows
+#   Since there are no agentics in this workflow, it does not use gh-aw-firewall.
 
 on:
   workflow_dispatch:
@@ -43,7 +45,6 @@ jobs:
             --output tsv)
           echo "::add-mask::$TOKEN"
           echo "AOAI_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-
       - name: Query AOAI model
         run: |
           curl --fail-with-body -sS -X POST "${AOAI_ENDPOINT}" \
@@ -54,7 +55,6 @@ jobs:
               input: "Write a random sentence.",
               max_output_tokens: 1024
             }')"
-
   api-key:
     name: AOAI via API key
     runs-on: ubuntu-latest
@@ -66,9 +66,10 @@ jobs:
         run: |
           curl --fail-with-body -sS -X POST "${AOAI_ENDPOINT}" \
             -H "Content-Type: application/json" \
-            -H "api-key: $AOAI_KEY_GITHUBNEXT_EASTUS2" \
+            -H "Authorization: Bearer $AOAI_KEY_GITHUBNEXT_EASTUS2" \
             -d "$(jq -n --arg model "$AOAI_MODEL" '{
               model: $model,
               input: "Write a random sentence.",
               max_output_tokens: 1024
             }')"
+  
