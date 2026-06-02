@@ -45,6 +45,7 @@ jobs:
             --output tsv)
           echo "::add-mask::$TOKEN"
           echo "AOAI_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
       - name: Query AOAI model
         run: |
           curl --fail-with-body -sS -X POST "${AOAI_ENDPOINT}" \
@@ -55,6 +56,7 @@ jobs:
               input: "Write a random sentence.",
               max_output_tokens: 1024
             }')"
+
   api-key:
     name: AOAI via API key
     runs-on: ubuntu-latest
