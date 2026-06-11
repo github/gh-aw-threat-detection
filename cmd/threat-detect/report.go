@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
@@ -31,6 +32,10 @@ func (s *stringSliceFlag) Set(value string) error {
 // detection model through the generated threat_detection_result wrapper.
 func runReport(args []string) int {
 	fs := flag.NewFlagSet("report-result", flag.ContinueOnError)
+	// Suppress FlagSet's own parse/usage output so tool output stays
+	// deterministic; parse errors are routed through reportError below.
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
 	var (
 		promptInjection bool
 		secretLeak      bool
@@ -45,7 +50,7 @@ func runReport(args []string) int {
 	fs.StringVar(&resultFile, "result-file", os.Getenv("THREAT_DETECTION_RESULT_FILE"), "Path to the result sink file (defaults to env THREAT_DETECTION_RESULT_FILE)")
 
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "THREAT_DETECTION_RESULT_ERROR: %v. Re-run threat_detection_result with corrected values.\n", err)
+		reportError(err.Error())
 		return reportExitInvalid
 	}
 
@@ -60,7 +65,7 @@ func runReport(args []string) int {
 	}
 
 	if resultFile == "" {
-		fmt.Fprintln(os.Stderr, "THREAT_DETECTION_RESULT_ERROR: no result sink configured; THREAT_DETECTION_RESULT_FILE is unset.")
+		emitMessage("THREAT_DETECTION_RESULT_ERROR: no result sink configured; THREAT_DETECTION_RESULT_FILE is unset.")
 		return reportExitConfig
 	}
 
@@ -84,7 +89,7 @@ func runReport(args []string) int {
 
 	result := detector.BuildResultFromReport(promptInjection, secretLeak, maliciousPatch, reasonsSlice)
 	if err := detector.WriteResultFile(resultFile, result); err != nil {
-		fmt.Fprintf(os.Stderr, "THREAT_DETECTION_RESULT_ERROR: failed to record result: %v.\n", err)
+		emitMessage(fmt.Sprintf("THREAT_DETECTION_RESULT_ERROR: failed to record result: %v.", err))
 		return reportExitConfig
 	}
 
@@ -93,9 +98,15 @@ func runReport(args []string) int {
 }
 
 // reportError prints a bounded, actionable error to both stdout (so it is visible
-// in the model's tool output) and stderr.
+// in the model's tool output) and stderr, instructing the model to retry.
 func reportError(reason string) {
-	msg := fmt.Sprintf("THREAT_DETECTION_RESULT_ERROR: %s. Re-run threat_detection_result with corrected values.", reason)
+	emitMessage(fmt.Sprintf("THREAT_DETECTION_RESULT_ERROR: %s. Re-run threat_detection_result with corrected values.", reason))
+}
+
+// emitMessage writes msg to both stdout (so it appears in the model's tool
+// output) and stderr, keeping the THREAT_DETECTION_RESULT_ERROR prefix visible
+// regardless of how the tool output is captured.
+func emitMessage(msg string) {
 	fmt.Println(msg)
 	fmt.Fprintln(os.Stderr, msg)
 }

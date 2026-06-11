@@ -181,10 +181,12 @@ func WriteResultFile(path string, r *Result) error {
 	if r == nil {
 		return fmt.Errorf("cannot write nil result")
 	}
-	if r.Reasons == nil {
-		r.Reasons = []string{}
+	// Copy before normalizing so we don't mutate the caller-provided Result.
+	out := *r
+	if out.Reasons == nil {
+		out.Reasons = []string{}
 	}
-	data, err := json.MarshalIndent(r, "", "  ")
+	data, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling result: %w", err)
 	}
