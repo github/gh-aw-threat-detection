@@ -79,6 +79,28 @@ Set `THREAT_DETECTION_LOG_REFLECT_RESPONSE=true` to print raw `/reflect`
 responses to stderr for controlled debugging. Responses may include reflected
 artifact content, so leave this disabled outside targeted diagnostic runs.
 
+#### In-session result reporting (`threat_detection_result`)
+
+On the agentic CLI engine path (`copilot`, `claude`, `codex`), the detector
+provisions a `threat_detection_result` command on the model's `PATH` and sets
+`THREAT_DETECTION_RESULT_FILE` to a private sink file before each engine
+invocation. The model reports its verdict by running the command exactly once:
+
+```bash
+threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reason "..."
+```
+
+The command validates the input synchronously: on bad input it prints
+`THREAT_DETECTION_RESULT_ERROR:` and exits non-zero without recording anything,
+so the model can correct it in-session; on valid input it atomically records the
+canonical JSON verdict to the sink (first valid write wins, idempotent) and
+prints `THREAT_DETECTION_RESULT_RECORDED:`. As soon as a valid verdict is
+recorded, the detector cancels the engine subprocess (early termination),
+eliminating dead-spiral latency and cost. The detector prefers the sink result
+over scraping the transcript. The legacy single-line
+`THREAT_DETECTION_RESULT:{...}` transcript output remains supported as a
+fallback for engines without in-session shell access.
+
 **Exit codes:**
 - `0` — Safe (no threats detected)
 - `1` — Threat detected
