@@ -13,7 +13,7 @@ import (
 // Version is set at build time via ldflags.
 var Version = "dev"
 
-//go:embed prompts/threat_detection.md prompts/threat_detection_triage.md
+//go:embed prompts/threat_detection.md
 var defaultPromptFS embed.FS
 
 // DefaultPromptTemplate returns the embedded default prompt template.

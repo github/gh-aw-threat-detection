@@ -3,33 +3,22 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestRunReflectUnavailableFallsBackToAgenticEngine(t *testing.T) {
-	var reflectRequests atomic.Int32
-	reflectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reflectRequests.Add(1)
-		http.Error(w, "reflect not implemented", http.StatusNotImplemented)
-	}))
-	defer reflectServer.Close()
-
+func TestRunInvokesAgenticEngine(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
-	fakeBinDir := writeFakeCopilot(t, copilotMarker, `THREAT_DETECTION_RESULT:{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic fallback"]}`)
+	fakeBinDir := writeFakeCopilot(t, copilotMarker, `THREAT_DETECTION_RESULT:{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`)
 
 	code := runWithTestArgs(t, []string{
 		"threat-detect",
-		"-reflect-url", reflectServer.URL,
 		"-output", outputPath,
 		artifactsDir,
 	}, map[string]string{
@@ -39,71 +28,16 @@ func TestRunReflectUnavailableFallsBackToAgenticEngine(t *testing.T) {
 	if code != exitThreat {
 		t.Fatalf("run() exit code = %d, want %d", code, exitThreat)
 	}
-	if reflectRequests.Load() == 0 {
-		t.Fatal("expected /reflect to be attempted before fallback")
-	}
 	if _, err := os.Stat(copilotMarker); err != nil {
-		t.Fatalf("expected copilot fallback to run: %v", err)
+		t.Fatalf("expected copilot to run: %v", err)
 	}
 	result := readResultFile(t, outputPath)
 	if !result["prompt_injection"].(bool) {
-		t.Fatalf("fallback result prompt_injection = false, want true: %#v", result)
-	}
-}
-
-func TestRunReflectSuccessDoesNotInvokeAgenticEngine(t *testing.T) {
-	var postRequests atomic.Int32
-	reflectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"models":[{"id":"schema","provider":"openai","capabilities":{"json_schema":true}}]}`))
-		case http.MethodPost:
-			postRequests.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`))
-		default:
-			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
-		}
-	}))
-	defer reflectServer.Close()
-
-	artifactsDir := t.TempDir()
-	outputPath := filepath.Join(t.TempDir(), "result.json")
-	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
-	fakeBinDir := writeFakeCopilot(t, copilotMarker, "copilot should not run")
-
-	code := runWithTestArgs(t, []string{
-		"threat-detect",
-		"-triage=false",
-		"-reflect-url", reflectServer.URL,
-		"-output", outputPath,
-		artifactsDir,
-	}, map[string]string{
-		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-	})
-
-	if code != exitSafe {
-		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
-	}
-	if postRequests.Load() == 0 {
-		t.Fatal("expected successful structured /reflect detection")
-	}
-	if _, err := os.Stat(copilotMarker); !os.IsNotExist(err) {
-		t.Fatalf("copilot should not run when /reflect succeeds, stat err = %v", err)
-	}
-	result := readResultFile(t, outputPath)
-	if result["prompt_injection"].(bool) || result["secret_leak"].(bool) || result["malicious_patch"].(bool) {
-		t.Fatalf("reflect result is not safe: %#v", result)
+		t.Fatalf("result prompt_injection = false, want true: %#v", result)
 	}
 }
 
 func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
-	reflectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "reflect not implemented", http.StatusNotImplemented)
-	}))
-	defer reflectServer.Close()
-
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
@@ -112,7 +46,6 @@ func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
 
 	code := runWithTestArgs(t, []string{
 		"threat-detect",
-		"-reflect-url", reflectServer.URL,
 		"-output", outputPath,
 		artifactsDir,
 	}, map[string]string{
@@ -136,11 +69,6 @@ func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
 }
 
 func TestRunEarlyTerminationOnSink(t *testing.T) {
-	reflectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "reflect not implemented", http.StatusNotImplemented)
-	}))
-	defer reflectServer.Close()
-
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
@@ -152,7 +80,6 @@ func TestRunEarlyTerminationOnSink(t *testing.T) {
 	start := time.Now()
 	code := runWithTestArgs(t, []string{
 		"threat-detect",
-		"-reflect-url", reflectServer.URL,
 		"-output", outputPath,
 		artifactsDir,
 	}, map[string]string{
