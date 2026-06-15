@@ -95,13 +95,25 @@ func run() (code int) {
 		retries    int
 	)
 
+	// Parse flags with ContinueOnError so usage/flag errors return through the
+	// deferred status emitter instead of calling os.Exit and bypassing it.
+	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
+	flag.CommandLine.SetOutput(os.Stderr)
+
 	flag.StringVar(&engineID, "engine", "", "AI engine to use (copilot, claude, codex)")
 	flag.StringVar(&model, "model", "", "Model to use for detection")
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
-	flag.Parse()
+	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
+		// -h/-help prints usage and exits cleanly with no status line.
+		if errors.Is(err, flag.ErrHelp) {
+			return exitSafe
+		}
+		reason = reasonConfigError
+		return exitError
+	}
 
 	if version {
 		fmt.Printf("threat-detect %s\n", detector.Version)
@@ -200,7 +212,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
 		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
-			return nil, fmt.Errorf("%w: %v", errEngineExecution, err)
+			return nil, fmt.Errorf("%w: %w", errEngineExecution, err)
 		}
 		// The verdict must be reported in-session through the
 		// threat_detection_result tool, which records it to the sink.
