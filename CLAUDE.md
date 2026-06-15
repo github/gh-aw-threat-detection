@@ -20,7 +20,7 @@ It detects three categories: **prompt injection**, **secret leak**, and **malici
 - **Container**: published to `ghcr.io/github/gh-aw-threat-detection`, Alpine-based, non-root user `detector`
 - **Spec**: [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md) — W3C-style normative spec; the source of truth for behavior
 - **Engines supported**: `copilot` (default), `claude`, `codex` — invoked from `PATH`, not bundled into the image
-- **Two-phase analysis**: fast structured-output triage via `api-proxy` `/reflect`, falling back to full CLI engine analysis
+- **Detection**: a single agentic CLI engine pass; the engine reports its verdict in-session via the `threat_detection_result` tool (out-of-band result sink), falling back to transcript parsing
 
 ## Repository Layout
 
@@ -29,16 +29,14 @@ cmd/threat-detect/        CLI entry point and flag parsing (main.go)
 pkg/artifacts/            Artifact directory loading and validation
 pkg/detector/             Core detection logic
   ├── detector.go         BuildPrompt and prompt template handling (//go:embed prompts/)
-  ├── triage.go           Phase 1 fast triage prompt builder (bounded inline content)
   ├── result.go           Result struct + JSON Schema + parser (THREAT_DETECTION_RESULT: prefix)
   ├── static.go           PromptAnalysis: trusted-template vs untrusted-input breakdown
   ├── correction.go       Self-correction retry prompt builders
   ├── lifecycle_registry_test.go  Validates releases/threat-detection-lifecycle.json
-  └── prompts/            Embedded markdown prompts (threat_detection.md, *_triage.md)
+  └── prompts/            Embedded markdown prompts (threat_detection.md)
 pkg/engine/               AI engine abstraction
   ├── engine.go           copilot/claude/codex CLI adapters; Copilot uses runCLIWithPromptFile, Claude uses runCLI with stdin, Codex passes prompts via codexArgs/runCLIEnv
-  ├── reflect.go          ReflectClient → api-proxy /reflect (structured output)
-  └── capabilities.go     Per-provider structured-output mode detection (json_schema, gemini, anthropic tool)
+  └── tool.go             threat_detection_result wrapper provisioning + result-sink watcher
 specs/                    Normative spec (threat-detection-spec.md)
 releases/                 Lifecycle registry (threat-detection-lifecycle.json)
 scripts/                  create-threat-detection-sibling-workflows.py (regenerates *-container.lock.yml)
@@ -86,9 +84,7 @@ threat-detect [flags] <artifacts-dir>
 - `--model <name>` — model override forwarded to the engine
 - `--prompt-template <path>` — override the embedded default
 - `--output <path>` — write JSON result (defaults to stdout)
-- `--triage` (default `true`) — Phase 1 structured-output triage
-- `--reflect-url <url>` — `api-proxy` `/reflect` base (default `http://127.0.0.1:8080/reflect`); env: `THREAT_DETECTION_REFLECT_URL`, `API_PROXY_REFLECT_URL`, `REFLECT_URL`
-- `--triage-model`, `--triage-max-bytes`, `--triage-retries`
+- `--retries` (default `1`) — retries for malformed detection outputs; env: `THREAT_DETECTION_RETRIES`
 
 **Exit codes** (defined in `cmd/threat-detect/main.go`):
 
@@ -104,7 +100,7 @@ threat-detect [flags] <artifacts-dir>
 { "prompt_injection": false, "secret_leak": false, "malicious_patch": false, "reasons": [] }
 ```
 
-The full detector expects engine output to contain a line beginning with `THREAT_DETECTION_RESULT:` followed by the JSON object. The `/reflect` triage path uses a strict JSON Schema (`detector.ResultJSONSchema`) instead.
+The detector expects engine output to contain a line beginning with `THREAT_DETECTION_RESULT:` followed by the JSON object. Preferentially, the engine reports its verdict in-session by invoking the `threat_detection_result` tool, which writes the same JSON object to an out-of-band result sink (`detector.ParseStructuredResult`).
 
 **Artifacts directory shape** (validated by `pkg/artifacts/artifacts.go`):
 
@@ -122,19 +118,12 @@ The full detector expects engine output to contain a line beginning with `THREAT
 └── comment-memory/*.md           # optional
 ```
 
-## Two-Phase Detection Flow
+## Detection Flow
 
-1. **Phase 1 — Triage (`--triage` on, default)**
-   - `pkg/detector/triage.go` builds a bounded prompt with inline artifact content (capped at `--triage-max-bytes`, default 32 KiB per artifact).
-   - `pkg/engine/reflect.go` calls `POST <reflect-url>` with `ResultJSONSchema` enforcement.
-   - Per-provider mode selection in `pkg/engine/capabilities.go`: `json_schema` (OpenAI), `response_schema` (Gemini), tool-use schemas (Anthropic), or fallback `json` mode.
-   - **All-false valid result → exit 0 immediately** (skip the full detector).
-   - Threats, uncertainty, malformed responses, unsupported models, or proxy errors → fail safe into Phase 2.
-
-2. **Phase 2 — Full detection**
-   - `pkg/detector/detector.go` (`BuildPrompt`) renders `prompts/threat_detection.md` with placeholders substituted from artifacts and `BuildPromptAnalysis` (untrusted-input breakdown).
-   - Prefers `/reflect` structured output when available; otherwise invokes the engine CLI from `PATH` via `pkg/engine/engine.go` (`copilot`, `claude`, and `codex` use engine-specific prompt-passing paths; `runCLIWithPromptFile` is used by Copilot).
-   - On malformed output, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried.
+- `pkg/detector/detector.go` (`BuildPrompt`) renders `prompts/threat_detection.md` with placeholders substituted from artifacts and `BuildPromptAnalysis` (untrusted-input breakdown).
+- The engine CLI is invoked from `PATH` via `pkg/engine/engine.go` (`copilot`, `claude`, and `codex` use engine-specific prompt-passing paths; `runCLIWithPromptFile` is used by Copilot).
+- The engine reports its verdict in-session by calling the `threat_detection_result` tool, which writes JSON to an out-of-band result sink (`pkg/engine/tool.go`); the sink is preferred over transcript scraping, and the subprocess is cancelled as soon as a valid result is written.
+- If no sink result is written, the transcript is parsed for the `THREAT_DETECTION_RESULT:` line. On malformed output, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried (`--retries`, default 1).
 
 ## Result Lifecycle Registry
 
@@ -190,7 +179,7 @@ Required Actions secrets/variables for smokes are documented in [README.md → D
 When changing this repo:
 
 - **Spec first**: behavior changes must align with [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md). Update the spec when the contract changes.
-- **Preserve the JSON result contract**: `prompt_injection`, `secret_leak`, `malicious_patch`, `reasons` — schema in `pkg/detector/result.go` is also enforced via `/reflect`.
+- **Preserve the JSON result contract**: `prompt_injection`, `secret_leak`, `malicious_patch`, `reasons` — schema enforced by the parser in `pkg/detector/result.go`.
 - **Don't bundle engine CLIs into the image**. Engines (Copilot, Claude, Codex) are invoked from `PATH`. The image stays small; the runner provides the engine.
 - **No new JS scripts**. Detection setup and result parsing are Go. Old gh-aw JS detection scripts are being retired.
 - **Custom orchestrator steps** (`threat-detection.steps`) belong in the `gh-aw` job, not inside this container.

@@ -49,16 +49,12 @@ func run() int {
 	defer stop()
 
 	var (
-		engineID       string
-		model          string
-		promptFile     string
-		outputJSON     string
-		version        bool
-		triage         bool
-		reflectURL     string
-		triageModel    string
-		triageMaxBytes int
-		triageRetries  int
+		engineID   string
+		model      string
+		promptFile string
+		outputJSON string
+		version    bool
+		retries    int
 	)
 
 	flag.StringVar(&engineID, "engine", "", "AI engine to use (copilot, claude, codex)")
@@ -66,11 +62,7 @@ func run() int {
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
-	flag.BoolVar(&triage, "triage", envBool("THREAT_DETECTION_TRIAGE", true), "Run Phase 1 structured-output triage before full detection (env: THREAT_DETECTION_TRIAGE)")
-	flag.StringVar(&reflectURL, "reflect-url", envFirstOrDefault(engine.DefaultReflectURL, "THREAT_DETECTION_REFLECT_URL", "API_PROXY_REFLECT_URL", "REFLECT_URL"), "api-proxy reflect base URL")
-	flag.StringVar(&triageModel, "triage-model", os.Getenv("THREAT_DETECTION_TRIAGE_MODEL"), "Model to use for reflect triage")
-	flag.IntVar(&triageMaxBytes, "triage-max-bytes", envInt("THREAT_DETECTION_TRIAGE_MAX_BYTES", detector.DefaultTriageMaxBytes()), "Maximum bytes per artifact to inline for triage")
-	flag.IntVar(&triageRetries, "triage-retries", envInt("THREAT_DETECTION_TRIAGE_RETRIES", 1), "Retries for malformed structured outputs")
+	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
 	flag.Parse()
 
 	if version {
@@ -94,27 +86,6 @@ func run() int {
 		return exitError
 	}
 
-	if triage && reflectURL != "" {
-		triagePrompt, err := detector.BuildTriagePrompt(arts, triageMaxBytes)
-		if err == nil {
-			triageResult, err := (&engine.ReflectClient{
-				BaseURL: reflectURL,
-				Model:   triageModel,
-				Retries: triageRetries,
-			}).AnalyzeStructured(ctx, triagePrompt)
-			if err == nil && triageResult.IsSafe() {
-				return writeResult(triageResult, outputJSON)
-			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Triage inconclusive, running full detection: %v\n", err)
-			} else {
-				fmt.Fprintln(os.Stderr, "Triage found possible threats, running full detection")
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "Error building triage prompt, running full detection: %v\n", err)
-		}
-	}
-
 	// Build the prompt
 	promptTemplate := ""
 	if promptFile != "" {
@@ -130,18 +101,6 @@ func run() int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)
 		return exitError
-	}
-
-	if reflectURL != "" {
-		reflectResult, err := (&engine.ReflectClient{
-			BaseURL: reflectURL,
-			Model:   firstNonEmpty(model, triageModel),
-			Retries: triageRetries,
-		}).AnalyzeStructured(ctx, prompt)
-		if err == nil {
-			return writeResult(reflectResult, outputJSON)
-		}
-		fmt.Fprintf(os.Stderr, "Structured reflect detection unavailable, using CLI engine: %v\n", err)
 	}
 
 	// Create engine
@@ -163,7 +122,7 @@ func run() int {
 	os.Remove(sinkPath)
 	defer os.Remove(sinkPath)
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, triageRetries)
+	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
 		return exitError
@@ -229,27 +188,6 @@ func writeResult(result *detector.Result, outputJSON string) int {
 	return exitSafe
 }
 
-func envFirstOrDefault(fallback string, keys ...string) string {
-	for _, key := range keys {
-		if value := os.Getenv(key); value != "" {
-			return value
-		}
-	}
-	return fallback
-}
-
-func envBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
 func envInt(key string, fallback int) int {
 	value := os.Getenv(key)
 	if value == "" {
@@ -260,13 +198,4 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

@@ -21,22 +21,6 @@ type Result struct {
 	Reasons         []string `json:"reasons"`
 }
 
-// ResultJSONSchema is the strict JSON Schema used for structured model output.
-var ResultJSONSchema = map[string]any{
-	"type":                 "object",
-	"additionalProperties": false,
-	"required":             []string{"prompt_injection", "secret_leak", "malicious_patch", "reasons"},
-	"properties": map[string]any{
-		"prompt_injection": map[string]any{"type": "boolean"},
-		"secret_leak":      map[string]any{"type": "boolean"},
-		"malicious_patch":  map[string]any{"type": "boolean"},
-		"reasons": map[string]any{
-			"type":  "array",
-			"items": map[string]any{"type": "string"},
-		},
-	},
-}
-
 // HasThreats returns true if any threat category was detected.
 func (r *Result) HasThreats() bool {
 	if r == nil {
@@ -50,7 +34,8 @@ func (r *Result) IsSafe() bool {
 	return r != nil && !r.HasThreats()
 }
 
-// ParseStructuredResult parses a strict JSON object matching ResultJSONSchema.
+// ParseStructuredResult parses a strict JSON object containing exactly the
+// prompt_injection, secret_leak, malicious_patch, and reasons fields.
 func ParseStructuredResult(data []byte) (*Result, error) {
 	var raw map[string]any
 	dec := json.NewDecoder(bytes.NewReader(data))

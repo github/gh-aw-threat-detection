@@ -51,17 +51,15 @@ This specification covers:
 
 **TD-06**: The implementation MUST support AI-powered threat detection using configured AI engines.
 
-**TD-06a**: The implementation SHOULD run threat detection in two phases by default:
-
-1. a fast, non-agentic structured-output triage call through `api-proxy` `/reflect`; and
-2. the full reasoning-heavy detector when triage is suspicious or inconclusive.
-
-Phase 1 MUST use no tools and MUST provide inline artifact content or bounded
-summaries. Phase 1 MAY conclude safe only when a schema-valid result has
-`prompt_injection`, `secret_leak`, and `malicious_patch` all set to `false`.
-Any detected threat, uncertainty, proxy failure, unsupported model, missing
-capability metadata, malformed response, or retry exhaustion MUST fail safe into
-Phase 2.
+**TD-06a**: The implementation MUST run threat detection as a single agentic
+engine pass using the configured CLI engine. The engine MUST be given the
+artifact content and the `threat_detection_result` reporting tool, and SHOULD
+report its verdict in-session by invoking that tool, which writes a schema-valid
+result to an out-of-band result sink. When no sink result is produced, the
+implementation MUST fall back to parsing the engine transcript for a
+`THREAT_DETECTION_RESULT:` line. Malformed output MAY be retried with a bounded
+self-correction prompt; retry exhaustion MUST be treated as an infrastructure
+error.
 
 **TD-07**: The implementation SHOULD support custom detection steps for specialized scanning:
 
@@ -92,13 +90,11 @@ threat-detection:
 
 **TD-10**: The `reasons` array SHOULD contain human-readable explanations for detected threats.
 
-**TD-10a**: Structured model output MUST use the same JSON object shape as
-TD-08 with required boolean `prompt_injection`, `secret_leak`, and
-`malicious_patch` fields and a required string-array `reasons` field. Structured
-output SHOULD be requested with strict JSON Schema when the selected model
-advertises support. Provider-native schema mechanisms such as Gemini
-`response_schema` or Anthropic forced tool calls MAY be used when `/reflect`
-capability metadata confirms support.
+**TD-10a**: The result reported through the `threat_detection_result` tool MUST
+use the same JSON object shape as TD-08 with required boolean `prompt_injection`,
+`secret_leak`, and `malicious_patch` fields and a required string-array `reasons`
+field. The implementation MUST reject results that add unexpected fields, omit a
+required field, or use the wrong type for any field.
 
 ---
 
@@ -143,12 +139,6 @@ threat-detection:
     - name: Static Analysis
       run: ./scan.sh
 ```
-
-**TD-15a**: Implementations that use `/reflect` MUST discover available models
-and select dynamically based on advertised capabilities. They SHOULD prefer
-strict JSON Schema support, then provider-native schema/tool-call support, then
-JSON-mode-only support. Models without confirmed structured-output capability
-MUST NOT allow Phase 1 to conclude safe.
 
 ---
 

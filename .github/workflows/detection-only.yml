@@ -219,10 +219,6 @@ jobs:
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT || '' }}
-          # The api-proxy hostname returns 403 from this detection-only AWF path; target the internal api-proxy IP instead.
-          # THREAT_DETECTION_REFLECT_URL: http://api-proxy:10000/reflect
-          THREAT_DETECTION_REFLECT_URL: http://172.30.0.30:10000/reflect
-          THREAT_DETECTION_LOG_REFLECT_RESPONSE: "true"
           WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
         run: |
