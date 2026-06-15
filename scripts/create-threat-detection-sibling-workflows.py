@@ -84,7 +84,7 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
         '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection || run_status=$?; '
         'if [ -f "$result_path" ]; then '
         "python3 -c 'import json,sys; print(\"THREAT_DETECTION_RESULT:\" + json.dumps(json.load(open(sys.argv[1])), separators=(\",\", \":\")))' "
-        '"$result_path" >> /tmp/gh-aw/threat-detection/detection.log; '
+        '"$result_path"; '
         'fi; '
         'exit "$run_status"'
     )
