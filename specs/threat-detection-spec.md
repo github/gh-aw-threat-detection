@@ -53,13 +53,13 @@ This specification covers:
 
 **TD-06a**: The implementation MUST run threat detection as a single agentic
 engine pass using the configured CLI engine. The engine MUST be given the
-artifact content and the `threat_detection_result` reporting tool, and SHOULD
+artifact content and the `threat_detection_result` reporting tool, and MUST
 report its verdict in-session by invoking that tool, which writes a schema-valid
-result to an out-of-band result sink. When no sink result is produced, the
-implementation MUST fall back to parsing the engine transcript for a
-`THREAT_DETECTION_RESULT:` line. Malformed output MAY be retried with a bounded
-self-correction prompt; retry exhaustion MUST be treated as an infrastructure
-error.
+result to an out-of-band result sink. The implementation MUST read the verdict
+exclusively from that sink; it MUST NOT parse the engine transcript for the
+result. When no sink result is produced, the attempt MAY be retried with a
+bounded self-correction prompt; retry exhaustion MUST be treated as an
+infrastructure error.
 
 **TD-07**: The implementation SHOULD support custom detection steps for specialized scanning:
 

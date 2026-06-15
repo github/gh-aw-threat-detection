@@ -15,7 +15,8 @@ func TestRunInvokesAgenticEngine(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
-	fakeBinDir := writeFakeCopilot(t, copilotMarker, `THREAT_DETECTION_RESULT:{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`)
+	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
 
 	code := runWithTestArgs(t, []string{
 		"threat-detect",
@@ -117,28 +118,6 @@ func runWithTestArgs(t *testing.T, args []string, env map[string]string) int {
 	return run()
 }
 
-func writeFakeCopilot(t *testing.T, markerPath, output string) string {
-	t.Helper()
-
-	binDir := t.TempDir()
-	scriptPath := filepath.Join(binDir, "copilot")
-	script := strings.Join([]string{
-		"#!/bin/sh",
-		"cat >/dev/null",
-		"printf called > " + shellQuote(markerPath),
-		"printf '%s\\n' " + shellQuote(output),
-		"",
-	}, "\n")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
-		t.Fatalf("writing fake copilot: %v", err)
-	}
-	return binDir
-}
-
-// writeFakeCopilotWithSink writes a fake copilot that records a valid verdict to
-// $THREAT_DETECTION_RESULT_FILE (simulating the model calling the report tool),
-// emits stdout that contains no THREAT_DETECTION_RESULT line, then optionally
-// sleeps for sleepSeconds to exercise early termination.
 func writeFakeCopilotWithSink(t *testing.T, markerPath, sinkJSON string, sleepSeconds int) string {
 	t.Helper()
 

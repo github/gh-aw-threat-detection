@@ -66,9 +66,9 @@ threat-detect [flags] <artifacts-dir>
 verdict in-session by invoking the `threat_detection_result` tool, which writes
 a strict JSON object matching the result contract to an out-of-band result sink;
 the detector cancels the engine subprocess as soon as a valid result is written.
-If no sink result is produced, the engine transcript is scanned for a
-`THREAT_DETECTION_RESULT:` line, and a one-shot self-correction prompt is retried
-on malformed output.
+The verdict is read exclusively from that sink; if no sink result is produced, a
+one-shot self-correction prompt is retried, and retry exhaustion is treated as an
+infrastructure error.
 
 #### In-session result reporting (`threat_detection_result`)
 
@@ -87,10 +87,8 @@ so the model can correct it in-session; on valid input it atomically records the
 canonical JSON verdict to the sink (first valid write wins, idempotent) and
 prints `THREAT_DETECTION_RESULT_RECORDED:`. As soon as a valid verdict is
 recorded, the detector cancels the engine subprocess (early termination),
-eliminating dead-spiral latency and cost. The detector prefers the sink result
-over scraping the transcript. The legacy single-line
-`THREAT_DETECTION_RESULT:{...}` transcript output remains supported as a
-fallback for engines without in-session shell access.
+eliminating dead-spiral latency and cost. The detector reads the verdict
+exclusively from the sink; it does not scrape the engine transcript.
 
 **Exit codes:**
 - `0` — Safe (no threats detected)

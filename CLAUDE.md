@@ -20,7 +20,7 @@ It detects three categories: **prompt injection**, **secret leak**, and **malici
 - **Container**: published to `ghcr.io/github/gh-aw-threat-detection`, Alpine-based, non-root user `detector`
 - **Spec**: [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md) — W3C-style normative spec; the source of truth for behavior
 - **Engines supported**: `copilot` (default), `claude`, `codex` — invoked from `PATH`, not bundled into the image
-- **Detection**: a single agentic CLI engine pass; the engine reports its verdict in-session via the `threat_detection_result` tool (out-of-band result sink), falling back to transcript parsing
+- **Detection**: a single agentic CLI engine pass; the engine reports its verdict in-session via the `threat_detection_result` tool (out-of-band result sink), which is the sole source of the verdict
 
 ## Repository Layout
 
@@ -29,7 +29,7 @@ cmd/threat-detect/        CLI entry point and flag parsing (main.go)
 pkg/artifacts/            Artifact directory loading and validation
 pkg/detector/             Core detection logic
   ├── detector.go         BuildPrompt and prompt template handling (//go:embed prompts/)
-  ├── result.go           Result struct + JSON Schema + parser (THREAT_DETECTION_RESULT: prefix)
+  ├── result.go           Result struct + JSON Schema + structured sink parser/writer
   ├── static.go           PromptAnalysis: trusted-template vs untrusted-input breakdown
   ├── correction.go       Self-correction retry prompt builders
   ├── lifecycle_registry_test.go  Validates releases/threat-detection-lifecycle.json
@@ -100,7 +100,7 @@ threat-detect [flags] <artifacts-dir>
 { "prompt_injection": false, "secret_leak": false, "malicious_patch": false, "reasons": [] }
 ```
 
-The detector expects engine output to contain a line beginning with `THREAT_DETECTION_RESULT:` followed by the JSON object. Preferentially, the engine reports its verdict in-session by invoking the `threat_detection_result` tool, which writes the same JSON object to an out-of-band result sink (`detector.ParseStructuredResult`).
+The detector reads the verdict exclusively from the out-of-band result sink. The engine reports its verdict in-session by invoking the `threat_detection_result` tool, which writes the JSON object (`prompt_injection`, `secret_leak`, `malicious_patch`, `reasons`) to the sink (`detector.ReadResultFile` / `detector.ParseStructuredResult`).
 
 **Artifacts directory shape** (validated by `pkg/artifacts/artifacts.go`):
 
@@ -122,8 +122,8 @@ The detector expects engine output to contain a line beginning with `THREAT_DETE
 
 - `pkg/detector/detector.go` (`BuildPrompt`) renders `prompts/threat_detection.md` with placeholders substituted from artifacts and `BuildPromptAnalysis` (untrusted-input breakdown).
 - The engine CLI is invoked from `PATH` via `pkg/engine/engine.go` (`copilot`, `claude`, and `codex` use engine-specific prompt-passing paths; `runCLIWithPromptFile` is used by Copilot).
-- The engine reports its verdict in-session by calling the `threat_detection_result` tool, which writes JSON to an out-of-band result sink (`pkg/engine/tool.go`); the sink is preferred over transcript scraping, and the subprocess is cancelled as soon as a valid result is written.
-- If no sink result is written, the transcript is parsed for the `THREAT_DETECTION_RESULT:` line. On malformed output, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried (`--retries`, default 1).
+- The engine reports its verdict in-session by calling the `threat_detection_result` tool, which writes JSON to an out-of-band result sink (`pkg/engine/tool.go`); the sink is the sole source of the verdict, and the subprocess is cancelled as soon as a valid result is written.
+- If no sink result is written, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried (`--retries`, default 1); retry exhaustion is an infrastructure error. The engine transcript is never parsed for the result.
 
 ## Result Lifecycle Registry
 

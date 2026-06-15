@@ -33,8 +33,9 @@ const (
 	exitThreat = 1
 	exitError  = 2
 
-	fullDetectionCorrectionSummaryFormat     = "Your previous response did not contain a valid %s JSON object"
-	fullDetectionCorrectionInstructionFormat = "Re-run the threat_detection_result command with corrected values, or return exactly one corrected result line using the required %s prefix."
+	detectionCorrectionPrefix      = "Your previous response did not record a verdict"
+	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
+	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
 )
 
 func main() {
@@ -132,6 +133,9 @@ func run() int {
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
+	if sinkPath == "" {
+		return nil, fmt.Errorf("result sink path is required for detection")
+	}
 	attempts := retries + 1
 	if attempts < 1 {
 		attempts = 1
@@ -140,29 +144,20 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		// Remove any stale sink result before each attempt.
-		if sinkPath != "" {
-			os.Remove(sinkPath)
-		}
-		rawOutput, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath})
-		if err != nil {
+		os.Remove(sinkPath)
+		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
 			return nil, err
 		}
-		// Prefer the out-of-band sink result over transcript scraping.
-		if sinkPath != "" {
-			if result, sinkErr := detector.ReadResultFile(sinkPath); sinkErr == nil {
-				return result, nil
-			}
-		}
-		result, err := detector.ParseResult(rawOutput)
+		// The verdict must be reported in-session through the
+		// threat_detection_result tool, which records it to the sink.
+		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
 			return result, nil
 		}
 		lastErr = err
-		summary := fmt.Sprintf(fullDetectionCorrectionSummaryFormat, detector.ResultPrefix)
-		instruction := fmt.Sprintf(fullDetectionCorrectionInstructionFormat, detector.ResultPrefix)
-		currentPrompt = detector.BuildCorrectionPrompt(prompt, summary, err.Error(), instruction)
+		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
 }
 
 func writeResult(result *detector.Result, outputJSON string) int {
