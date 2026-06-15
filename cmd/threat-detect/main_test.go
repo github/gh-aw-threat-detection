@@ -219,6 +219,8 @@ func runWithTestArgsCapture(t *testing.T, args []string, env map[string]string) 
 		t.Fatalf("creating stderr pipe: %v", err)
 	}
 	os.Stderr = w
+	// Route flag parse/usage output to the same pipe so it is captured too.
+	flag.CommandLine.SetOutput(w)
 
 	done := make(chan string, 1)
 	go func() {
