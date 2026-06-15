@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -38,6 +39,33 @@ const (
 	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
 )
 
+// statusPrefix is the marker for the single machine-readable status line
+// emitted to stderr at the end of every detection run. It is deliberately
+// distinct from the THREAT_DETECTION_RESULT: verdict prefix consumed by gh-aw
+// so the two never collide. Because the result JSON is not written on error
+// paths, this line is often the only structured signal a caller receives.
+const statusPrefix = "THREAT_DETECTION_STATUS:"
+
+// Terminal reasons reported on the status line. Exactly one is emitted per run.
+const (
+	reasonResultRecorded         = "result_recorded"          // verdict obtained (exit 0 or 1)
+	reasonConfigError            = "config_error"             // setup/validation failed before the engine ran
+	reasonEngineError            = "engine_error"             // engine subprocess failed without recording a verdict
+	reasonInvalidReportExhausted = "invalid_report_exhausted" // engine ran but never recorded a valid verdict across retries
+	reasonCancelled              = "cancelled"                // run was interrupted before a verdict
+	reasonOutputWriteError       = "output_write_error"       // verdict obtained but writing the result failed
+)
+
+// errEngineExecution marks a failure of the engine subprocess itself (as
+// opposed to the engine running but never recording a verdict). It lets run()
+// distinguish engine_error from invalid_report_exhausted on the status line.
+var errEngineExecution = errors.New("engine execution failed")
+
+// emitStatus writes the single terminal status line to stderr.
+func emitStatus(reason string, code int) {
+	fmt.Fprintf(os.Stderr, "%s reason=%s exit=%d\n", statusPrefix, reason, code)
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "report-result" {
 		os.Exit(runReport(os.Args[2:]))
@@ -45,9 +73,18 @@ func main() {
 	os.Exit(run())
 }
 
-func run() int {
+func run() (code int) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	// reason is set at each terminal point; the deferred emitter writes the
+	// single status line. An empty reason (e.g. --version) emits nothing.
+	reason := ""
+	defer func() {
+		if reason != "" {
+			emitStatus(reason, code)
+		}
+	}()
 
 	var (
 		engineID   string
@@ -76,6 +113,7 @@ func run() int {
 	if len(args) < 1 {
 		fmt.Fprintf(os.Stderr, "Usage: threat-detect [flags] <artifacts-dir>\n")
 		flag.PrintDefaults()
+		reason = reasonConfigError
 		return exitError
 	}
 	artifactsDir := args[0]
@@ -84,6 +122,7 @@ func run() int {
 	arts, err := artifacts.Load(artifactsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading artifacts: %v\n", err)
+		reason = reasonConfigError
 		return exitError
 	}
 
@@ -93,6 +132,7 @@ func run() int {
 		data, err := os.ReadFile(promptFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading prompt template: %v\n", err)
+			reason = reasonConfigError
 			return exitError
 		}
 		promptTemplate = string(data)
@@ -101,6 +141,7 @@ func run() int {
 	prompt, err := detector.BuildPrompt(arts, promptTemplate)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)
+		reason = reasonConfigError
 		return exitError
 	}
 
@@ -108,6 +149,7 @@ func run() int {
 	eng, err := engine.New(engineID, model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
+		reason = reasonConfigError
 		return exitError
 	}
 
@@ -115,6 +157,7 @@ func run() int {
 	sinkFile, err := os.CreateTemp("", "threat-detect-result-*.json")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating result sink: %v\n", err)
+		reason = reasonConfigError
 		return exitError
 	}
 	sinkPath := sinkFile.Name()
@@ -126,10 +169,21 @@ func run() int {
 	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
+		switch {
+		case ctx.Err() != nil:
+			reason = reasonCancelled
+		case errors.Is(err, errEngineExecution):
+			reason = reasonEngineError
+		default:
+			reason = reasonInvalidReportExhausted
+		}
 		return exitError
 	}
 
-	return writeResult(result, outputJSON)
+	var resultReason string
+	code, resultReason = writeResult(result, outputJSON)
+	reason = resultReason
+	return code
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
@@ -146,7 +200,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
 		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", errEngineExecution, err)
 		}
 		// The verdict must be reported in-session through the
 		// threat_detection_result tool, which records it to the sink.
@@ -160,17 +214,20 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
 }
 
-func writeResult(result *detector.Result, outputJSON string) int {
+// writeResult marshals and writes the verdict, returning the exit code and the
+// terminal reason for the status line. The result JSON is only ever produced on
+// the success path; an output failure yields no JSON and reasonOutputWriteError.
+func writeResult(result *detector.Result, outputJSON string) (int, string) {
 	jsonBytes, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error marshaling result: %v\n", err)
-		return exitError
+		return exitError, reasonOutputWriteError
 	}
 
 	if outputJSON != "" {
 		if err := os.WriteFile(outputJSON, jsonBytes, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
-			return exitError
+			return exitError, reasonOutputWriteError
 		}
 	} else {
 		fmt.Println(string(jsonBytes))
@@ -178,9 +235,9 @@ func writeResult(result *detector.Result, outputJSON string) int {
 
 	// Exit code based on threat detection
 	if result.HasThreats() {
-		return exitThreat
+		return exitThreat, reasonResultRecorded
 	}
-	return exitSafe
+	return exitSafe, reasonResultRecorded
 }
 
 func envInt(key string, fallback int) int {
