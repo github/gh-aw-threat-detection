@@ -1,0 +1,18 @@
+# This stub action exists so that the `actions/setup` directory persists in
+# the workspace after the second `actions/checkout` step restores the
+# gh-aw-threat-detection content via sparse-checkout.
+#
+# The real `actions/setup` action is provided by `github/gh-aw` and is checked
+# out first. A second checkout (sparse) must list `actions/setup` to prevent
+# Git from removing the directory; that only works if this repo also contains
+# the path. Without this file the runner raises:
+#   "Can't find 'action.yml', 'action.yaml' or 'Dockerfile' under '…/actions/setup'"
+# during post-step cleanup and marks the activation job as failed.
+name: 'Setup Scripts (stub)'
+description: >
+  Placeholder that keeps the actions/setup directory present after the workspace
+  is restored to gh-aw-threat-detection content. The real setup action is
+  sourced from github/gh-aw during activation.
+runs:
+  using: composite
+  steps: []
