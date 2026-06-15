@@ -22,7 +22,6 @@ tools:
   bash:
     - "*"
   github:
-  web-fetch:
 runtimes:
   go:
     version: "1.23"
@@ -47,13 +46,12 @@ Keep outputs concise.
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
-2. Use `web-fetch` to fetch `https://github.com/github/gh-aw-threat-detection` and verify the response mentions `gh-aw-threat-detection`.
-3. Use bash to run `make test` in `${{ github.workspace }}` and verify it succeeds.
-4. Use bash to create a minimal artifacts directory under `/tmp/gh-aw/smoke-claude-${{ github.run_id }}` with:
+2. Use bash to run `make test` in `${{ github.workspace }}` and verify it succeeds.
+3. Use bash to create a minimal artifacts directory under `/tmp/gh-aw/smoke-claude-${{ github.run_id }}` with:
    - `aw-prompts/prompt.txt`
    - `agent_output.json`
-5. Use bash to run `./bin/threat-detect --version`; if the binary does not exist, run `make build` first.
-6. Use bash to write a concise status file at `/tmp/gh-aw/agent/smoke-claude-${{ github.run_id }}.txt`.
+4. Use bash to run `./bin/threat-detect --version`; if the binary does not exist, run `make build` first.
+5. Use bash to write a concise status file at `/tmp/gh-aw/agent/smoke-claude-${{ github.run_id }}.txt`.
 
 ## Output
 
