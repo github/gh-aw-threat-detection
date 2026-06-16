@@ -96,7 +96,10 @@ exclusively from the sink; it does not scrape the engine transcript.
 - `2` — Infrastructure/configuration error
 
 The detector also emits a single machine-readable status line to stderr at the end
-of every run: `THREAT_DETECTION_STATUS: reason=<reason> exit=<code>`. The `reason`
+of every detection run: `THREAT_DETECTION_STATUS: reason=<reason> exit=<code>`.
+(Informational modes that exit before running detection — `--help` and `--version` —
+emit no status line, so callers should not treat its absence in those modes as a
+malfunction.) The `reason`
 distinguishes outcomes that share exit code `2` — notably `invalid_report_exhausted`
 (the engine ran but the model never recorded a valid verdict) from `engine_error`,
 `config_error`, and `cancelled`. Integration wrappers use this to decide the
