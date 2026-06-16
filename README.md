@@ -99,10 +99,10 @@ The detector also emits a single machine-readable status line to stderr at the e
 of every detection run: `THREAT_DETECTION_STATUS: reason=<reason> exit=<code>`.
 (Informational modes that exit before running detection — `--help` and `--version` —
 emit no status line, so callers should not treat its absence in those modes as a
-malfunction.) The `reason`
-distinguishes outcomes that share exit code `2` — notably `invalid_report_exhausted`
-(the engine ran but the model never recorded a valid verdict) from `engine_error`,
-`config_error`, and `cancelled`. Integration wrappers use this to decide the
+malfunction.) The `reason` distinguishes outcomes that share exit code `2` — notably
+`invalid_report_exhausted` (the engine ran but the model never recorded a valid
+verdict) from `engine_error`, `config_error`, and `cancelled`. Integration wrappers
+use this to decide the
 detection step's success/failure outcome without being stricter than `gh-aw`: a
 recorded verdict (exit 0/1) and an `invalid_report_exhausted` outcome do not fail
 the step, so warn-mode workflows proceed exactly as they do under `gh-aw`'s native
