@@ -105,8 +105,31 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
     # outcome (reason=invalid_report_exhausted, exit 2) as a step failure — otherwise
     # the common flaky-output case would block safe outputs even in warn mode, where
     # gh-aw merely warns and proceeds. Only genuine engine/infra failures propagate.
+    codex_config_setup = ""
+    if engine == "codex":
+        # Codex ignores OPENAI_BASE_URL and would otherwise bypass the AWF api-proxy,
+        # dialing api.openai.com directly over a websocket
+        # (wss://api.openai.com/v1/responses). OpenAI then rejects the injected
+        # placeholder key with a 401. Write a CODEX_HOME/config.toml that points
+        # Codex at the AWF OpenAI proxy provider and disables websockets (the proxy
+        # only speaks plain HTTPS), mirroring the gh-aw-generated codex smoke. The
+        # codex subprocess threat-detect spawns inherits CODEX_HOME from this
+        # exported environment.
+        codex_config_setup = (
+            "export CODEX_HOME=/tmp/gh-aw/threat-detection/codex; "
+            'mkdir -p "$CODEX_HOME"; '
+            "printf 'model_provider = \"openai-proxy\"\\n\\n"
+            "[model_providers.openai-proxy]\\n"
+            "name = \"OpenAI AWF proxy\"\\n"
+            "base_url = \"http://172.30.0.30:10000\"\\n"
+            "env_key = \"OPENAI_API_KEY\"\\n"
+            "supports_websockets = false\\n' "
+            '> "$CODEX_HOME/config.toml"; '
+            'chmod 600 "$CODEX_HOME/config.toml"; '
+        )
     detector_command = (
-        'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin '
+        codex_config_setup
+        + 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin '
         '2>/dev/null | paste -sd: -):$PATH"; '
         '[ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; '
         'result_path="/tmp/gh-aw/threat-detection/result.json"; '
