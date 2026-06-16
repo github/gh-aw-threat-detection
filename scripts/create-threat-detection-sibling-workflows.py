@@ -74,6 +74,19 @@ def engine_env(engine: str) -> str:
     raise ValueError(f"unsupported engine: {engine}")
 
 
+def detection_model_expr(engine: str) -> str:
+    # Mirror the model defaults the gh-aw-generated smokes use for the detection
+    # phase. Under AWF token steering the engine CLI runs in BYOK/offline mode,
+    # which requires an explicit model (an empty model breaks Copilot/Codex).
+    if engine == "copilot":
+        return "${{ vars.GH_AW_MODEL_DETECTION_COPILOT || vars.GH_AW_DEFAULT_MODEL_COPILOT || 'claude-sonnet-4.6' }}"
+    if engine == "claude":
+        return "${{ vars.GH_AW_MODEL_DETECTION_CLAUDE || vars.GH_AW_DEFAULT_MODEL_CLAUDE || '' }}"
+    if engine == "codex":
+        return "${{ vars.GH_AW_MODEL_DETECTION_CODEX || vars.GH_AW_DEFAULT_MODEL_CODEX || 'gpt-5.4' }}"
+    raise ValueError(f"unsupported engine: {engine}")
+
+
 def replacement_steps(engine: str, workflow_description: str, awf_config_line: str, awf_command_line: str, awf_credits_line: str = "") -> str:
     runner_temp = "${RUNNER_TEMP}"
     credits_block = indent(awf_credits_line, 4) + "\n" if awf_credits_line else ""
@@ -122,7 +135,7 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
   timeout-minutes: 20
   env:
 {indent(engine_env(engine), 4)}
-    THREAT_DETECTION_MODEL: ${{{{ vars.GH_AW_MODEL_DETECTION_{engine.upper()} || '' }}}}
+    THREAT_DETECTION_MODEL: {detection_model_expr(engine)}
     WORKFLOW_DESCRIPTION: {workflow_description}
     WORKFLOW_NAME: ${{{{ github.workflow }}}}
   run: |
