@@ -70,7 +70,13 @@ def engine_env(engine: str) -> str:
     if engine == "claude":
         return """ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}"""
     if engine == "codex":
-        return """CODEX_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}"""
+        # The codex CLI authenticates with OPENAI_API_KEY; CODEX_API_KEY alone
+        # leaves it without an auth header (401 from api.openai.com). Mirror the
+        # gh-aw-generated codex smoke, which sets both.
+        return (
+            "CODEX_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}\n"
+            "OPENAI_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}"
+        )
     raise ValueError(f"unsupported engine: {engine}")
 
 

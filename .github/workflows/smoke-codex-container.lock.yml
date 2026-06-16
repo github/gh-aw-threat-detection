@@ -1488,6 +1488,7 @@ jobs:
         timeout-minutes: 20
         env:
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.CODEX_API_KEY || secrets.OPENAI_API_KEY }}
           THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_CODEX || vars.GH_AW_DEFAULT_MODEL_CODEX || 'gpt-5.4' }}
           WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Codex engine execution in this repository"
           WORKFLOW_NAME: ${{ github.workflow }}
