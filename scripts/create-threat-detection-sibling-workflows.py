@@ -90,19 +90,32 @@ def detection_model_expr(engine: str) -> str:
 def replacement_steps(engine: str, workflow_description: str, awf_config_line: str, awf_command_line: str, awf_credits_line: str = "") -> str:
     runner_temp = "${RUNNER_TEMP}"
     credits_block = indent(awf_credits_line, 4) + "\n" if awf_credits_line else ""
+    # The verdict is conveyed to the host via the THREAT_DETECTION_RESULT log line
+    # (tee'd into detection.log and parsed downstream), mirroring how gh-aw's native
+    # engine step communicates. The step's success/failure outcome is a *separate*
+    # signal that gh-aw's parser escalates (a parse_error only hard-fails when the
+    # execution step itself failed). To avoid being stricter than gh-aw, the wrapper
+    # must NOT surface a recorded verdict or an "engine ran but recorded no verdict"
+    # outcome (reason=invalid_report_exhausted, exit 2) as a step failure — otherwise
+    # the common flaky-output case would block safe outputs even in warn mode, where
+    # gh-aw merely warns and proceeds. Only genuine engine/infra failures propagate.
     detector_command = (
         'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin '
         '2>/dev/null | paste -sd: -):$PATH"; '
         '[ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; '
         'result_path="/tmp/gh-aw/threat-detection/result.json"; '
+        'status_path="/tmp/gh-aw/threat-detection/detection-status.txt"; '
         f"args=(--engine {engine}); "
         'if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; '
         'run_status=0; '
-        '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection || run_status=$?; '
+        '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection 2>"$status_path" || run_status=$?; '
+        'cat "$status_path" >&2 || true; '
         'if [ -f "$result_path" ]; then '
         "python3 -c 'import json,sys; print(\"THREAT_DETECTION_RESULT:\" + json.dumps(json.load(open(sys.argv[1])), separators=(\",\", \":\")))' "
         '"$result_path"; '
+        'exit 0; '
         'fi; '
+        'if grep -q "reason=invalid_report_exhausted" "$status_path" 2>/dev/null; then exit 0; fi; '
         'exit "$run_status"'
     )
     shell = f'''- name: Log in to GHCR for detector image
