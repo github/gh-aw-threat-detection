@@ -34,6 +34,9 @@ const (
 	exitThreat = 1
 	exitError  = 2
 
+	// defaultEngine matches engine.New's default when --engine is unset.
+	defaultEngine = "copilot"
+
 	detectionCorrectionPrefix      = "Your previous response did not record a verdict"
 	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
 	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
@@ -220,7 +223,7 @@ func run() (code int) {
 func emitUsage(engineID, model, transcript, usageOutput string) {
 	engineName := engineID
 	if engineName == "" {
-		engineName = "copilot"
+		engineName = defaultEngine
 	}
 	tokens, cost := detector.ParseUsage(transcript)
 	usage := detector.Usage{

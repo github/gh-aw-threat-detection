@@ -66,7 +66,9 @@ func ParseUsage(transcript string) (tokens int, cost float64) {
 	return tokens, cost
 }
 
-// parseCodexTextTokens extracts a token count from Codex textual log lines.
+// parseCodexTextTokens extracts a token count from a single Codex textual log
+// line. It returns the first pattern that matches on the line; ParseUsage
+// aggregates the largest count across all lines.
 func parseCodexTextTokens(line string) int {
 	if m := codexTokensUsedPattern.FindStringSubmatch(line); len(m) > 1 {
 		if n, err := strconv.Atoi(m[1]); err == nil {
@@ -86,12 +88,12 @@ func parseCodexTextTokens(line string) int {
 func parseUsageJSONLine(line string) (tokens int, cost float64) {
 	jsonStr := line
 	if !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
-		open := strings.Index(line, "{")
+		openIdx := strings.Index(line, "{")
 		closeIdx := strings.LastIndex(line, "}")
-		if open == -1 || closeIdx <= open {
+		if openIdx == -1 || closeIdx <= openIdx {
 			return 0, 0
 		}
-		jsonStr = line[open : closeIdx+1]
+		jsonStr = line[openIdx : closeIdx+1]
 	}
 
 	var data map[string]any
