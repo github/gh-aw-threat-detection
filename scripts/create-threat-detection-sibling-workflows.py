@@ -98,13 +98,14 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
     credits_block = indent(awf_credits_line, 4) + "\n" if awf_credits_line else ""
     codex_config_setup = ""
     if engine == "codex":
-        # Codex ignores OPENAI_BASE_URL and would otherwise dial api.openai.com
-        # directly over a websocket (wss://api.openai.com/v1/responses), which the
-        # AWF api-proxy rejects with a 401 on the injected placeholder key. Write a
-        # CODEX_HOME/config.toml that points Codex at the AWF OpenAI proxy provider
-        # and disables websockets (the proxy only speaks plain HTTPS), mirroring the
-        # gh-aw-generated codex smoke. The codex subprocess threat-detect spawns
-        # inherits CODEX_HOME from this exported environment.
+        # Codex ignores OPENAI_BASE_URL and would otherwise bypass the AWF api-proxy,
+        # dialing api.openai.com directly over a websocket
+        # (wss://api.openai.com/v1/responses). OpenAI then rejects the injected
+        # placeholder key with a 401. Write a CODEX_HOME/config.toml that points
+        # Codex at the AWF OpenAI proxy provider and disables websockets (the proxy
+        # only speaks plain HTTPS), mirroring the gh-aw-generated codex smoke. The
+        # codex subprocess threat-detect spawns inherits CODEX_HOME from this
+        # exported environment.
         codex_config_setup = (
             "export CODEX_HOME=/tmp/gh-aw/threat-detection/codex; "
             'mkdir -p "$CODEX_HOME"; '
@@ -115,6 +116,7 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
             "env_key = \"OPENAI_API_KEY\"\\n"
             "supports_websockets = false\\n' "
             '> "$CODEX_HOME/config.toml"; '
+            'chmod 600 "$CODEX_HOME/config.toml"; '
         )
     detector_command = (
         codex_config_setup
