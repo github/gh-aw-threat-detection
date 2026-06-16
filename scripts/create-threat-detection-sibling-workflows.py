@@ -48,17 +48,20 @@ def extract_workflow_description(text: str) -> str:
     return match.group(1)
 
 
-def extract_awf_lines(text: str) -> tuple[str, str]:
+def extract_awf_lines(text: str) -> tuple[str, str, str]:
     config_line = ""
     awf_line = ""
+    credits_line = ""
     for line in text.splitlines():
+        if line.lstrip().startswith("GH_AW_MAX_AI_CREDITS="):
+            credits_line = line
         if line.startswith("          printf '%s\\n' ") and "gh-aw-firewall" in line:
             config_line = line
         if line.startswith("          sudo -E awf ") and line.rstrip().endswith("\\"):
             awf_line = line
     if not config_line or not awf_line:
         raise ValueError("could not find generated AWF setup lines")
-    return config_line.strip(), awf_line.strip()
+    return config_line.strip(), awf_line.strip(), credits_line.strip()
 
 
 def engine_env(engine: str) -> str:
@@ -71,8 +74,9 @@ def engine_env(engine: str) -> str:
     raise ValueError(f"unsupported engine: {engine}")
 
 
-def replacement_steps(engine: str, workflow_description: str, awf_config_line: str, awf_command_line: str) -> str:
+def replacement_steps(engine: str, workflow_description: str, awf_config_line: str, awf_command_line: str, awf_credits_line: str = "") -> str:
     runner_temp = "${RUNNER_TEMP}"
+    credits_block = indent(awf_credits_line, 4) + "\n" if awf_credits_line else ""
     detector_command = (
         'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin '
         '2>/dev/null | paste -sd: -):$PATH"; '
@@ -125,7 +129,7 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
     set -o pipefail
     touch /tmp/gh-aw/agent-step-summary.md
     (umask 177 && touch /tmp/gh-aw/threat-detection/detection.log)
-{indent(awf_config_line, 4)}
+{credits_block}{indent(awf_config_line, 4)}
     # shellcheck disable=SC1003
 {indent(awf_command_line, 4)}
       -- /bin/bash -c {shell_single_quote(detector_command)} 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log'''
@@ -159,7 +163,7 @@ def transform(source: Path) -> str:
     text = re.sub(r'^run-name: ".*"$', f'run-name: "{sibling_name}"', text, count=1, flags=re.MULTILINE)
     text = add_packages_read(text)
     workflow_description = extract_workflow_description(text)
-    awf_config_line, awf_command_line = extract_awf_lines(text)
+    awf_config_line, awf_command_line, awf_credits_line = extract_awf_lines(text)
 
     end = re.search(r"^      - name: Upload threat detection log\n", text, flags=re.MULTILINE)
     if not end:
@@ -178,7 +182,7 @@ def transform(source: Path) -> str:
         f"# gh-aw-threat-detection-sibling: generated from {source.name} by "
         "scripts/create-threat-detection-sibling-workflows.py\n"
     )
-    body = text[: start.start()] + replacement_steps(engine, workflow_description, awf_config_line, awf_command_line) + "\n" + text[end.start():]
+    body = text[: start.start()] + replacement_steps(engine, workflow_description, awf_config_line, awf_command_line, awf_credits_line) + "\n" + text[end.start():]
     lines = body.splitlines()
     insert_at = 2 if lines and lines[0].startswith("# gh-aw-metadata:") else 0
     lines.insert(insert_at, header.rstrip("\n"))
