@@ -96,15 +96,26 @@ def detection_model_expr(engine: str) -> str:
 def replacement_steps(engine: str, workflow_description: str, awf_config_line: str, awf_command_line: str, awf_credits_line: str = "") -> str:
     runner_temp = "${RUNNER_TEMP}"
     credits_block = indent(awf_credits_line, 4) + "\n" if awf_credits_line else ""
-    # The verdict is conveyed to the host via the THREAT_DETECTION_RESULT log line
-    # (tee'd into detection.log and parsed downstream), mirroring how gh-aw's native
-    # engine step communicates. The step's success/failure outcome is a *separate*
-    # signal that gh-aw's parser escalates (a parse_error only hard-fails when the
-    # execution step itself failed). To avoid being stricter than gh-aw, the wrapper
-    # must NOT surface a recorded verdict or an "engine ran but recorded no verdict"
-    # outcome (reason=invalid_report_exhausted, exit 2) as a step failure — otherwise
-    # the common flaky-output case would block safe outputs even in warn mode, where
+    # The verdict crosses the AWF sandbox boundary as a file: the detector writes
+    # detection_result.json into /tmp/gh-aw/threat-detection, which is bind-mounted
+    # read-write into the sandbox (the rw mount injected below overrides the parent
+    # read-only host-access view, mirroring gh-aw's safe-outputs staging pattern).
+    # The host-side `threat-detect conclude` step then reads that file directly — no
+    # log scraping. The step's success/failure outcome is a *separate* signal that
+    # the conclude step escalates (a parse_error only hard-fails when the execution
+    # step itself failed). To avoid being stricter than gh-aw, the wrapper must NOT
+    # surface an "engine ran but recorded no verdict" outcome
+    # (reason=invalid_report_exhausted, exit 2) as a step failure — otherwise the
+    # common flaky-output case would block safe outputs even in warn mode, where
     # gh-aw merely warns and proceeds. Only genuine engine/infra failures propagate.
+    #
+    # Make the threat-detection dir writable inside the sandbox so the detector can
+    # persist detection_result.json for the host to read.
+    rw_mount = '--mount "/tmp/gh-aw/threat-detection:/tmp/gh-aw/threat-detection:rw"'
+    awf_command_line = awf_command_line.rstrip()
+    if not awf_command_line.endswith("\\"):
+        raise ValueError("awf command line must end with a line continuation")
+    awf_command_line = awf_command_line[:-1].rstrip() + f" {rw_mount} \\"
     codex_config_setup = ""
     if engine == "codex":
         # Codex ignores OPENAI_BASE_URL and would otherwise bypass the AWF api-proxy,
@@ -132,18 +143,14 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
         + 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin '
         '2>/dev/null | paste -sd: -):$PATH"; '
         '[ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; '
-        'result_path="/tmp/gh-aw/threat-detection/result.json"; '
+        'result_path="/tmp/gh-aw/threat-detection/detection_result.json"; '
         'status_path="/tmp/gh-aw/threat-detection/detection-status.txt"; '
         f"args=(--engine {engine}); "
         'if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; '
         'run_status=0; '
         '"${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection 2>"$status_path" || run_status=$?; '
         'cat "$status_path" >&2 || true; '
-        'if [ -f "$result_path" ]; then '
-        "python3 -c 'import json,sys; print(\"THREAT_DETECTION_RESULT:\" + json.dumps(json.load(open(sys.argv[1])), separators=(\",\", \":\")))' "
-        '"$result_path"; '
-        'exit 0; '
-        'fi; '
+        'if [ -f "$result_path" ]; then exit 0; fi; '
         'if grep -q "reason=invalid_report_exhausted" "$status_path" 2>/dev/null; then exit 0; fi; '
         'exit "$run_status"'
     )
@@ -206,6 +213,50 @@ def add_packages_read(text: str) -> str:
     return updated
 
 
+def conclude_steps(runner_temp: str = "${RUNNER_TEMP}") -> str:
+    # Upload the structured verdict artifact alongside the diagnostic log, then run
+    # the host-side `threat-detect conclude` subcommand to read detection_result.json
+    # and emit the gh-aw job-output contract. The detector binary only exists when
+    # detection actually ran; when it was skipped the binary was never extracted, so
+    # the conclude step short-circuits to the skipped contract. Strict mode
+    # (GH_AW_DETECTION_CONTINUE_ON_ERROR=false, matching the gh-aw source smokes and
+    # no continue-on-error) lets a non-zero conclude exit fail the detection job and
+    # gate safe_outputs (needs.detection.result == 'success').
+    bin_path = f"{runner_temp}/gh-aw/threat-detect-bin/threat-detect"
+    shell = f'''- name: Upload threat detection artifacts
+  if: always() && steps.detection_guard.outputs.run_detection == 'true'
+  uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+  with:
+    name: detection
+    path: |
+      /tmp/gh-aw/threat-detection/detection_result.json
+      /tmp/gh-aw/threat-detection/detection.log
+    if-no-files-found: ignore
+- name: Parse and conclude threat detection
+  id: detection_conclusion
+  if: always()
+  env:
+    RUN_DETECTION: ${{{{ steps.detection_guard.outputs.run_detection }}}}
+    DETECTION_AGENTIC_EXECUTION_OUTCOME: ${{{{ steps.detection_agentic_execution.outcome }}}}
+    GH_AW_DETECTION_CONTINUE_ON_ERROR: "false"
+  run: |
+    bin="{bin_path}"
+    if [ ! -x "$bin" ]; then
+      {{
+        echo "conclusion=skipped"
+        echo "success=true"
+        echo "reason="
+      }} >> "$GITHUB_OUTPUT"
+      {{
+        echo "GH_AW_DETECTION_CONCLUSION=skipped"
+        echo "GH_AW_DETECTION_REASON="
+      }} >> "$GITHUB_ENV"
+      exit 0
+    fi
+    "$bin" conclude --result-file /tmp/gh-aw/threat-detection/detection_result.json'''
+    return indent(shell, 6)
+
+
 def transform(source: Path) -> str:
     if source.name not in ENGINES:
         raise ValueError(f"unsupported workflow: {source.name}")
@@ -233,11 +284,28 @@ def transform(source: Path) -> str:
     if not start or start.start() >= end.start():
         raise ValueError(f"could not find generated detection execution step range in {source}")
 
+    # The gh-aw source's Upload + Parse steps (from end.start() up to the next
+    # top-level job, e.g. "  safe_outputs:") are replaced wholesale by this repo's
+    # file-based upload + conclude steps. Everything from the next job onward is
+    # preserved verbatim.
+    tail = text[end.start():]
+    next_job = re.search(r"^  [A-Za-z_][\w-]*:\n", tail, flags=re.MULTILINE)
+    if not next_job:
+        raise ValueError(f"could not find job following detection steps in {source}")
+    remainder = tail[next_job.start():]
+
     header = (
         f"# gh-aw-threat-detection-sibling: generated from {source.name} by "
         "scripts/create-threat-detection-sibling-workflows.py\n"
     )
-    body = text[: start.start()] + replacement_steps(engine, workflow_description, awf_config_line, awf_command_line, awf_credits_line) + "\n" + text[end.start():]
+    body = (
+        text[: start.start()]
+        + replacement_steps(engine, workflow_description, awf_config_line, awf_command_line, awf_credits_line)
+        + "\n"
+        + conclude_steps()
+        + "\n\n"
+        + remainder
+    )
     lines = body.splitlines()
     insert_at = 2 if lines and lines[0].startswith("# gh-aw-metadata:") else 0
     lines.insert(insert_at, header.rstrip("\n"))

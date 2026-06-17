@@ -110,6 +110,30 @@ the step, so warn-mode workflows proceed exactly as they do under `gh-aw`'s nati
 engine (which treats a missing verdict as a recoverable `parse_error`). Only genuine
 engine/config failures surface as a step failure. See spec TD-21a.
 
+#### Concluding a run (`conclude`)
+
+In `gh-aw`-compiled workflows the detector runs inside the AWF sandbox, where the
+verdict cannot reach the host over stdout. Instead, detection writes its structured
+result to `detection_result.json` in a read-write mount, and a host-side step reads
+it back with the `conclude` subcommand:
+
+```bash
+threat-detect conclude --result-file /tmp/gh-aw/threat-detection/detection_result.json
+```
+
+`conclude` reproduces the `gh-aw` job-output contract — it writes `conclusion`,
+`reason`, and `success` to `GITHUB_OUTPUT` and exports `GH_AW_DETECTION_CONCLUSION`
+and `GH_AW_DETECTION_REASON` to `GITHUB_ENV`. It reads these environment inputs:
+
+- `RUN_DETECTION` — when not `"true"`, the verdict is `skipped`/`success`
+- `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` is warn mode
+- `DETECTION_AGENTIC_EXECUTION_OUTCOME` — `"failure"` makes `agent_failure`/`parse_error` hard-fail
+
+A missing result file reports `agent_failure` ("Detection result file not found
+at: <path>"), a malformed file reports `parse_error`, and detected threats report
+`threat_detected`. There is no log-scraping fallback: if the file is absent, the
+step fails loudly.
+
 ### AI Credits and Token Usage
 
 The threat-detection pass is a **separate agentic engine invocation** from the main
