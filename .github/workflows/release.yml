@@ -18,9 +18,6 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Validate lifecycle registry
-        run: make lifecycle-validate
-
       - name: Run tests
         run: go test -v -race ./...
 
@@ -62,9 +59,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Record the release-asset SHA-256 in the release body so the promote and
-          # yank workflows can verify and pin the exact binary that was published —
-          # the digest contract previously provided by the container image.
+          # Record the release-asset SHA-256 in the release body so the promote
+          # workflow can verify and pin the exact binary that was published.
           BINARY_SHA256="sha256:$(sha256sum dist/threat-detect-linux-amd64 | awk '{print $1}')"
           gh release create "${GITHUB_REF_NAME}" \
             dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \

@@ -32,17 +32,16 @@ pkg/detector/             Core detection logic
   ├── result.go           Result struct + JSON Schema + structured sink parser/writer
   ├── static.go           PromptAnalysis: trusted-template vs untrusted-input breakdown
   ├── correction.go       Self-correction retry prompt builders
-  ├── lifecycle_registry_test.go  Validates releases/threat-detection-lifecycle.json
+
   └── prompts/            Embedded markdown prompts (threat_detection.md)
 pkg/engine/               AI engine abstraction
   ├── engine.go           copilot/claude/codex CLI adapters; Copilot uses runCLIWithPromptFile, Claude uses runCLI with stdin, Codex passes prompts via codexArgs/runCLIEnv
   └── tool.go             threat_detection_result wrapper provisioning + result-sink watcher
 specs/                    Normative spec (threat-detection-spec.md)
-releases/                 Lifecycle registry (threat-detection-lifecycle.json)
 scripts/                  create-threat-detection-sibling-workflows.py (regenerates *-container.lock.yml)
 skills/                   Repo-relevant agent skills (console-rendering, error-messages)
 scratchpad/               Retained design references inherited from gh-aw
-.github/workflows/        CI, release, promote, yank, replay-detection, smoke-{copilot,claude,codex}[-container]
+.github/workflows/        CI, release, promote, replay-detection, smoke-{copilot,claude,codex}[-container]
 .devcontainer/            Codespaces / devcontainer setup (Go, gh, Copilot CLI, optional Vertex)
 Makefile                  All build/test/lint/release targets
 ```
@@ -62,7 +61,6 @@ make golint          # golangci-lint (requires deps-dev)
 make fmt             # go fmt ./...
 make fmt-check       # CI-style gofmt check
 make security-scan   # gosec + govulncheck
-make lifecycle-validate    # validate releases/threat-detection-lifecycle.json
 make smoke           # build + run bin/threat-detect --version
 make sbom            # SPDX + CycloneDX SBOMs (requires syft)
 make agent-finish    # full maintainer validation: deps-dev, fmt, lint, build, test, security-scan
@@ -126,29 +124,13 @@ The detector reads the verdict exclusively from the out-of-band result sink. The
 - The engine reports its verdict in-session by calling the `threat_detection_result` tool, which writes JSON to an out-of-band result sink (`pkg/engine/tool.go`); the sink is the sole source of the verdict, and the subprocess is cancelled as soon as a valid result is written.
 - If no sink result is written, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried (`--retries`, default 1); retry exhaustion is an infrastructure error. The engine transcript is never parsed for the result.
 
-## Result Lifecycle Registry
-
-`releases/threat-detection-lifecycle.json` is the **machine-readable source of truth** for release status. The parent `gh-aw` orchestrator vendors or fetches it before downloading/running a detector binary.
-
-| Status       | Behavior `gh-aw` must enforce |
-|--------------|-------------------------------|
-| `active`     | Run normally |
-| `deprecated` | Warn (Actions annotation + step summary), then run |
-| `obsolete`   | **Fail closed** before the detector runs |
-| `yanked`     | **Fail closed** — stronger than obsolete; explicit pins must not be silently rewritten |
-
-**`make lifecycle-validate` MUST pass** before changing this file. The validator is `pkg/detector/lifecycle_registry_test.go` (`TestThreatDetectionLifecycleRegistry`).
-
-See [DEVGUIDE.md](DEVGUIDE.md#release-process) for the prerelease → promote → yank workflows.
-
 ## Release & Promotion Model
 
-Four workflows orchestrate releases:
+Three workflows orchestrate releases:
 
 1. `.github/workflows/create-release-tag.yml` — manual; pushes `vX.Y.Z`.
 2. `.github/workflows/release.yml` — triggered by tag push; gated by `release-publish` environment; builds + publishes the `threat-detect-linux-amd64` binary as GitHub Release assets in a **prerelease**, recording the asset sha256 in the release notes.
 3. `.github/workflows/promote-release.yml` — manual; gated by `release-promote`; re-downloads the asset, verifies its sha256 against the recorded value, and marks the GitHub release **Latest** (stable).
-4. `.github/workflows/yank-release.yml` — manual; updates lifecycle registry and (if needed) moves the **Latest** release pointer to a safe stable replacement.
 
 The `latest` (non-prerelease) GitHub release and "Latest" badge **only move on explicit promotion** — never automatically.
 
