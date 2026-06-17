@@ -106,7 +106,9 @@ func parseUsageJSONLine(line string) (tokens int, cost float64) {
 	// Ensure the decoder consumed the entire input, mirroring json.Unmarshal
 	// semantics. If extra non-whitespace content follows the first JSON value
 	// (e.g. log noise that was sliced in by the openIdx/closeIdx heuristic),
-	// reject the parse to avoid misattributing tokens/cost.
+	// reject the parse to avoid misattributing tokens/cost. Two rejection cases:
+	//   nil  — a second valid JSON value follows (e.g. adjacent objects)
+	//   !EOF — malformed trailing content (Decode returned a parse error)
 	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
 		return 0, 0
 	}
