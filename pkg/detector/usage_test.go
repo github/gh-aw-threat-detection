@@ -63,3 +63,27 @@ func TestParseUsageNoUsage(t *testing.T) {
 		t.Fatalf("tokens=%d cost=%v, want 0/0", tokens, cost)
 	}
 }
+
+func TestParseUsageStringEncodedNumbers(t *testing.T) {
+	// Engines occasionally emit token counts as strings; toInt/toFloat should handle them.
+	transcript := `{"tokens":"750","billing":{"total_cost_usd":"0.05"}}`
+	tokens, cost := ParseUsage(transcript)
+	if tokens != 750 {
+		t.Fatalf("tokens = %d, want 750", tokens)
+	}
+	if cost != 0.05 {
+		t.Fatalf("cost = %v, want 0.05", cost)
+	}
+}
+
+func TestParseUsageExtraTokensAfterJSON(t *testing.T) {
+	// A line that starts with '{' and ends with '}' bypasses the openIdx/closeIdx
+	// slicing, so the full string (two adjacent JSON objects) is fed to the decoder.
+	// json.Decoder.Decode() would accept the first object and leave the second; the
+	// EOF-check guard must reject this to prevent misattribution.
+	transcript := `{"tokens":100}{"extra":999}`
+	tokens, cost := ParseUsage(transcript)
+	if tokens != 0 || cost != 0 {
+		t.Fatalf("tokens=%d cost=%v, want 0/0 (adjacent JSON objects should reject)", tokens, cost)
+	}
+}
