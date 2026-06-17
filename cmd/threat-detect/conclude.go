@@ -86,14 +86,21 @@ func (c *concluder) run(resultFile string) int {
 		return concludeExitProceed
 	}
 
-	// Step 2 — locate the structured verdict file. A missing file means the
-	// detection run never produced a verdict (agent/infra failure); a present
-	// but malformed file is a parse error.
-	if _, statErr := os.Stat(resultFile); errors.Is(statErr, fs.ErrNotExist) {
-		return c.fail("agent_failure", fmt.Sprintf("%s: ❌ Detection result file not found at: %s", errCodeSystem, resultFile))
-	}
+	// Step 2 — locate and read the structured verdict file. A missing or
+	// otherwise unreadable file (not-exist, permission/IO error, or a TOCTOU
+	// where the file is removed mid-read) means the detection run never produced
+	// a readable verdict, which is a system-side agent failure (ERR_SYSTEM). Only
+	// a file that is readable but whose contents are empty or malformed is a
+	// parse error (ERR_PARSE).
 	result, err := detector.ReadResultFile(resultFile)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return c.fail("agent_failure", fmt.Sprintf("%s: ❌ Detection result file not found at: %s", errCodeSystem, resultFile))
+		}
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return c.fail("agent_failure", fmt.Sprintf("%s: ❌ Detection result file unreadable at %s: %v", errCodeSystem, resultFile, err))
+		}
 		return c.fail("parse_error", fmt.Sprintf("%s: ❌ Failed to parse detection result file %s: %v", errCodeParse, resultFile, err))
 	}
 

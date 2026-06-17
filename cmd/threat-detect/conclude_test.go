@@ -206,6 +206,35 @@ func TestConcludeContract(t *testing.T) {
 	}
 }
 
+// TestConcludeUnreadableFileIsAgentFailure verifies that an IO error reading the
+// result file (here, the path is a directory) is classified as agent_failure
+// (ERR_SYSTEM), not parse_error — unreadable files are a system-side failure,
+// while parse_error is reserved for readable-but-malformed content.
+func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
+	dir := t.TempDir()
+	// A directory at the result path yields a non-ErrNotExist *fs.PathError from
+	// os.ReadFile, deterministically across platforms and regardless of euid.
+	resultFile := filepath.Join(dir, "detection_result.json")
+	if err := os.Mkdir(resultFile, 0o755); err != nil {
+		t.Fatalf("Mkdir error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
+	}
+	if got := parseKV(t, filepath.Join(dir, "out"))["reason"]; got != "agent_failure" {
+		t.Errorf("reason output = %q, want %q", got, "agent_failure")
+	}
+}
+
 func TestConcludeThreatMessageEscaped(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := writeResultFixture(t, threatVerdict)

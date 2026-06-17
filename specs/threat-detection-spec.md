@@ -205,6 +205,19 @@ step itself failed.
 | 1 | Threat detected |
 | 2 | Infrastructure/configuration error |
 
+**TD-21a**: The exit code is an out-of-band signal for direct callers. In the
+integrated detection job the verdict is conveyed to the host via the structured
+`detection_result.json` file (TD-20b) and concluded by the `conclude` subcommand,
+not by the container exit code. The integration wrapper that maps the container
+exit code to the detection step's success/failure outcome MUST NOT be stricter
+than `gh-aw`'s native engine step: a recorded verdict (exit 0 or 1) and an
+"engine ran but recorded no verdict" outcome (exit 2 with status reason
+`invalid_report_exhausted`) MUST NOT mark the detection step as failed. Only a
+genuine engine or configuration failure (e.g. status reason `engine_error`,
+`config_error`, `cancelled`) may surface as a step failure. This prevents the
+common flaky-output case from blocking safe outputs in warn mode, where `gh-aw`
+treats a missing verdict as a recoverable `parse_error` and proceeds.
+
 ### 8.4 Environment Variables
 
 **TD-22**: The container MUST support the following environment variables:
