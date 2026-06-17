@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   build-release-artifacts:
@@ -59,33 +58,18 @@ jobs:
           name: release-artifacts
           path: dist
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        id: build-image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          build-args: |
-            VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/github/gh-aw-threat-detection:${{ github.ref_name }}
-
       - name: Create GitHub release (prerelease)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          IMAGE="ghcr.io/github/gh-aw-threat-detection"
+          # Record the release-asset SHA-256 in the release body so the promote and
+          # yank workflows can verify and pin the exact binary that was published —
+          # the digest contract previously provided by the container image.
+          BINARY_SHA256="sha256:$(sha256sum dist/threat-detect-linux-amd64 | awk '{print $1}')"
           gh release create "${GITHUB_REF_NAME}" \
             dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
             dist/checksums.txt#checksums.txt \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Container image digest: ${IMAGE}@${{ steps.build-image.outputs.digest }}" \
+            --notes "Binary asset sha256: ${BINARY_SHA256}" \
             --generate-notes \
             --prerelease

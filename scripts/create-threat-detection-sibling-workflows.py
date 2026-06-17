@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Create smoke workflow siblings that use this repo's detector container.
+"""Create smoke workflow siblings that use this repo's published detector binary.
 
 The sibling files are derived from gh-aw-generated *.lock.yml files. They keep the
 compiled workflow structure intact, but replace the generated detection engine
-steps with a detector binary extracted from ghcr.io/github/gh-aw-threat-detection
-and executed under the same AWF wrapper as the source workflow. Matching
-*-container.md source sidecars are copied from the original smoke workflow sources
-so gh-aw's stale lock-file check can verify the inherited frontmatter hash.
+steps with the detector binary downloaded as a GitHub release asset from
+github/gh-aw-threat-detection and executed under the same AWF wrapper as the
+source workflow. Matching *-container.md source sidecars are copied from the
+original smoke workflow sources so gh-aw's stale lock-file check can verify the
+inherited frontmatter hash.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
-DEFAULT_IMAGE = "ghcr.io/github/gh-aw-threat-detection:latest"
 ENGINES = {
     "smoke-copilot.lock.yml": ("copilot", "Smoke Copilot Containerized"),
     "smoke-claude.lock.yml": ("claude", "Smoke Claude Containerized"),
@@ -154,29 +154,26 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
         'if grep -q "reason=invalid_report_exhausted" "$status_path" 2>/dev/null; then exit 0; fi; '
         'exit "$run_status"'
     )
-    shell = f'''- name: Log in to GHCR for detector image
+    shell = f'''- name: Download threat detection binary
   if: always() && steps.detection_guard.outputs.run_detection == 'true'
   env:
-    GHCR_TOKEN: ${{{{ secrets.GH_AW_GITHUB_TOKEN || github.token }}}}
+    GH_TOKEN: ${{{{ secrets.GH_AW_GITHUB_TOKEN || github.token }}}}
+    THREAT_DETECTION_VERSION: ${{{{ vars.GH_AW_THREAT_DETECTION_VERSION || '' }}}}
+    DETECTOR_REPO: github/gh-aw-threat-detection
   run: |
-    if [ -n "${{GHCR_TOKEN:-}}" ]; then
-      echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{{{ github.actor }}}}" --password-stdin
+    set -euo pipefail
+    dest_dir="{runner_temp}/gh-aw/threat-detect-bin"
+    mkdir -p "$dest_dir"
+    download_dir="$(mktemp -d)"
+    trap 'rm -rf "$download_dir"' EXIT
+    args=(--repo "$DETECTOR_REPO" --pattern threat-detect-linux-amd64 --pattern checksums.txt --dir "$download_dir")
+    if [ -n "${{THREAT_DETECTION_VERSION:-}}" ]; then
+      gh release download "$THREAT_DETECTION_VERSION" "${{args[@]}}"
+    else
+      gh release download "${{args[@]}}"
     fi
-- name: Pull threat detection container
-  if: always() && steps.detection_guard.outputs.run_detection == 'true'
-  env:
-    THREAT_DETECTION_IMAGE: ${{{{ vars.GH_AW_THREAT_DETECTION_IMAGE || '{DEFAULT_IMAGE}' }}}}
-  run: docker pull "$THREAT_DETECTION_IMAGE"
-- name: Extract threat detection binary from container
-  if: always() && steps.detection_guard.outputs.run_detection == 'true'
-  env:
-    THREAT_DETECTION_IMAGE: ${{{{ vars.GH_AW_THREAT_DETECTION_IMAGE || '{DEFAULT_IMAGE}' }}}}
-  run: |
-    mkdir -p "{runner_temp}/gh-aw/threat-detect-bin"
-    container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
-    trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-    docker cp "$container_id:/usr/local/bin/threat-detect" "{runner_temp}/gh-aw/threat-detect-bin/threat-detect"
-    chmod 755 "{runner_temp}/gh-aw/threat-detect-bin/threat-detect"
+    ( cd "$download_dir" && sha256sum --check --ignore-missing checksums.txt )
+    install -m 0755 "$download_dir/threat-detect-linux-amd64" "$dest_dir/threat-detect"
 - name: Execute threat detection with AWF
   if: always() && steps.detection_guard.outputs.run_detection == 'true'
   continue-on-error: true
@@ -196,21 +193,6 @@ def replacement_steps(engine: str, workflow_description: str, awf_config_line: s
 {indent(awf_command_line, 4)}
       -- /bin/bash -c {shell_single_quote(detector_command)} 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log'''
     return indent(shell, 6)
-
-
-def add_packages_read(text: str) -> str:
-    pattern = re.compile(r"(  detection:\n(?:.*?\n)*?    permissions:\n      contents: read\n)", re.MULTILINE)
-
-    def repl(match: re.Match[str]) -> str:
-        block = match.group(1)
-        if "      packages: read\n" in block:
-            return block
-        return block + "      packages: read\n"
-
-    updated, count = pattern.subn(repl, text, count=1)
-    if count != 1:
-        raise ValueError("could not find detection job permissions block")
-    return updated
 
 
 def conclude_steps(runner_temp: str = "${RUNNER_TEMP}") -> str:
@@ -267,7 +249,6 @@ def transform(source: Path) -> str:
     text = text.replace(source.name, output_name)
     text = re.sub(r'^name: ".*"$', f'name: "{sibling_name}"', text, count=1, flags=re.MULTILINE)
     text = re.sub(r'^run-name: ".*"$', f'run-name: "{sibling_name}"', text, count=1, flags=re.MULTILINE)
-    text = add_packages_read(text)
     workflow_description = extract_workflow_description(text)
     awf_config_line, awf_command_line, awf_credits_line = extract_awf_lines(text)
 

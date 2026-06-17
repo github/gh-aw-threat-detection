@@ -40,7 +40,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   yank:
@@ -48,7 +47,6 @@ jobs:
     environment:
       name: release-yank
     env:
-      IMAGE: ghcr.io/github/gh-aw-threat-detection
       LIFECYCLE_REGISTRY: releases/threat-detection-lifecycle.json
       YANKED_TAG: ${{ inputs.tag }}
       REPLACEMENT_TAG: ${{ inputs.replacement_tag }}
@@ -86,28 +84,20 @@ jobs:
             fi
           }
 
-          extract_image_ref() {
+          extract_asset_sha256() {
             local tag="$1"
             local body="$2"
-            local image_ref
-            image_ref=$(printf '%s' "$body" | awk -v prefix="Container image digest: ${IMAGE}@" 'index($0, prefix) == 1 { sub(/^Container image digest: /, ""); print; exit }')
-            if [ -z "$image_ref" ]; then
-              echo "::error::Release ${tag} does not record a container image digest."
+            local digest
+            digest=$(printf '%s' "$body" | awk 'index($0, "Binary asset sha256: ") == 1 { sub(/^Binary asset sha256: /, ""); print; exit }')
+            if [ -z "$digest" ]; then
+              echo "::error::Release ${tag} does not record a binary asset sha256."
               exit 1
             fi
-            case "$image_ref" in
-              "${IMAGE}@sha256:"*) ;;
-              *)
-                echo "::error::Release ${tag} records an unsupported image digest: ${image_ref}."
-                exit 1
-                ;;
-            esac
-            local digest="${image_ref#${IMAGE}@}"
             if ! echo "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
-              echo "::error::Release ${tag} records an invalid sha256 digest: ${digest}."
+              echo "::error::Release ${tag} records an invalid binary asset sha256: ${digest}."
               exit 1
             fi
-            printf '%s' "$image_ref"
+            printf '%s' "$digest"
           }
 
           validate_tag "$YANKED_TAG"
@@ -134,8 +124,7 @@ jobs:
           fi
 
           yanked_release=$(gh release view "$YANKED_TAG" --json body,isPrerelease,name,tagName)
-          replacement_ref=""
-          replacement_digest=""
+          replacement_sha256=""
 
           if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
             replacement_release=$(gh release view "$REPLACEMENT_TAG" --json body,isPrerelease,name,tagName)
@@ -153,38 +142,45 @@ jobs:
           fi
 
           yanked_body=$(printf '%s' "$yanked_release" | jq -r '.body // ""')
-          yanked_ref=$(extract_image_ref "$YANKED_TAG" "$yanked_body")
+          yanked_sha256=$(extract_asset_sha256 "$YANKED_TAG" "$yanked_body")
           if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
             replacement_body=$(printf '%s' "$replacement_release" | jq -r '.body // ""')
-            replacement_ref=$(extract_image_ref "$REPLACEMENT_TAG" "$replacement_body")
-            replacement_digest="${replacement_ref#${IMAGE}@}"
+            replacement_sha256=$(extract_asset_sha256 "$REPLACEMENT_TAG" "$replacement_body")
           fi
 
           {
-            echo "yanked_ref=${yanked_ref}"
-            echo "replacement_ref=${replacement_ref}"
-            echo "yanked_digest=${yanked_ref#${IMAGE}@}"
-            echo "replacement_digest=${replacement_digest}"
+            echo "yanked_sha256=${yanked_sha256}"
+            echo "replacement_sha256=${replacement_sha256}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify images are pullable
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          YANKED_SHA256: ${{ steps.verify.outputs.yanked_sha256 }}
+          REPLACEMENT_SHA256: ${{ steps.verify.outputs.replacement_sha256 }}
         run: |
-          docker pull "${{ steps.verify.outputs.yanked_ref }}"
+          set -euo pipefail
+          ASSET="threat-detect-linux-amd64"
+          verify_asset() {
+            local tag="$1" expected="$2" tmp actual
+            tmp="$(mktemp -d)"
+            gh release download "$tag" --pattern "$ASSET" --dir "$tmp"
+            actual="sha256:$(sha256sum "$tmp/$ASSET" | awk '{print $1}')"
+            rm -rf "$tmp"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Release ${tag} asset sha256 ${actual} does not match recorded ${expected}."
+              exit 1
+            fi
+          }
+          verify_asset "$YANKED_TAG" "$YANKED_SHA256"
           if [ "$NO_SAFE_REPLACEMENT" != "true" ]; then
-            docker pull "${{ steps.verify.outputs.replacement_ref }}"
+            verify_asset "$REPLACEMENT_TAG" "$REPLACEMENT_SHA256"
           fi
 
       - name: Update lifecycle registry
         env:
-          YANKED_DIGEST: ${{ steps.verify.outputs.yanked_digest }}
-          REPLACEMENT_DIGEST: ${{ steps.verify.outputs.replacement_digest }}
+          YANKED_SHA256: ${{ steps.verify.outputs.yanked_sha256 }}
+          REPLACEMENT_SHA256: ${{ steps.verify.outputs.replacement_sha256 }}
         run: |
           python - <<'PY'
           import datetime
@@ -208,7 +204,7 @@ jobs:
 
           yanked = find(os.environ["YANKED_TAG"])
           yanked.update({
-              "image_digest": os.environ["YANKED_DIGEST"],
+              "asset_sha256": os.environ["YANKED_SHA256"],
               "status": "yanked",
               "yanked_date": datetime.date.today().isoformat(),
               "reason": os.environ["YANK_REASON"].strip(),
@@ -220,12 +216,12 @@ jobs:
               yanked["no_safe_replacement"] = True
               yanked.pop("replacement_version", None)
               yanked.pop("replacement_kind", None)
-              yanked.pop("replacement_digest", None)
+              yanked.pop("replacement_asset_sha256", None)
           else:
               yanked.update({
                   "replacement_version": os.environ["REPLACEMENT_TAG"],
-                  "replacement_kind": "registry",
-                  "replacement_digest": os.environ["REPLACEMENT_DIGEST"],
+                  "replacement_kind": "release",
+                  "replacement_asset_sha256": os.environ["REPLACEMENT_SHA256"],
               })
               yanked.pop("no_safe_replacement", None)
           if os.environ.get("ADVISORY_URL", "").strip():
@@ -253,7 +249,7 @@ jobs:
               replacement.setdefault("advisory_url", f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{os.environ['REPLACEMENT_TAG']}")
               replacement.setdefault("urgency", "none")
               replacement.setdefault("maintainer_note", "Promoted safe replacement release.")
-              replacement["image_digest"] = os.environ["REPLACEMENT_DIGEST"]
+              replacement["asset_sha256"] = os.environ["REPLACEMENT_SHA256"]
 
           def version_key(release):
               match = re.match(r"^v(\d+)\.(\d+)\.(\d+)(.*)$", release["version"])
@@ -266,13 +262,6 @@ jobs:
           PY
 
           make lifecycle-validate
-
-      - name: Retag latest to replacement
-        if: ${{ inputs.no_safe_replacement != true }}
-        run: |
-          docker tag "${{ steps.verify.outputs.replacement_ref }}" "${IMAGE}:latest"
-          docker push "${IMAGE}:latest"
-          echo "✅ latest now points at ${{ steps.verify.outputs.replacement_ref }}."
 
       - name: Mark yanked release in GitHub Releases
         env:
@@ -296,16 +285,16 @@ jobs:
             if [ "$NO_SAFE_REPLACEMENT" = "true" ]; then
               echo "- Safe replacement: none available"
             else
-              echo "- Safe replacement: ${REPLACEMENT_TAG} (${{ steps.verify.outputs.replacement_digest }})"
+              echo "- Safe replacement: ${REPLACEMENT_TAG} (${{ steps.verify.outputs.replacement_sha256 }})"
             fi
             if [ -n "${ADVISORY_URL}" ]; then
               echo "- Advisory: ${ADVISORY_URL}"
             fi
             echo
             if [ "$NO_SAFE_REPLACEMENT" = "true" ]; then
-              echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. No safe replacement is currently available, so latest was not retagged by this workflow."
+              echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. No safe replacement is currently available, so the Latest release pointer was not moved by this workflow."
             else
-              echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. The yanked image remains available for audit and forensics unless maintainers remove the package separately."
+              echo "Explicit pins to ${YANKED_TAG} must fail closed before detector execution. The yanked binary remains available as a release asset for audit and forensics unless maintainers remove it separately."
             fi
             echo
             echo "---"

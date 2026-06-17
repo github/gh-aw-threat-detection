@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   promote:
@@ -23,13 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify prerelease exists
+      - name: Verify prerelease and binary asset
         id: verify
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          IMAGE="ghcr.io/github/gh-aw-threat-detection"
+          set -euo pipefail
           LIFECYCLE_REGISTRY="releases/threat-detection-lifecycle.json"
+          ASSET="threat-detect-linux-amd64"
           RELEASE_INFO=$(gh release view "$PROMOTE_TAG" --json body,isPrerelease,tagName)
           LIFECYCLE_STATUS=$(jq -r --arg version "$PROMOTE_TAG" '.versions[]? | select(.version == $version) | .status' "$LIFECYCLE_REGISTRY" | head -n 1)
           if [ "$LIFECYCLE_STATUS" = "yanked" ] || [ "$LIFECYCLE_STATUS" = "obsolete" ]; then
@@ -41,55 +41,37 @@ jobs:
             echo "::error::Release ${PROMOTE_TAG} is not a prerelease. Nothing to promote."
             exit 1
           fi
-          DIGEST_LINE_PREFIX="Container image digest: ${IMAGE}@"
-          IMAGE_REF_PREFIX="${IMAGE}@sha256:"
-          EXPECTED_SHA256_LENGTH=64
-          IMAGE_REF=""
+          # Extract the recorded binary asset digest from the release body.
+          DIGEST_LINE_PREFIX="Binary asset sha256: sha256:"
+          RECORDED_SHA256=""
           while IFS= read -r line; do
             case "$line" in
               "$DIGEST_LINE_PREFIX"*)
-                IMAGE_REF="${line#Container image digest: }"
+                RECORDED_SHA256="${line#Binary asset sha256: sha256:}"
                 break
                 ;;
             esac
           done < <(echo "$RELEASE_INFO" | jq -r '.body // ""')
-          if [ -z "$IMAGE_REF" ]; then
-            echo "::error::Release ${PROMOTE_TAG} does not record a container image digest. Nothing to promote."
+          if [ -z "$RECORDED_SHA256" ]; then
+            echo "::error::Release ${PROMOTE_TAG} does not record a binary asset sha256. Nothing to promote."
             exit 1
           fi
-          case "$IMAGE_REF" in
-            "$IMAGE_REF_PREFIX"*) ;;
-            *)
-              echo "::error::Release ${PROMOTE_TAG} records a container image digest that does not use sha256. Nothing to promote."
-              exit 1
-              ;;
-          esac
-          DIGEST="${IMAGE_REF#${IMAGE_REF_PREFIX}}"
-          if [ "${#DIGEST}" -ne "$EXPECTED_SHA256_LENGTH" ]; then
-            echo "::error::Release ${PROMOTE_TAG} records a container image digest with an invalid length. Nothing to promote."
+          if ! echo "$RECORDED_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::Release ${PROMOTE_TAG} records a binary asset sha256 with invalid format. Nothing to promote."
             exit 1
           fi
-          if ! echo "$DIGEST" | grep -Eq '^[0-9a-f]+$'; then
-            echo "::error::Release ${PROMOTE_TAG} records a container image digest with non-hex characters. Nothing to promote."
+          # Download the published asset and confirm it matches the recorded digest,
+          # so promotion can never mark a tampered or missing binary as Latest.
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          gh release download "$PROMOTE_TAG" --pattern "$ASSET" --dir "$tmp"
+          ACTUAL_SHA256="$(sha256sum "$tmp/$ASSET" | awk '{print $1}')"
+          if [ "$ACTUAL_SHA256" != "$RECORDED_SHA256" ]; then
+            echo "::error::Release ${PROMOTE_TAG} asset sha256 ${ACTUAL_SHA256} does not match recorded ${RECORDED_SHA256}. Nothing to promote."
             exit 1
           fi
-          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
-          echo "✅ Verified ${PROMOTE_TAG} is a prerelease with container image ${IMAGE_REF} — proceeding with promotion."
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Tag container image as latest
-        run: |
-          IMAGE="ghcr.io/github/gh-aw-threat-detection"
-          docker pull "${{ steps.verify.outputs.image_ref }}"
-          docker tag "${{ steps.verify.outputs.image_ref }}" "${IMAGE}:latest"
-          docker push "${IMAGE}:latest"
-          echo "✅ Container image tagged as latest."
+          echo "binary_sha256=sha256:${RECORDED_SHA256}" >> "$GITHUB_OUTPUT"
+          echo "✅ Verified ${PROMOTE_TAG} is a prerelease with binary asset sha256:${RECORDED_SHA256} — proceeding with promotion."
 
       - name: Promote release to stable
         env:
