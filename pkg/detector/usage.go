@@ -2,6 +2,7 @@ package detector
 
 import (
 	"encoding/json"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -100,6 +101,13 @@ func parseUsageJSONLine(line string) (tokens int, cost float64) {
 	dec.UseNumber()
 	var data map[string]any
 	if err := dec.Decode(&data); err != nil {
+		return 0, 0
+	}
+	// Ensure the decoder consumed the entire input, mirroring json.Unmarshal
+	// semantics. If extra non-whitespace content follows the first JSON value
+	// (e.g. log noise that was sliced in by the openIdx/closeIdx heuristic),
+	// reject the parse to avoid misattributing tokens/cost.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
 		return 0, 0
 	}
 	return extractJSONTokens(data), extractJSONCost(data)
