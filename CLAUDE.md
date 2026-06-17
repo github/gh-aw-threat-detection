@@ -84,6 +84,7 @@ threat-detect [flags] <artifacts-dir>
 - `--model <name>` — model override forwarded to the engine
 - `--prompt-template <path>` — override the embedded default
 - `--output <path>` — write JSON result (defaults to stdout)
+- `--usage-output <path>` — write JSON AI credit usage (tokens, estimated cost) for the detection pass
 - `--retries` (default `1`) — retries for malformed detection outputs; env: `THREAT_DETECTION_RETRIES`
 
 **Exit codes** (defined in `cmd/threat-detect/main.go`):
@@ -101,6 +102,8 @@ threat-detect [flags] <artifacts-dir>
 ```
 
 The detector reads the verdict exclusively from the out-of-band result sink. The engine reports its verdict in-session by invoking the `threat_detection_result` tool, which writes the JSON object (`prompt_injection`, `secret_leak`, `malicious_patch`, `reasons`) to the sink (`detector.ReadResultFile` / `detector.ParseStructuredResult`).
+
+**AI credit usage**: the detection pass is a separate engine invocation that consumes AI credits independently of the main agentic run. After a successful run, `cmd/threat-detect` parses best-effort token usage and estimated cost from the engine transcript (`detector.ParseUsage` / `detector.Usage`) and emits a `THREAT_DETECTION_USAGE:` JSON line on stderr, plus an optional `--usage-output` file. Figures are best-effort (zero/`available:false` for copilot or when early termination truncates the transcript) and never gate the verdict. Keep them out of the strict result contract.
 
 **Artifacts directory shape** (validated by `pkg/artifacts/artifacts.go`):
 

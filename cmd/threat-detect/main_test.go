@@ -189,6 +189,55 @@ func TestRunEmitsEngineErrorStatusOnFailClosed(t *testing.T) {
 	}
 }
 
+func TestRunEmitsUsageLineAndFile(t *testing.T) {
+	artifactsDir := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	usagePath := filepath.Join(t.TempDir(), "usage.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	// The fake engine prints a Claude-style usage line to stdout (the transcript
+	// emitUsage parses).
+	usageStdout := `{"type":"result","total_cost_usd":0.0123,"usage":{"input_tokens":1500,"output_tokens":300}}`
+	fakeBinDir := writeFakeCopilotWithSinkAndStdout(t, copilotMarker, sinkJSON, usageStdout, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-usage-output", usagePath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	if !strings.Contains(stderr, "THREAT_DETECTION_USAGE:") {
+		t.Fatalf("stderr missing usage line, got:\n%s", stderr)
+	}
+
+	data, err := os.ReadFile(usagePath)
+	if err != nil {
+		t.Fatalf("reading usage file: %v", err)
+	}
+	var usage map[string]any
+	if err := json.Unmarshal(data, &usage); err != nil {
+		t.Fatalf("parsing usage JSON: %v", err)
+	}
+	if usage["engine"] != "copilot" {
+		t.Fatalf("usage engine = %v, want copilot", usage["engine"])
+	}
+	if usage["tokens"].(float64) != 1800 {
+		t.Fatalf("usage tokens = %v, want 1800", usage["tokens"])
+	}
+	if usage["estimated_cost"].(float64) != 0.0123 {
+		t.Fatalf("usage estimated_cost = %v, want 0.0123", usage["estimated_cost"])
+	}
+	if usage["available"] != true {
+		t.Fatalf("usage available = %v, want true", usage["available"])
+	}
+}
+
 func runWithTestArgs(t *testing.T, args []string, env map[string]string) int {
 	t.Helper()
 	code, _ := runWithTestArgsCapture(t, args, env)

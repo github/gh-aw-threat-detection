@@ -34,6 +34,9 @@ const (
 	exitThreat = 1
 	exitError  = 2
 
+	// defaultEngine matches engine.New's default when --engine is unset.
+	defaultEngine = "copilot"
+
 	detectionCorrectionPrefix      = "Your previous response did not record a verdict"
 	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
 	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
@@ -45,6 +48,13 @@ const (
 // so the two never collide. Because the result JSON is not written on error
 // paths, this line is often the only structured signal a caller receives.
 const statusPrefix = "THREAT_DETECTION_STATUS:"
+
+// usagePrefix marks the single machine-readable AI credit usage line emitted to
+// stderr after a successful detection run. The value is a JSON object matching
+// detector.Usage, so callers can parse the detection pass's token and cost
+// figures programmatically. It is distinct from THREAT_DETECTION_STATUS: and
+// THREAT_DETECTION_RESULT: so the three never collide.
+const usagePrefix = "THREAT_DETECTION_USAGE:"
 
 // Terminal reasons reported on the status line. Exactly one is emitted per run.
 const (
@@ -87,12 +97,13 @@ func run() (code int) {
 	}()
 
 	var (
-		engineID   string
-		model      string
-		promptFile string
-		outputJSON string
-		version    bool
-		retries    int
+		engineID    string
+		model       string
+		promptFile  string
+		outputJSON  string
+		usageOutput string
+		version     bool
+		retries     int
 	)
 
 	// Parse flags with ContinueOnError so usage/flag errors return through the
@@ -104,6 +115,7 @@ func run() (code int) {
 	flag.StringVar(&model, "model", "", "Model to use for detection")
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
+	flag.StringVar(&usageOutput, "usage-output", "", "Path to write JSON AI credit usage (tokens, estimated cost) for the detection pass")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
@@ -178,7 +190,7 @@ func run() (code int) {
 	os.Remove(sinkPath)
 	defer os.Remove(sinkPath)
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
+	result, transcript, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
 		switch {
@@ -192,15 +204,48 @@ func run() (code int) {
 		return exitError
 	}
 
+	// Surface best-effort AI credit usage for the detection pass. The detection
+	// job is a separate engine invocation, so this usage is billed independently
+	// of the main agentic run it guards. Failure to write the usage file is not
+	// fatal: the verdict, not the usage report, gates safe outputs.
+	emitUsage(engineID, model, transcript, usageOutput)
+
 	var resultReason string
 	code, resultReason = writeResult(result, outputJSON)
 	reason = resultReason
 	return code
 }
 
-func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
+// emitUsage parses best-effort token usage and estimated cost from the engine
+// transcript and reports it on a single machine-readable stderr line
+// (THREAT_DETECTION_USAGE:) and, when usageOutput is set, as a JSON file. The
+// engine name defaults to copilot to match engine.New's default.
+func emitUsage(engineID, model, transcript, usageOutput string) {
+	engineName := engineID
+	if engineName == "" {
+		engineName = defaultEngine
+	}
+	tokens, cost := detector.ParseUsage(transcript)
+	usage := detector.Usage{
+		Engine:        engineName,
+		Model:         model,
+		Tokens:        tokens,
+		EstimatedCost: cost,
+		Available:     tokens > 0 || cost > 0,
+	}
+	if jsonBytes, err := json.Marshal(usage); err == nil {
+		fmt.Fprintf(os.Stderr, "%s %s\n", usagePrefix, string(jsonBytes))
+		if usageOutput != "" {
+			if err := os.WriteFile(usageOutput, append(jsonBytes, '\n'), 0o600); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: writing usage output: %v\n", err)
+			}
+		}
+	}
+}
+
+func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, string, error) {
 	if sinkPath == "" {
-		return nil, fmt.Errorf("result sink path is required for detection")
+		return nil, "", fmt.Errorf("result sink path is required for detection")
 	}
 	attempts := retries + 1
 	if attempts < 1 {
@@ -211,19 +256,20 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	for i := 0; i < attempts; i++ {
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
-		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
-			return nil, fmt.Errorf("%w: %w", errEngineExecution, err)
+		transcript, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath})
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: %w", errEngineExecution, err)
 		}
 		// The verdict must be reported in-session through the
 		// threat_detection_result tool, which records it to the sink.
 		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
-			return result, nil
+			return result, transcript, nil
 		}
 		lastErr = err
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
-	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
+	return nil, "", fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
 }
 
 // writeResult marshals and writes the verdict, returning the exit code and the
