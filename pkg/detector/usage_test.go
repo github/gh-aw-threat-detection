@@ -63,3 +63,15 @@ func TestParseUsageNoUsage(t *testing.T) {
 		t.Fatalf("tokens=%d cost=%v, want 0/0", tokens, cost)
 	}
 }
+
+func TestParseUsageStringEncodedNumbers(t *testing.T) {
+	// Engines occasionally emit token counts as strings; toInt/toFloat should handle them.
+	transcript := `{"tokens":"750","billing":{"total_cost_usd":"0.05"}}`
+	tokens, cost := ParseUsage(transcript)
+	if tokens != 750 {
+		t.Fatalf("tokens = %d, want 750", tokens)
+	}
+	if cost != 0.05 {
+		t.Fatalf("cost = %v, want 0.05", cost)
+	}
+}

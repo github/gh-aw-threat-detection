@@ -96,8 +96,10 @@ func parseUsageJSONLine(line string) (tokens int, cost float64) {
 		jsonStr = line[openIdx : closeIdx+1]
 	}
 
+	dec := json.NewDecoder(strings.NewReader(jsonStr))
+	dec.UseNumber()
 	var data map[string]any
-	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+	if err := dec.Decode(&data); err != nil {
 		return 0, 0
 	}
 	return extractJSONTokens(data), extractJSONCost(data)
