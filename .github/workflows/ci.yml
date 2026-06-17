@@ -47,9 +47,12 @@ jobs:
           name: threat-detect
           path: bin/threat-detect
 
-  container-smoke:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - name: Build and smoke test container image
-        run: make docker-smoke IMAGE_TAG=ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Build and smoke test binary
+        run: make smoke

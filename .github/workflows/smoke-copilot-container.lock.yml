@@ -1212,7 +1212,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
       copilot-requests: write
     outputs:
       aic: ${{ steps.parse_detection_token_usage.outputs.aic }}
@@ -1334,29 +1333,26 @@ jobs:
           GH_HOST: github.com
       - name: Install AWF binary
         run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.27.2
-      - name: Log in to GHCR for detector image
+      - name: Download threat detection binary
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
-          GHCR_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          THREAT_DETECTION_VERSION: ${{ vars.GH_AW_THREAT_DETECTION_VERSION || '' }}
+          DETECTOR_REPO: github/gh-aw-threat-detection
         run: |
-          if [ -n "${GHCR_TOKEN:-}" ]; then
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          set -euo pipefail
+          dest_dir="${RUNNER_TEMP}/gh-aw/threat-detect-bin"
+          mkdir -p "$dest_dir"
+          download_dir="$(mktemp -d)"
+          trap 'rm -rf "$download_dir"' EXIT
+          args=(--repo "$DETECTOR_REPO" --pattern threat-detect-linux-amd64 --pattern checksums.txt --dir "$download_dir")
+          if [ -n "${THREAT_DETECTION_VERSION:-}" ]; then
+            gh release download "$THREAT_DETECTION_VERSION" "${args[@]}"
+          else
+            gh release download "${args[@]}"
           fi
-      - name: Pull threat detection container
-        if: always() && steps.detection_guard.outputs.run_detection == 'true'
-        env:
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
-        run: docker pull "$THREAT_DETECTION_IMAGE"
-      - name: Extract threat detection binary from container
-        if: always() && steps.detection_guard.outputs.run_detection == 'true'
-        env:
-          THREAT_DETECTION_IMAGE: ${{ vars.GH_AW_THREAT_DETECTION_IMAGE || 'ghcr.io/github/gh-aw-threat-detection:latest' }}
-        run: |
-          mkdir -p "${RUNNER_TEMP}/gh-aw/threat-detect-bin"
-          container_id="$(docker create "$THREAT_DETECTION_IMAGE")"
-          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
-          docker cp "$container_id:/usr/local/bin/threat-detect" "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect"
-          chmod 755 "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect"
+          ( cd "$download_dir" && sha256sum --check --ignore-missing checksums.txt )
+          install -m 0755 "$download_dir/threat-detect-linux-amd64" "$dest_dir/threat-detect"
       - name: Execute threat detection with AWF
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true

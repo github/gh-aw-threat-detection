@@ -182,7 +182,7 @@ This section stays in place even though the release flow is still being built ou
 Maintainers manage the lifecycle for version-tagged threat detection releases in
 [releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json).
 The registry is the machine-readable source of truth consumed or vendored by the
-parent `gh-aw` orchestrator before it pulls or runs the detector container.
+parent `gh-aw` orchestrator before it downloads or runs the detector binary.
 
 Lifecycle statuses:
 
@@ -190,8 +190,8 @@ Lifecycle statuses:
 |--------|---------|-------------------|
 | `active` | Supported and safe to use | Run normally. |
 | `deprecated` | Still supported, but users should migrate | Emit a GitHub Actions warning annotation and job summary text, then continue. |
-| `obsolete` | No longer safe or supported | Fail closed before the detector container runs. |
-| `yanked` | Unsafe because of a security or correctness issue | Fail closed before the detector container runs. |
+| `obsolete` | No longer safe or supported | Fail closed before the detector runs. |
+| `yanked` | Unsafe because of a security or correctness issue | Fail closed before the detector runs. |
 
 Each lifecycle entry must include the version, status, reason, replacement
 guidance, relevant deprecation or obsolescence dates, an advisory or release URL,
@@ -206,7 +206,7 @@ Maintainer responsibilities:
 - ensure deprecated versions provide actionable warning text with the reason,
   replacement version, dates, advisory URL, urgency, and remediation steps
 - ensure obsolete versions include enough guidance for `gh-aw` to fail before
-  invoking the detector container and tell users exactly how to upgrade
+  invoking the detector and tell users exactly how to upgrade
 - run `make lifecycle-validate` before release or promotion changes that edit
   lifecycle metadata
 
@@ -214,7 +214,7 @@ Lifecycle enforcement must not rely only on code inside old detector binaries.
 Previously released detectors cannot learn that they later became obsolete unless
 they receive external metadata or network access, and detector runtime egress may
 be blocked. The parent `gh-aw` orchestrator or generated workflow should perform
-the lifecycle check before pulling or running this container.
+the lifecycle check before downloading or running this binary.
 
 ### Promotion Model
 
@@ -226,9 +226,10 @@ Releases follow a **prerelease → promote** model:
    bump. The workflow validates `main` and pushes the next `vX.Y.Z` tag.
 
 2. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
-   [release workflow](.github/workflows/release.yml). It builds artifacts,
-   pushes a version-tagged container image (e.g. `ghcr.io/github/gh-aw-threat-detection:v1.2.3`),
-   and creates a **prerelease** on GitHub that records the image digest. The `release-publish` environment gate
+   [release workflow](.github/workflows/release.yml). It builds the
+   `threat-detect-linux-amd64` binary, attaches it (plus `checksums.txt`) to a
+   **prerelease** on GitHub, and records the asset sha256 in the release notes.
+   The `release-publish` environment gate
    pauses the workflow before publishing so maintainers can abort if needed.
 
 3. **Promote (manual)** — after verifying the prerelease, a maintainer triggers
@@ -236,28 +237,27 @@ Releases follow a **prerelease → promote** model:
    **Actions → Promote Release → Run workflow**, entering the tag name. This
    workflow (gated by the `release-promote` environment):
    - verifies the release is still a prerelease
-   - pulls the recorded image digest and pushes that exact image as `latest`
+   - re-downloads the asset and verifies its sha256 against the recorded value
    - marks the GitHub release as stable and explicitly selects it as Latest (`--prerelease=false --latest`)
 
-The `latest` container tag and the GitHub "Latest" release badge only move
+The GitHub "Latest" release pointer only moves
 when a maintainer explicitly promotes. This gives the team time to validate a
-release before it becomes the default for users installing with `version: latest`.
+release before it becomes the default for users downloading the latest stable asset.
 
-#### Branch builds: `:main` and `:main-<shortsha>`
+#### Branch builds: the rolling `main` pre-release
 
 In addition to release tags, every push to `main` triggers the
 [publish-main workflow](.github/workflows/publish-main.yml), which builds the
-container image and pushes two GHCR tags:
+binary and republishes a single rolling `main` pre-release:
 
-- `ghcr.io/github/gh-aw-threat-detection:main` — moving tag that always points
-  to the most recent successful build from `main`.
-- `ghcr.io/github/gh-aw-threat-detection:main-<shortsha>` — immutable tag bound
-  to the specific `main` commit (useful for pinning in downstream workflows).
+- The `main` pre-release always carries the `threat-detect-linux-amd64` asset
+  built from the most recent successful build from `main`, versioned
+  `main-<shortsha>`.
 
-These are **unverified branch builds**. They are not GitHub Releases, do not
-appear in [releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json),
-and are not eligible for promotion. The `:latest` tag is unaffected by this
-workflow and continues to track the most recently promoted release.
+These are **unverified branch builds**. The `main` pre-release does not
+appear in [releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json)
+and is not eligible for promotion. The **Latest** stable release pointer is
+unaffected by this workflow and continues to track the most recently promoted release.
 
 ### Lifecycle Registry
 
@@ -271,10 +271,10 @@ Maintainers use one registry for all stable lifecycle states:
 - `yanked` — unsafe because of a security or correctness issue; stronger than
   `obsolete` and must fail closed.
 
-`gh-aw` must check this registry before pulling or running a selected detector.
-If a user explicitly pins a yanked version or yanked digest, `gh-aw` must fail
+`gh-aw` must check this registry before downloading or running a selected detector.
+If a user explicitly pins a yanked version or yanked asset sha256, `gh-aw` must fail
 closed with the yank reason and safe replacement. It must not silently downgrade
-or upgrade explicit pins. `latest` is floating, so maintainers may retag it to a
+or upgrade explicit pins. The **Latest** pointer is floating, so maintainers may move it to a
 safe replacement during a yank.
 
 Validate registry edits with:
@@ -283,9 +283,9 @@ Validate registry edits with:
 make lifecycle-validate
 ```
 
-Yanked entries must include the version, image digest, yank date, severity,
+Yanked entries must include the version, asset sha256, yank date, severity,
 reason, advisory or release URL, and maintainer note. Provide replacement version
-and replacement digest when a safe replacement exists. Use
+and replacement asset sha256 when a safe replacement exists. Use
 `no_safe_replacement: true` only when maintainers have confirmed there is no safe
 replacement to recommend.
 
@@ -298,7 +298,7 @@ by a core maintainer or incident commander.
 
 Before yanking:
 
-1. Identify the bad version and immutable image digest.
+1. Identify the bad version and its release-asset sha256.
 2. Select the most recent safe stable replacement, or confirm that no safe
    replacement exists yet.
 3. Record the severity, user-facing reason, advisory or incident link when
@@ -308,23 +308,23 @@ Before yanking:
 To yank a release, run **Actions → Yank Release → Run workflow** from the default
 branch. The workflow:
 
-1. verifies the yanked release exists and records a sha256 image digest
-2. when a replacement is provided, verifies it exists, records a sha256 image
-   digest, and is not prerelease, yanked, or obsolete
-3. verifies required images are still pullable
+1. verifies the yanked release exists and records its asset sha256
+2. when a replacement is provided, verifies it exists, records its asset
+   sha256, and is not prerelease, yanked, or obsolete
+3. verifies required release assets are still downloadable and match their sha256
 4. records the yanked status in the lifecycle registry
-5. retags `latest` to the replacement digest when a replacement is provided
+5. moves the **Latest** pointer to the replacement release when a replacement is provided
 6. marks the yanked GitHub release title and notes with a warning
 7. removes the yanked release from GitHub's Latest selection and marks the
    replacement as Latest when a replacement is provided
 
 Set `no_safe_replacement: true` and leave `replacement_tag` empty only when no
 safe replacement exists. In that case the workflow records
-`no_safe_replacement: true`, skips retagging `latest`, and leaves replacement
+`no_safe_replacement: true`, leaves the **Latest** pointer unmoved, and defers replacement
 selection until a safe stable release is available.
 
 Keep yanked artifacts available for audit and forensics unless legal or security
-policy requires package deletion. If branch protection prevents the workflow from
+policy requires asset deletion. If branch protection prevents the workflow from
 committing the lifecycle registry update directly, create and merge an emergency
 PR with the same registry changes before announcing the yank as complete.
 
@@ -349,14 +349,14 @@ After the tag is pushed:
 
 1. Approve the `release-publish` environment gate when the workflow pauses.
 2. Verify the prerelease on the [Releases page](../../releases) and test the
-   version-tagged container image.
+   version-tagged `threat-detect-linux-amd64` asset.
 3. Confirm the lifecycle registry is correct for the release being promoted and
    any versions it replaces; update and validate it with `make lifecycle-validate`
    if statuses changed.
 4. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
    the workflow. Approve the `release-promote` environment gate.
-5. Confirm `latest` now resolves to the new version.
+5. Confirm the **Latest** release now resolves to the new version.
 
 If a promoted release is later found unsafe, follow the emergency yank process
-above instead of deleting tags or relying on GHCR package removal as the primary
+above instead of deleting tags or relying on release-asset removal as the primary
 control.

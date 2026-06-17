@@ -12,7 +12,7 @@ import (
 )
 
 var semverTagPattern = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
-var digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var assetSHA256Pattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type lifecycleRegistry struct {
 	SchemaVersion        string           `json:"schema_version"`
@@ -22,21 +22,21 @@ type lifecycleRegistry struct {
 }
 
 type lifecycleEntry struct {
-	Version            string `json:"version"`
-	ImageDigest        string `json:"image_digest"`
-	Status             string `json:"status"`
-	Reason             string `json:"reason"`
-	ReplacementVersion string `json:"replacement_version"`
-	ReplacementKind    string `json:"replacement_kind"`
-	ReplacementDigest  string `json:"replacement_digest"`
-	DeprecatedDate     string `json:"deprecated_date"`
-	ObsoleteDate       string `json:"obsolete_date"`
-	YankedDate         string `json:"yanked_date"`
-	AdvisoryURL        string `json:"advisory_url"`
-	Severity           string `json:"severity"`
-	Urgency            string `json:"urgency"`
-	MaintainerNote     string `json:"maintainer_note"`
-	NoSafeReplacement  bool   `json:"no_safe_replacement"`
+	Version                string `json:"version"`
+	AssetSHA256            string `json:"asset_sha256"`
+	Status                 string `json:"status"`
+	Reason                 string `json:"reason"`
+	ReplacementVersion     string `json:"replacement_version"`
+	ReplacementKind        string `json:"replacement_kind"`
+	ReplacementAssetSHA256 string `json:"replacement_asset_sha256"`
+	DeprecatedDate         string `json:"deprecated_date"`
+	ObsoleteDate           string `json:"obsolete_date"`
+	YankedDate             string `json:"yanked_date"`
+	AdvisoryURL            string `json:"advisory_url"`
+	Severity               string `json:"severity"`
+	Urgency                string `json:"urgency"`
+	MaintainerNote         string `json:"maintainer_note"`
+	NoSafeReplacement      bool   `json:"no_safe_replacement"`
 }
 
 func TestThreatDetectionLifecycleRegistry(t *testing.T) {
@@ -76,7 +76,7 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				Status:             "deprecated",
 				Reason:             "Superseded by v1.1.0.",
 				ReplacementVersion: "v1.1.0",
-				ReplacementKind:    "registry",
+				ReplacementKind:    "release",
 				DeprecatedDate:     "2026-05-07",
 				AdvisoryURL:        "https://github.com/github/gh-aw-threat-detection/releases/tag/v1.1.0",
 				Urgency:            "medium",
@@ -87,7 +87,7 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				Status:             "obsolete",
 				Reason:             "Known incompatible output contract.",
 				ReplacementVersion: "v1.1.0",
-				ReplacementKind:    "registry",
+				ReplacementKind:    "release",
 				DeprecatedDate:     "2026-04-01",
 				ObsoleteDate:       "2026-05-07",
 				AdvisoryURL:        "https://github.com/github/gh-aw-threat-detection/releases/tag/v1.1.0",
@@ -95,18 +95,18 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				MaintainerNote:     "Fail closed before detector execution.",
 			},
 			{
-				Version:            "v0.8.0",
-				ImageDigest:        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				Status:             "yanked",
-				Reason:             "Unsafe detector behavior.",
-				ReplacementVersion: "v1.1.0",
-				ReplacementKind:    "registry",
-				ReplacementDigest:  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				YankedDate:         "2026-05-07",
-				AdvisoryURL:        "https://github.com/github/gh-aw-threat-detection/releases/tag/v1.1.0",
-				Severity:           "high",
-				Urgency:            "high",
-				MaintainerNote:     "Fail closed before detector execution.",
+				Version:                "v0.8.0",
+				AssetSHA256:            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Status:                 "yanked",
+				Reason:                 "Unsafe detector behavior.",
+				ReplacementVersion:     "v1.1.0",
+				ReplacementKind:        "release",
+				ReplacementAssetSHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				YankedDate:             "2026-05-07",
+				AdvisoryURL:            "https://github.com/github/gh-aw-threat-detection/releases/tag/v1.1.0",
+				Severity:               "high",
+				Urgency:                "high",
+				MaintainerNote:         "Fail closed before detector execution.",
 			},
 		},
 	}
@@ -177,7 +177,7 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "registry replacement must exist",
+			name: "release replacement must exist",
 			mutate: func(registry *lifecycleRegistry) {
 				registry.Versions[1].ReplacementVersion = "v2.0.0"
 			},
@@ -215,7 +215,7 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 		{
 			name: "yanked version missing image digest",
 			mutate: func(registry *lifecycleRegistry) {
-				registry.Versions[3].ImageDigest = ""
+				registry.Versions[3].AssetSHA256 = ""
 			},
 			wantErr: true,
 		},
@@ -239,7 +239,7 @@ func TestValidateLifecycleRegistry(t *testing.T) {
 				registry.Versions[3].NoSafeReplacement = true
 				registry.Versions[3].ReplacementVersion = ""
 				registry.Versions[3].ReplacementKind = ""
-				registry.Versions[3].ReplacementDigest = ""
+				registry.Versions[3].ReplacementAssetSHA256 = ""
 			},
 		},
 	}
@@ -314,8 +314,8 @@ func validateLifecycleEntry(entry lifecycleEntry, versions map[string]lifecycleE
 		return fmt.Errorf("%s has unsupported status %q", entry.Version, entry.Status)
 	}
 
-	if entry.ImageDigest != "" && !digestPattern.MatchString(entry.ImageDigest) {
-		return fmt.Errorf("%s image_digest must be sha256:<64 lowercase hex characters>", entry.Version)
+	if entry.AssetSHA256 != "" && !assetSHA256Pattern.MatchString(entry.AssetSHA256) {
+		return fmt.Errorf("%s asset_sha256 must be sha256:<64 lowercase hex characters>", entry.Version)
 	}
 	if entry.Reason == "" {
 		return fmt.Errorf("%s must include a reason", entry.Version)
@@ -370,8 +370,8 @@ func validateLifecycleEntry(entry lifecycleEntry, versions map[string]lifecycleE
 			return err
 		}
 	case "yanked":
-		if entry.ImageDigest == "" {
-			return fmt.Errorf("%s yanked entries must include image_digest", entry.Version)
+		if entry.AssetSHA256 == "" {
+			return fmt.Errorf("%s yanked entries must include asset_sha256", entry.Version)
 		}
 		if !validDate(entry.YankedDate) {
 			return fmt.Errorf("%s yanked_date must use YYYY-MM-DD", entry.Version)
@@ -380,22 +380,22 @@ func validateLifecycleEntry(entry lifecycleEntry, versions map[string]lifecycleE
 			return fmt.Errorf("%s has unsupported severity %q", entry.Version, entry.Severity)
 		}
 		if entry.NoSafeReplacement {
-			if entry.ReplacementVersion != "" || entry.ReplacementDigest != "" || entry.ReplacementKind != "" {
+			if entry.ReplacementVersion != "" || entry.ReplacementAssetSHA256 != "" || entry.ReplacementKind != "" {
 				return fmt.Errorf("%s cannot set replacement guidance when no_safe_replacement is true", entry.Version)
 			}
 		} else {
 			if err := validateReplacement(entry, versions); err != nil {
 				return err
 			}
-			if !digestPattern.MatchString(entry.ReplacementDigest) {
-				return fmt.Errorf("%s replacement_digest must be sha256:<64 lowercase hex characters>", entry.Version)
+			if !assetSHA256Pattern.MatchString(entry.ReplacementAssetSHA256) {
+				return fmt.Errorf("%s replacement_asset_sha256 must be sha256:<64 lowercase hex characters>", entry.Version)
 			}
 			if replacement, ok := versions[entry.ReplacementVersion]; ok {
 				if replacement.Status == "yanked" || replacement.Status == "obsolete" {
 					return fmt.Errorf("%s replacement_version %s is %s", entry.Version, replacement.Version, replacement.Status)
 				}
-				if replacement.ImageDigest != "" && entry.ReplacementDigest != replacement.ImageDigest {
-					return fmt.Errorf("%s replacement_digest does not match %s image_digest", entry.Version, replacement.Version)
+				if replacement.AssetSHA256 != "" && entry.ReplacementAssetSHA256 != replacement.AssetSHA256 {
+					return fmt.Errorf("%s replacement_asset_sha256 does not match %s asset_sha256", entry.Version, replacement.Version)
 				}
 			}
 		}
@@ -410,7 +410,7 @@ func validateReplacement(entry lifecycleEntry, versions map[string]lifecycleEntr
 	}
 
 	switch entry.ReplacementKind {
-	case "registry":
+	case "release":
 		if _, ok := versions[entry.ReplacementVersion]; !ok {
 			return fmt.Errorf("%s replacement_version %q does not exist in registry", entry.Version, entry.ReplacementVersion)
 		}

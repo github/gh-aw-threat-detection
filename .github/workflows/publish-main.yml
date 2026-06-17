@@ -1,12 +1,11 @@
-name: Publish Main Image
+name: Publish Main Binary
 
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
 
 jobs:
   publish-main:
@@ -16,43 +15,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute image tags
-        id: tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build main binary
+        id: build
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/github/gh-aw-threat-detection"
           SHORT_SHA="${GITHUB_SHA:0:7}"
+          VERSION="main-${SHORT_SHA}"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
+            -o dist/threat-detect-linux-amd64 ./cmd/threat-detect
+          ( cd dist && sha256sum threat-detect-linux-amd64 > checksums.txt )
           {
-            echo "image=${IMAGE}"
             echo "short_sha=${SHORT_SHA}"
-            echo "version=main-${SHORT_SHA}"
+            echo "version=${VERSION}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push :main and :main-<shortsha>
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          build-args: |
-            VERSION=${{ steps.tags.outputs.version }}
-          tags: |
-            ${{ steps.tags.outputs.image }}:main
-            ${{ steps.tags.outputs.image }}:main-${{ steps.tags.outputs.short_sha }}
+      - name: Publish rolling main pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHORT_SHA: ${{ steps.build.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          BINARY_SHA256="sha256:$(sha256sum dist/threat-detect-linux-amd64 | awk '{print $1}')"
+          # Move the rolling `main` pre-release to this commit. Deleting and
+          # recreating keeps the `main` tag pointed at the freshest build, mirroring
+          # the moving `:main` container tag. The Latest release (the most recently
+          # promoted version) is untouched.
+          gh release delete main --yes --cleanup-tag 2>/dev/null || true
+          gh release create main \
+            dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
+            dist/checksums.txt#checksums.txt \
+            --title "main (edge build ${SHORT_SHA})" \
+            --notes "Unverified branch build from ${GITHUB_SHA}. Binary asset sha256: ${BINARY_SHA256}. The Latest release continues to track the most recently promoted version." \
+            --target "${GITHUB_SHA}" \
+            --prerelease
 
       - name: Write summary
+        env:
+          SHORT_SHA: ${{ steps.build.outputs.short_sha }}
         run: |
           {
-            echo "## Published main image"
+            echo "## Published main binary"
             echo
-            echo "- \`${{ steps.tags.outputs.image }}:main\` (moving)"
-            echo "- \`${{ steps.tags.outputs.image }}:main-${{ steps.tags.outputs.short_sha }}\` (immutable)"
+            echo "- Rolling pre-release \`main\` updated to edge build \`${SHORT_SHA}\`"
+            echo "- Asset: \`threat-detect-linux-amd64\` (+ \`checksums.txt\`)"
             echo
-            echo "These are unverified branch builds. \`:latest\` is unaffected and continues to track the most recently promoted release."
+            echo "These are unverified branch builds. The Latest release is unaffected and continues to track the most recently promoted release."
           } >> "$GITHUB_STEP_SUMMARY"

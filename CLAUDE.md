@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (and other coding agents) when workin
 The component runs in two main contexts:
 
 1. **As a host CLI** (`./bin/threat-detect <artifacts-dir>`) inside a `gh-aw`-generated detection job.
-2. **As a published container image** (`ghcr.io/github/gh-aw-threat-detection:<tag>`) extracted by `gh-aw` and executed under the AWF firewall (see [AWF section below](#agentic-workflow-firewall-awf)).
+2. **As a published release-asset binary** (`threat-detect-linux-amd64`, downloaded via `gh release download` from [`github/gh-aw-threat-detection` releases](https://github.com/github/gh-aw-threat-detection/releases)) installed on the runner and executed under the AWF firewall (see [AWF section below](#agentic-workflow-firewall-awf)).
 
 It detects three categories: **prompt injection**, **secret leak**, and **malicious patch**, and emits a strict JSON contract.
 
@@ -17,9 +17,9 @@ It detects three categories: **prompt injection**, **secret leak**, and **malici
 
 - **Language**: Go 1.23+ (module `github.com/github/gh-aw-threat-detection`)
 - **Binary**: `bin/threat-detect` (built via `make build`)
-- **Container**: published to `ghcr.io/github/gh-aw-threat-detection`, Alpine-based, non-root user `detector`
+- **Distribution**: published as GitHub Release assets (`threat-detect-linux-amd64` + `checksums.txt`); no container image
 - **Spec**: [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md) — W3C-style normative spec; the source of truth for behavior
-- **Engines supported**: `copilot` (default), `claude`, `codex` — invoked from `PATH`, not bundled into the image
+- **Engines supported**: `copilot` (default), `claude`, `codex` — invoked from `PATH`, not bundled into the binary
 - **Detection**: a single agentic CLI engine pass; the engine reports its verdict in-session via the `threat_detection_result` tool (out-of-band result sink), which is the sole source of the verdict
 
 ## Repository Layout
@@ -43,8 +43,7 @@ scripts/                  create-threat-detection-sibling-workflows.py (regenera
 skills/                   Repo-relevant agent skills (console-rendering, error-messages)
 scratchpad/               Retained design references inherited from gh-aw
 .github/workflows/        CI, release, promote, yank, replay-detection, smoke-{copilot,claude,codex}[-container]
-.devcontainer/            Codespaces / devcontainer setup (Go, Docker, gh, Copilot CLI, optional Vertex)
-Dockerfile                Multi-stage Alpine image
+.devcontainer/            Codespaces / devcontainer setup (Go, gh, Copilot CLI, optional Vertex)
 Makefile                  All build/test/lint/release targets
 ```
 
@@ -64,8 +63,7 @@ make fmt             # go fmt ./...
 make fmt-check       # CI-style gofmt check
 make security-scan   # gosec + govulncheck
 make lifecycle-validate    # validate releases/threat-detection-lifecycle.json
-make docker-build    # build ghcr.io/github/gh-aw-threat-detection:<version>
-make docker-smoke    # build + verify CA bundle + --version
+make smoke           # build + run bin/threat-detect --version
 make sbom            # SPDX + CycloneDX SBOMs (requires syft)
 make agent-finish    # full maintainer validation: deps-dev, fmt, lint, build, test, security-scan
 ```
@@ -130,13 +128,13 @@ The detector reads the verdict exclusively from the out-of-band result sink. The
 
 ## Result Lifecycle Registry
 
-`releases/threat-detection-lifecycle.json` is the **machine-readable source of truth** for release status. The parent `gh-aw` orchestrator vendors or fetches it before pulling/running a detector image.
+`releases/threat-detection-lifecycle.json` is the **machine-readable source of truth** for release status. The parent `gh-aw` orchestrator vendors or fetches it before downloading/running a detector binary.
 
 | Status       | Behavior `gh-aw` must enforce |
 |--------------|-------------------------------|
 | `active`     | Run normally |
 | `deprecated` | Warn (Actions annotation + step summary), then run |
-| `obsolete`   | **Fail closed** before container starts |
+| `obsolete`   | **Fail closed** before the detector runs |
 | `yanked`     | **Fail closed** — stronger than obsolete; explicit pins must not be silently rewritten |
 
 **`make lifecycle-validate` MUST pass** before changing this file. The validator is `pkg/detector/lifecycle_registry_test.go` (`TestThreatDetectionLifecycleRegistry`).
@@ -148,11 +146,11 @@ See [DEVGUIDE.md](DEVGUIDE.md#release-process) for the prerelease → promote �
 Four workflows orchestrate releases:
 
 1. `.github/workflows/create-release-tag.yml` — manual; pushes `vX.Y.Z`.
-2. `.github/workflows/release.yml` — triggered by tag push; gated by `release-publish` environment; builds + publishes container image as a **prerelease**.
-3. `.github/workflows/promote-release.yml` — manual; gated by `release-promote`; retags the verified image digest as `latest` and marks the GitHub release stable.
-4. `.github/workflows/yank-release.yml` — manual; updates lifecycle registry and (if needed) retags `latest` to a safe stable replacement.
+2. `.github/workflows/release.yml` — triggered by tag push; gated by `release-publish` environment; builds + publishes the `threat-detect-linux-amd64` binary as GitHub Release assets in a **prerelease**, recording the asset sha256 in the release notes.
+3. `.github/workflows/promote-release.yml` — manual; gated by `release-promote`; re-downloads the asset, verifies its sha256 against the recorded value, and marks the GitHub release **Latest** (stable).
+4. `.github/workflows/yank-release.yml` — manual; updates lifecycle registry and (if needed) moves the **Latest** release pointer to a safe stable replacement.
 
-The `latest` container tag and "Latest" release badge **only move on explicit promotion** — never automatically.
+The `latest` (non-prerelease) GitHub release and "Latest" badge **only move on explicit promotion** — never automatically.
 
 ## Smoke Workflows (and Container Siblings)
 
@@ -160,7 +158,7 @@ This repo runs daily AW smoke tests against all three engines:
 
 - `.github/workflows/smoke-{copilot,claude,codex}.md` — AW source files
 - `.github/workflows/smoke-{copilot,claude,codex}.lock.yml` — compiled by `gh aw compile`
-- `.github/workflows/smoke-{copilot,claude,codex}-container.{md,lock.yml}` — sibling workflows that pull the released container image, extract `threat-detect`, and run it under AWF
+- `.github/workflows/smoke-{copilot,claude,codex}-container.{md,lock.yml}` — sibling workflows that download the released `threat-detect` binary via `gh release download` and run it under AWF
 
 **To regenerate the container siblings** after recompiling smokes:
 
@@ -175,7 +173,7 @@ Required Actions secrets/variables for smokes are documented in [README.md → D
 
 ## Replay Workflow
 
-`.github/workflows/replay-detection.yml` — manual dispatch to rerun detection against artifacts from a prior `gh-aw` run. Supports three detector sources (`current`, `release`, `image`), engine and model overrides, custom prompt injection, and AWF mode (`use_awf=true`). Uploads a sanitized `replay-detection-<run_id>` artifact with manifest, inventory, logs, replay result, and comparison to the original result. Uses the dispatching repo's `GITHUB_TOKEN` — no extra replay token needed. `run_attempt` is only safe for the latest attempt of a run.
+`.github/workflows/replay-detection.yml` — manual dispatch to rerun detection against artifacts from a prior `gh-aw` run. Supports two detector sources (`current`, `release`), engine and model overrides, custom prompt injection, and AWF mode (`use_awf=true`). Uploads a sanitized `replay-detection-<run_id>` artifact with manifest, inventory, logs, replay result, and comparison to the original result. Uses the dispatching repo's `GITHUB_TOKEN` — no extra replay token needed. `run_attempt` is only safe for the latest attempt of a run.
 
 ## Coding Guidance
 
@@ -183,9 +181,9 @@ When changing this repo:
 
 - **Spec first**: behavior changes must align with [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md). Update the spec when the contract changes.
 - **Preserve the JSON result contract**: `prompt_injection`, `secret_leak`, `malicious_patch`, `reasons` — schema enforced by the parser in `pkg/detector/result.go`.
-- **Don't bundle engine CLIs into the image**. Engines (Copilot, Claude, Codex) are invoked from `PATH`. The image stays small; the runner provides the engine.
+- **Don't bundle engine CLIs into the binary**. Engines (Copilot, Claude, Codex) are invoked from `PATH`. The runner provides the engine.
 - **No new JS scripts**. Detection setup and result parsing are Go. Old gh-aw JS detection scripts are being retired.
-- **Custom orchestrator steps** (`threat-detection.steps`) belong in the `gh-aw` job, not inside this container.
+- **Custom orchestrator steps** (`threat-detection.steps`) belong in the `gh-aw` job, not inside the detector.
 - **Prefer small, local packages and targeted tests** (`pkg/<area>/<area>_test.go`).
 - **Use the skills** in [`skills/`](skills/) when writing console output (`skills/console-rendering`) or validation errors (`skills/error-messages`).
 - **Don't fix unrelated issues** in the same change.
@@ -194,7 +192,7 @@ Useful retained design references in [`scratchpad/`](scratchpad/): `code-organiz
 
 ## Engine Authentication
 
-Unit tests, `make build`, `make test`, and `make docker-smoke` need **no secrets**. Real AI-backed detection needs:
+Unit tests, `make build`, `make test`, and `make smoke` need **no secrets**. Real AI-backed detection needs:
 
 | Variable | When |
 |----------|------|

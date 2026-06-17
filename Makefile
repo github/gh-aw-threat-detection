@@ -1,4 +1,4 @@
-.PHONY: all build test test-coverage lint golint clean docker-build docker-smoke docker-push \
+.PHONY: all build test test-coverage lint golint clean smoke \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
 	sbom lifecycle-validate validate-lifecycle agent-finish help
@@ -6,8 +6,6 @@
 BINARY_NAME=threat-detect
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X github.com/github/gh-aw-threat-detection/pkg/detector.Version=$(VERSION)"
-REGISTRY?=ghcr.io/github/gh-aw-threat-detection
-IMAGE_TAG?=$(VERSION)
 
 all: lint test build
 
@@ -90,6 +88,10 @@ fmt-check:
 build:
 	go build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/threat-detect
 
+smoke: build
+	# Smoke test the freshly built binary without any container tooling.
+	./bin/$(BINARY_NAME) --version
+
 test:
 	go test -v -race ./...
 
@@ -148,17 +150,6 @@ clean:
 	rm -rf bin/ coverage.out coverage.html
 	rm -f licenses.csv sbom.spdx.json sbom.cdx.json gosec-report.json
 
-docker-build:
-	docker build --build-arg VERSION=$(IMAGE_TAG) -t $(REGISTRY):$(IMAGE_TAG) .
-
-docker-smoke: docker-build
-	# Verify Alpine's standard CA bundle path exists for HTTPS-enabled engine CLIs.
-	docker run --rm --entrypoint /bin/sh $(REGISTRY):$(IMAGE_TAG) -c 'test -s /etc/ssl/certs/ca-certificates.crt'
-	docker run --rm $(REGISTRY):$(IMAGE_TAG) --version
-
-docker-push:
-	docker push $(REGISTRY):$(IMAGE_TAG)
-
 sbom:
 	@if ! command -v syft >/dev/null 2>&1; then \
 		echo "Error: syft is not installed."; \
@@ -192,8 +183,6 @@ help:
 	@echo "  sbom           - Generate SPDX and CycloneDX SBOMs"
 	@echo "  lifecycle-validate - Validate threat detection lifecycle metadata"
 	@echo "  validate-lifecycle - Alias for lifecycle-validate"
-	@echo "  docker-build   - Build the Docker image"
-	@echo "  docker-smoke   - Build the Docker image and run a CLI smoke test"
-	@echo "  docker-push    - Push the Docker image"
+	@echo "  smoke          - Build the binary and run a CLI smoke test"
 	@echo "  clean          - Remove build artifacts and reports"
 	@echo "  agent-finish   - Run the maintainer validation workflow"

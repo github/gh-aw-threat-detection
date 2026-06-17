@@ -48,8 +48,8 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Run container smoke test
-        run: make docker-smoke IMAGE_TAG=release-candidate
+      - name: Run binary smoke test
+        run: make smoke
 
       - name: Compute next tag
         id: next-tag

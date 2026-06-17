@@ -18,7 +18,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 This specification covers:
 - Threat detection analysis categories
-- Input/output contract for the detection container
+- Input/output contract for the detection CLI
 - AI engine integration requirements
 - Configuration interface
 - Version compatibility
@@ -152,11 +152,11 @@ threat-detection:
 
 ---
 
-## 8. Container Interface
+## 8. CLI Interface
 
 ### 8.1 Input Contract
 
-**TD-16**: The container MUST accept an artifacts directory as its primary input argument.
+**TD-16**: The detector MUST accept an artifacts directory as its primary input argument.
 
 **TD-17**: The artifacts directory MUST support the following structure:
 
@@ -171,19 +171,19 @@ threat-detection:
     └── *.md
 ```
 
-**TD-18**: The container MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
+**TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
 ### 8.2 Output Contract
 
-**TD-19**: The container MUST output the structured JSON result (per TD-08) to stdout.
+**TD-19**: The detector MUST output the structured JSON result (per TD-08) to stdout.
 
-**TD-20**: The container MUST support writing the result to a file via the `--output` flag.
+**TD-20**: The detector MUST support writing the result to a file via the `--output` flag.
 
 **TD-20a**: The implementation SHOULD support writing the best-effort AI credit
 usage object (per TD-10b) to a file via a `--usage-output` flag, separate from the
 result file so the strict result contract (TD-08) is preserved.
 
-**TD-20b**: The container MUST provide a `conclude` subcommand that reads a structured
+**TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
 contract (`conclusion`, `reason`, `success`) consumed by the parent orchestrator.
 The verdict crosses the AWF sandbox boundary as a file (written to a read-write
@@ -197,7 +197,7 @@ step itself failed.
 
 ### 8.3 Exit Codes
 
-**TD-21**: The container MUST use the following exit codes:
+**TD-21**: The detector MUST use the following exit codes:
 
 | Code | Meaning |
 |------|---------|
@@ -208,7 +208,7 @@ step itself failed.
 **TD-21a**: The exit code is an out-of-band signal for direct callers. In the
 integrated detection job the verdict is conveyed to the host via the structured
 `detection_result.json` file (TD-20b) and concluded by the `conclude` subcommand,
-not by the container exit code. The integration wrapper that maps the container
+not by the detector exit code. The integration wrapper that maps the detector
 exit code to the detection step's success/failure outcome MUST NOT be stricter
 than `gh-aw`'s native engine step: a recorded verdict (exit 0 or 1) and an
 "engine ran but recorded no verdict" outcome (exit 2 with status reason
@@ -220,7 +220,7 @@ treats a missing verdict as a recoverable `parse_error` and proceeds.
 
 ### 8.4 Environment Variables
 
-**TD-22**: The container MUST support the following environment variables:
+**TD-22**: The detector MUST support the following environment variables:
 
 | Variable | Purpose |
 |----------|---------|
@@ -228,7 +228,7 @@ treats a missing verdict as a recoverable `parse_error` and proceeds.
 | `WORKFLOW_DESCRIPTION` | Description of the workflow |
 | `CUSTOM_PROMPT` | Additional detection instructions |
 
-**TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt building, unit test, or container smoke test execution.
+**TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt building, unit test, or binary smoke test execution.
 
 The implementation MAY pass through engine-specific authentication variables required by the selected CLI, including:
 
@@ -242,13 +242,13 @@ The implementation MAY pass through engine-specific authentication variables req
 
 ## 9. Version Compatibility
 
-**TD-24**: The container image MUST be tagged with semantic version numbers.
+**TD-24**: The release-asset binary MUST be published under semantic version tags.
 
-**TD-25**: The parent orchestrator (`gh-aw`) MUST pin to a specific container version.
+**TD-25**: The parent orchestrator (`gh-aw`) MUST pin to a specific detector version.
 
 **TD-26**: Breaking changes to the input/output contract MUST increment the major version.
 
-**TD-27**: Private repository status MUST NOT block container publication or consumption. When the source repository or GHCR package is private, the package MUST be configured so approved consuming repositories can pull pinned image tags with `packages: read`.
+**TD-27**: Private repository status MUST NOT block detector publication or consumption. When the source repository is private, approved consuming repositories MUST be able to download pinned release assets with `contents: read`.
 
 **TD-28**: The repository MUST publish a machine-readable threat detection lifecycle registry that identifies each governed version as `active`, `deprecated`, `obsolete`, or `yanked`.
 
@@ -256,22 +256,22 @@ The implementation MAY pass through engine-specific authentication variables req
 
 **TD-30**: Deprecated versions MUST be allowed to run, but the parent orchestrator or generated workflow MUST emit warning annotations and job summary text with the reason, replacement guidance, relevant dates, advisory URL, urgency, and remediation steps.
 
-**TD-31**: Obsolete versions MUST NOT run. The parent orchestrator or generated workflow MUST fail closed before pulling or invoking the detector container and MUST print actionable upgrade guidance.
+**TD-31**: Obsolete versions MUST NOT run. The parent orchestrator or generated workflow MUST fail closed before downloading or invoking the detector and MUST print actionable upgrade guidance.
 
-**TD-32**: A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected image digest. Selected yanked versions or digests MUST fail closed before detector execution.
+**TD-32**: A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected release-asset sha256. Selected yanked versions or asset sha256 values MUST fail closed before detector execution.
 
-**TD-33**: Explicitly pinned yanked versions or digests MUST NOT silently fall back to another version. The failure message SHOULD explain that the selected detector was yanked and name the safe replacement when one exists.
+**TD-33**: Explicitly pinned yanked versions or asset sha256 values MUST NOT silently fall back to another version. The failure message SHOULD explain that the selected detector was yanked and name the safe replacement when one exists.
 
-**TD-34**: Floating `latest` selection MUST NOT resolve to a yanked version. Maintainers MAY retag `latest` to the newest unyanked stable replacement because `latest` is already a floating selector.
+**TD-34**: Floating latest-stable selection MUST NOT resolve to a yanked version. Maintainers MAY move the **Latest** release pointer to the newest unyanked stable replacement because the latest-stable selection is already floating.
 
-**TD-35**: Lifecycle enforcement SHOULD happen before invoking the detector container and MUST NOT require detector container runtime network access. Implementations MUST NOT rely only on checks inside previously released detector binaries.
+**TD-35**: Lifecycle enforcement SHOULD happen before invoking the detector and MUST NOT require detector runtime network access. Implementations MUST NOT rely only on checks inside previously released detector binaries.
 
 ---
 
 ## 10. Security Considerations
 
-**TD-36**: The detection container SHOULD run with no network access (fully blocked egress).
+**TD-36**: The detection run SHOULD have no network access (fully blocked egress).
 
-**TD-37**: The detection container MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
+**TD-37**: The detection run MUST NOT have access to repository secrets beyond what is required for AI engine authentication.
 
 **TD-38**: Detection results MUST NOT be modifiable by the agent being analyzed.
