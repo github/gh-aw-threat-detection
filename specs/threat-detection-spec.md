@@ -96,6 +96,16 @@ use the same JSON object shape as TD-08 with required boolean `prompt_injection`
 field. The implementation MUST reject results that add unexpected fields, omit a
 required field, or use the wrong type for any field.
 
+**TD-10b**: Threat detection runs as a separate agentic engine invocation and
+therefore consumes AI credits/tokens independently of the agentic run it guards.
+On a successful run the implementation SHOULD report best-effort AI credit usage
+for the detection pass (engine, total tokens, and engine-reported estimated cost
+when available) on a machine-readable status channel, and MAY support writing the
+same usage object to a file. Because the engine subprocess is cancelled as soon
+as a verdict is recorded (early termination), reported token usage MAY undercount
+and cost MAY be unavailable; the reported figures are advisory and MUST NOT gate
+the verdict.
+
 ---
 
 ## 6. Custom Prompts
@@ -169,7 +179,11 @@ threat-detection:
 
 **TD-20**: The container MUST support writing the result to a file via the `--output` flag.
 
-**TD-20a**: The container MUST provide a `conclude` subcommand that reads a structured
+**TD-20a**: The implementation SHOULD support writing the best-effort AI credit
+usage object (per TD-10b) to a file via a `--usage-output` flag, separate from the
+result file so the strict result contract (TD-08) is preserved.
+
+**TD-20b**: The container MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
 contract (`conclusion`, `reason`, `success`) consumed by the parent orchestrator.
 The verdict crosses the AWF sandbox boundary as a file (written to a read-write

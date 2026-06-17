@@ -59,6 +59,7 @@ threat-detect [flags] <artifacts-dir>
 - `--model` — Model override for the engine
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
+- `--usage-output` — Path to write JSON AI credit usage (tokens, estimated cost) for the detection pass
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -132,6 +133,55 @@ A missing result file reports `agent_failure` ("Detection result file not found
 at: <path>"), a malformed file reports `parse_error`, and detected threats report
 `threat_detected`. There is no log-scraping fallback: if the file is absent, the
 step fails loudly.
+
+### AI Credits and Token Usage
+
+The threat-detection pass is a **separate agentic engine invocation** from the main
+agentic run it guards. It builds its own prompt and runs the selected engine
+(`copilot`, `claude`, or `codex`) once, so it consumes AI credits/tokens
+**independently** — in addition to (not shared with) the workflow's primary run.
+The cost is billed to the same engine account/credentials used for detection
+(`COPILOT_GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`).
+
+**Is there a separate token cap for the detection job?** There is no token-budget
+cap enforced by this component. Two mechanisms bound the detection pass's cost:
+
+- **Early termination** — as soon as the model records a verdict through the
+  `threat_detection_result` tool, the detector cancels the engine subprocess, so
+  the pass stops at the first valid verdict instead of running to the engine's
+  own limit.
+- **`max-turns`** — `gh-aw`'s `threat-detection.engine` configuration accepts a
+  `max-turns` value that bounds the agentic loop (see the [spec](specs/threat-detection-spec.md), TD-14).
+
+**Visibility into token usage.** After a successful run, `threat-detect` parses
+best-effort token usage and estimated cost from the engine transcript and reports
+them two ways:
+
+1. A single machine-readable line on **stderr** (captured into the detection log):
+
+   ```
+   THREAT_DETECTION_USAGE: {"engine":"claude","model":"","tokens":1800,"estimated_cost":0.0123,"available":true}
+   ```
+
+2. A JSON file when `--usage-output <path>` is set, with the same object shape:
+
+   ```json
+   { "engine": "claude", "tokens": 1800, "estimated_cost": 0.0123, "available": true }
+   ```
+
+The figures are **best-effort**:
+
+- `available` is `false` when no usage could be parsed. This happens for engines
+  that do not surface usage on stdout (notably `copilot`, which writes usage to
+  its own debug log), or when early termination truncates the transcript before
+  the engine emits its final usage line.
+- Token counts may **undercount** for the same early-termination reason; treat
+  them as a lower bound. `estimated_cost` is reported only when the engine emits
+  a cost field (for example Claude's `total_cost_usd`).
+
+For authoritative billing, use the engine's own logs (uploaded as the detection
+log artifact) together with `gh-aw`'s `logs` tooling, which performs the same
+extraction across the full, untruncated transcript.
 
 ### Container
 
