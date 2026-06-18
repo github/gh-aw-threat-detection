@@ -10,7 +10,6 @@ Threat Detection component for [GitHub Agentic Workflows](https://github.com/git
 - [Usage](#usage)
 - [Stage Status and Decisions](#stage-status-and-decisions)
 - [Release Asset Setup](#release-asset-setup)
-- [Release Lifecycle and Emergency Yanks](#release-lifecycle-and-emergency-yanks)
 - [Development](#development)
 - [Architecture](#architecture)
 - [Integration with gh-aw](#integration-with-gh-aw)
@@ -291,26 +290,6 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. |
 | `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. |
 
-## Release Lifecycle and Emergency Yanks
-
-Release lifecycle metadata is recorded in [`releases/threat-detection-lifecycle.json`](releases/threat-detection-lifecycle.json).
-The registry supports `active`, `deprecated`, `obsolete`, and `yanked` states.
-`yanked` means a release is unsafe to run and is stronger than `obsolete`.
-
-The parent orchestrator (`gh-aw`) must check this registry before downloading or
-running a detector binary:
-
-- The **Latest** release must not point at a yanked version. Maintainers use the manual
-  **Yank Release** workflow to move the **Latest** pointer to a safe stable replacement.
-- Explicit version or asset-sha256 pins that match a yanked registry entry must fail
-  closed before detector execution.
-- Explicit pins must not be silently downgraded or upgraded; the failure message
-  should include the yank reason and replacement version.
-
-Yanked release artifacts remain available for audit and forensics unless
-maintainers choose separate package removal. See [DEVGUIDE.md](DEVGUIDE.md#emergency-yank-process)
-for maintainer approval, communication, and workflow details.
-
 ## Development
 
 ### Prerequisites
@@ -403,16 +382,6 @@ const DefaultThreatDetectionVersion = "v0.0.2"
 ```
 
 The detection job in compiled workflows downloads the pinned `threat-detect-linux-amd64` release asset and runs it instead of inline AI engine invocation.
-
-`gh-aw` should also fetch or vendor
-[releases/threat-detection-lifecycle.json](releases/threat-detection-lifecycle.json)
-and evaluate the pinned `DefaultThreatDetectionVersion` before downloading or
-running the detector binary. Active versions run normally. Deprecated versions
-should emit a GitHub Actions warning annotation and job summary text that include
-the reason, replacement version, dates, advisory URL, urgency, and upgrade
-instructions, then continue. Obsolete versions should fail closed before the
-detector runs and print the same remediation guidance. Unknown versions should
-follow the registry policy, currently `fail-closed`.
 
 ## Specification
 

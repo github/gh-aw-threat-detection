@@ -250,22 +250,6 @@ The implementation MAY pass through engine-specific authentication variables req
 
 **TD-27**: Private repository status MUST NOT block detector publication or consumption. When the source repository is private, approved consuming repositories MUST be able to download pinned release assets with `contents: read`.
 
-**TD-28**: The repository MUST publish a machine-readable threat detection lifecycle registry that identifies each governed version as `active`, `deprecated`, `obsolete`, or `yanked`.
-
-**TD-29**: Promoted versions are `active` by default unless the lifecycle registry explicitly marks them otherwise.
-
-**TD-30**: Deprecated versions MUST be allowed to run, but the parent orchestrator or generated workflow MUST emit warning annotations and job summary text with the reason, replacement guidance, relevant dates, advisory URL, urgency, and remediation steps.
-
-**TD-31**: Obsolete versions MUST NOT run. The parent orchestrator or generated workflow MUST fail closed before downloading or invoking the detector and MUST print actionable upgrade guidance.
-
-**TD-32**: A `yanked` release indicates unsafe security or correctness behavior and MUST include a severity, reason, yank date, replacement guidance, and the affected release-asset sha256. Selected yanked versions or asset sha256 values MUST fail closed before detector execution.
-
-**TD-33**: Explicitly pinned yanked versions or asset sha256 values MUST NOT silently fall back to another version. The failure message SHOULD explain that the selected detector was yanked and name the safe replacement when one exists.
-
-**TD-34**: Floating latest-stable selection MUST NOT resolve to a yanked version. Maintainers MAY move the **Latest** release pointer to the newest unyanked stable replacement because the latest-stable selection is already floating.
-
-**TD-35**: Lifecycle enforcement SHOULD happen before invoking the detector and MUST NOT require detector runtime network access. Implementations MUST NOT rely only on checks inside previously released detector binaries.
-
 ---
 
 ## 10. Security Considerations

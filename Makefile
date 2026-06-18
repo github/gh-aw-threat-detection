@@ -1,7 +1,7 @@
 .PHONY: all build test test-coverage lint golint clean smoke \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
-	sbom lifecycle-validate validate-lifecycle agent-finish help
+	sbom agent-finish help
 
 BINARY_NAME=threat-detect
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -99,14 +99,8 @@ test-coverage:
 	go test -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
-lifecycle-validate:
-	go test ./pkg/detector -run TestThreatDetectionLifecycleRegistry -count=1
-
 lint:
 	go vet ./...
-
-validate-lifecycle:
-	$(MAKE) lifecycle-validate
 
 golint:
 	@GOPATH=$$(go env GOPATH); \
@@ -181,8 +175,6 @@ help:
 	@echo "  license-report - Generate CSV license report"
 	@echo "  security-scan  - Run gosec and govulncheck"
 	@echo "  sbom           - Generate SPDX and CycloneDX SBOMs"
-	@echo "  lifecycle-validate - Validate threat detection lifecycle metadata"
-	@echo "  validate-lifecycle - Alias for lifecycle-validate"
 	@echo "  smoke          - Build the binary and run a CLI smoke test"
 	@echo "  clean          - Remove build artifacts and reports"
 	@echo "  agent-finish   - Run the maintainer validation workflow"
