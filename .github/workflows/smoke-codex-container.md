@@ -22,7 +22,7 @@ tools:
   web-fetch:
 runtimes:
   go:
-    version: "1.23"
+    version: "1.26"
 checkout:
   fetch-depth: 1
 safe-outputs:
