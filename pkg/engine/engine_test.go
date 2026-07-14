@@ -47,6 +47,21 @@ func TestNew_Default(t *testing.T) {
 	}
 }
 
+func TestCanonical(t *testing.T) {
+	cases := map[string]string{
+		"":        DefaultEngineID,
+		"copilot": "copilot",
+		"Copilot": "copilot",
+		"CLAUDE":  "claude",
+		"Codex":   "codex",
+	}
+	for in, want := range cases {
+		if got := Canonical(in); got != want {
+			t.Errorf("Canonical(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestNew_Unsupported(t *testing.T) {
 	_, err := New("unsupported-engine", "")
 	if err == nil {

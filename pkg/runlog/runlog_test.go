@@ -3,6 +3,7 @@ package runlog
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,3 +157,54 @@ func TestOpenTruncatesExistingFile(t *testing.T) {
 		t.Fatalf("file was not truncated: %q", string(data))
 	}
 }
+
+func TestOpenTightensExistingPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.jsonl")
+	// Seed a pre-existing world-readable file; Open must tighten it to 0600
+	// even though O_CREATE's mode only applies to newly created files.
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("seed write error = %v", err)
+	}
+	l, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat error = %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("file perm = %o, want 600", perm)
+	}
+}
+
+// failingWriter returns an error on the Nth write onward.
+type failingWriter struct {
+	failFrom int
+	count    int
+}
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	w.count++
+	if w.count >= w.failFrom {
+		return 0, errors.New("disk full")
+	}
+	return len(p), nil
+}
+
+func TestCloseSurfacesFirstWriteError(t *testing.T) {
+	fw := &failingWriter{failFrom: 2}
+	l := New(fw)
+	l.Info("ok", nil)    // succeeds
+	l.Info("boom", nil)  // fails
+	l.Info("boom2", nil) // also fails, but first error must be preserved
+	if err := l.Close(); err == nil {
+		t.Fatal("Close() error = nil, want the recorded write error")
+	} else if !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Close() error = %v, want disk full", err)
+	}
+}
+

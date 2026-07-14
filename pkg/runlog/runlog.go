@@ -31,10 +31,11 @@ const (
 // The zero value is not usable; construct one with New or Open. A nil *Logger
 // is a valid no-op.
 type Logger struct {
-	mu     sync.Mutex
-	w      io.Writer
-	closer io.Closer
-	now    func() time.Time
+	mu       sync.Mutex
+	w        io.Writer
+	closer   io.Closer
+	now      func() time.Time
+	writeErr error
 }
 
 // New returns a Logger that writes records to w. The writer is not closed by
@@ -51,6 +52,13 @@ func Open(path string) (*Logger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening JSONL log file: %w", err)
 	}
+	// OpenFile only applies the mode when creating the file; an existing file
+	// keeps its prior (possibly more permissive) mode. Enforce 0600 explicitly
+	// so audit data is never left world-readable.
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("securing JSONL log file permissions: %w", err)
+	}
 	return &Logger{w: f, closer: f, now: time.Now}, nil
 }
 
@@ -64,13 +72,25 @@ func (l *Logger) Error(event string, fields map[string]any) {
 	l.emit(LevelError, event, fields)
 }
 
-// Close closes the underlying file when the Logger owns one. It is safe to call
-// on a nil Logger or one constructed with New (in which case it is a no-op).
+// Close reports the first write/encode error observed (so callers learn the
+// requested log is incomplete) and closes the underlying file when the Logger
+// owns one. It is safe to call on a nil Logger or one constructed with New.
 func (l *Logger) Close() error {
-	if l == nil || l.closer == nil {
+	if l == nil {
 		return nil
 	}
-	return l.closer.Close()
+	l.mu.Lock()
+	writeErr := l.writeErr
+	l.mu.Unlock()
+
+	var closeErr error
+	if l.closer != nil {
+		closeErr = l.closer.Close()
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func (l *Logger) emit(level, event string, fields map[string]any) {
@@ -78,12 +98,19 @@ func (l *Logger) emit(level, event string, fields map[string]any) {
 		return
 	}
 	line, err := encodeRecord(l.now().UTC(), level, event, fields)
-	if err != nil {
-		return
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, _ = l.w.Write(line)
+	if err != nil {
+		if l.writeErr == nil {
+			l.writeErr = err
+		}
+		return
+	}
+	if _, err := l.w.Write(line); err != nil && l.writeErr == nil {
+		// Preserve the first failure; closing an os.File will not report an
+		// earlier short/failed Write, so record it for Close to surface.
+		l.writeErr = err
+	}
 }
 
 // encodeRecord renders a single JSONL line: the leading time/level/event keys

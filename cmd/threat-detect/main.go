@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
@@ -133,6 +134,21 @@ func run() (code int) {
 		return exitSafe
 	}
 
+	// Reject a --log-file that collides with --output: they are opened and
+	// truncated independently, so sharing an inode would interleave the JSONL
+	// trace and the result JSON and corrupt both while still reporting success.
+	if logFile != "" && outputJSON != "" {
+		if same, err := samePath(logFile, outputJSON); err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving output paths: %v\n", err)
+			reason = reasonConfigError
+			return exitError
+		} else if same {
+			fmt.Fprintf(os.Stderr, "Error: --log-file and --output must not point to the same file (%q)\n", logFile)
+			reason = reasonConfigError
+			return exitError
+		}
+	}
+
 	// Open the JSONL run log if requested. A failure here is a config error:
 	// the caller explicitly asked for logs and should learn they were not written.
 	if logFile != "" {
@@ -146,7 +162,7 @@ func run() (code int) {
 	}
 	logger.Info("run_start", map[string]any{
 		"version": detector.Version,
-		"engine":  engineID,
+		"engine":  engine.Canonical(engineID),
 		"model":   model,
 		"retries": retries,
 	})
@@ -309,4 +325,47 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// samePath reports whether a and b refer to the same file. It first compares
+// resolved absolute paths (handling "." segments and symlinked directories),
+// then, when both files already exist, confirms with os.SameFile so hardlinks
+// and other symlink equivalences are caught too.
+func samePath(a, b string) (bool, error) {
+	ra, err := resolvePath(a)
+	if err != nil {
+		return false, err
+	}
+	rb, err := resolvePath(b)
+	if err != nil {
+		return false, err
+	}
+	if ra == rb {
+		return true, nil
+	}
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(ia, ib), nil
+	}
+	return false, nil
+}
+
+// resolvePath returns an absolute, symlink-resolved path. When the target does
+// not yet exist, it resolves the deepest existing ancestor directory and rejoins
+// the remaining components so not-yet-created siblings still compare correctly.
+func resolvePath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	dir, base := filepath.Split(abs)
+	dir = filepath.Clean(dir)
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Join(resolvedDir, base), nil
+	}
+	return filepath.Clean(abs), nil
 }

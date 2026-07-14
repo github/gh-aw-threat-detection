@@ -121,6 +121,8 @@ events include `run_start`, `artifacts_loaded`, `prompt_built`,
 `detection_failed`, and a terminal `status` record carrying the same `reason`
 and `exit` code as the stderr status line. The verdict JSON contract
 (`--output`) is unchanged; the log file is an additive observability sink.
+`--log-file` and `--output` must not resolve to the same file — a collision is
+rejected as a configuration error to avoid corrupting both outputs.
 
 ```jsonl
 {"time":"2026-07-14T18:00:00Z","level":"info","event":"run_start","engine":"copilot","model":"","retries":1,"version":"1.2.3"}
