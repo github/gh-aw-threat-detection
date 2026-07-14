@@ -357,7 +357,8 @@ The detection job in compiled workflows downloads the pinned `threat-detect-linu
 
 ## Specification
 
-See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification.
+- [Threat Detection Specification](specs/threat-detection-spec.md) — detection categories, engine configuration, and behavioral requirements (W3C-style).
+- [Usage Specification](specs/usage-spec.md) — CLI invocation, binary distribution, artifact input, result output, subcommands, and integration patterns (W3C-style).
 
 ## Contributing
 
