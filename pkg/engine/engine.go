@@ -29,8 +29,19 @@ type Engine interface {
 	Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error)
 }
 
+// Environment variables for per-engine model configuration.
+// Each can be overridden by the --model flag passed to New.
+const (
+	EnvCopilotModel = "THREAT_DETECTION_COPILOT_MODEL"
+	EnvClaudeModel  = "THREAT_DETECTION_CLAUDE_MODEL"
+	EnvCodexModel   = "THREAT_DETECTION_CODEX_MODEL"
+)
+
 // New creates a new engine instance based on the engine ID.
 // If engineID is empty, it defaults to "copilot".
+// When model is empty, each engine falls back to its per-engine env var
+// (THREAT_DETECTION_COPILOT_MODEL, THREAT_DETECTION_CLAUDE_MODEL, or
+// THREAT_DETECTION_CODEX_MODEL).
 func New(engineID, model string) (Engine, error) {
 	if engineID == "" {
 		engineID = "copilot"
@@ -38,10 +49,19 @@ func New(engineID, model string) (Engine, error) {
 
 	switch strings.ToLower(engineID) {
 	case "copilot":
+		if model == "" {
+			model = os.Getenv(EnvCopilotModel)
+		}
 		return &copilotEngine{model: model}, nil
 	case "claude":
+		if model == "" {
+			model = os.Getenv(EnvClaudeModel)
+		}
 		return &claudeEngine{model: model}, nil
 	case "codex":
+		if model == "" {
+			model = os.Getenv(EnvCodexModel)
+		}
 		return &codexEngine{model: model}, nil
 	default:
 		return nil, fmt.Errorf("unsupported engine: %q (supported: copilot, claude, codex)", engineID)

@@ -54,8 +54,8 @@ threat-detect [flags] <artifacts-dir>
 ```
 
 **Flags:**
-- `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
-- `--model` — Model override for the engine
+- `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot` (env: `THREAT_DETECTION_ENGINE`)
+- `--model` — Model override for the engine; per-engine defaults: `THREAT_DETECTION_COPILOT_MODEL` / `THREAT_DETECTION_CLAUDE_MODEL` / `THREAT_DETECTION_CODEX_MODEL`
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)

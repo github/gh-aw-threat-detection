@@ -67,6 +67,86 @@ func TestNew_CaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestNew_ModelEnvVarFallback(t *testing.T) {
+	tests := []struct {
+		name      string
+		engineID  string
+		envKey    string
+		envModel  string
+		wantModel string
+	}{
+		{
+			name:      "copilot env model used when no flag model",
+			engineID:  "copilot",
+			envKey:    EnvCopilotModel,
+			envModel:  "gpt-5",
+			wantModel: "gpt-5",
+		},
+		{
+			name:      "claude env model used when no flag model",
+			engineID:  "claude",
+			envKey:    EnvClaudeModel,
+			envModel:  "claude-opus-4.5",
+			wantModel: "claude-opus-4.5",
+		},
+		{
+			name:      "codex env model used when no flag model",
+			engineID:  "codex",
+			envKey:    EnvCodexModel,
+			envModel:  "gpt-5-codex",
+			wantModel: "gpt-5-codex",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(tc.envKey, tc.envModel)
+			eng, err := New(tc.engineID, "")
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			var gotModel string
+			switch e := eng.(type) {
+			case *copilotEngine:
+				gotModel = e.model
+			case *claudeEngine:
+				gotModel = e.model
+			case *codexEngine:
+				gotModel = e.model
+			default:
+				t.Fatalf("unexpected engine type %T", eng)
+			}
+			if gotModel != tc.wantModel {
+				t.Fatalf("engine.model = %q, want %q", gotModel, tc.wantModel)
+			}
+		})
+	}
+}
+
+func TestNew_FlagModelOverridesEnvVar(t *testing.T) {
+	t.Setenv(EnvCopilotModel, "env-model")
+	eng, err := New("copilot", "flag-model")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got := eng.(*copilotEngine).model
+	if got != "flag-model" {
+		t.Fatalf("engine.model = %q, want %q (flag must override env)", got, "flag-model")
+	}
+}
+
+func TestNew_EnvVarNotLeakedToOtherEngine(t *testing.T) {
+	// THREAT_DETECTION_COPILOT_MODEL must not affect the claude engine.
+	t.Setenv(EnvCopilotModel, "copilot-specific-model")
+	eng, err := New("claude", "")
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	got := eng.(*claudeEngine).model
+	if got != "" {
+		t.Fatalf("claude engine.model = %q, want empty (copilot env must not leak)", got)
+	}
+}
+
 func TestEngineCommandArgs(t *testing.T) {
 	t.Run("copilot", func(t *testing.T) {
 		t.Setenv("GITHUB_WORKSPACE", "/workspace/repo")

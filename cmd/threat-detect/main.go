@@ -103,8 +103,8 @@ func run() (code int) {
 	flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
 	flag.CommandLine.SetOutput(os.Stderr)
 
-	flag.StringVar(&engineID, "engine", "", "AI engine to use (copilot, claude, codex)")
-	flag.StringVar(&model, "model", "", "Model to use for detection")
+	flag.StringVar(&engineID, "engine", envString("THREAT_DETECTION_ENGINE", ""), "AI engine to use (copilot, claude, codex) (env: THREAT_DETECTION_ENGINE)")
+	flag.StringVar(&model, "model", "", "Model override for the engine; per-engine defaults: env THREAT_DETECTION_COPILOT_MODEL / THREAT_DETECTION_CLAUDE_MODEL / THREAT_DETECTION_CODEX_MODEL")
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
@@ -265,4 +265,11 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envString(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
 }

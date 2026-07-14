@@ -189,6 +189,32 @@ func TestRunEmitsEngineErrorStatusOnFailClosed(t *testing.T) {
 	}
 }
 
+func TestRunUsesEngineEnvVar(t *testing.T) {
+	// When --engine is omitted but THREAT_DETECTION_ENGINE=copilot, the
+	// copilot engine should still be selected (the env var sets the default).
+	artifactsDir := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                    fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"THREAT_DETECTION_ENGINE": "copilot",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	if _, err := os.Stat(copilotMarker); err != nil {
+		t.Fatalf("expected copilot to run (selected via THREAT_DETECTION_ENGINE): %v", err)
+	}
+}
+
 func runWithTestArgs(t *testing.T, args []string, env map[string]string) int {
 	t.Helper()
 	code, _ := runWithTestArgsCapture(t, args, env)

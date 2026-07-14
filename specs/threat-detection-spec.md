@@ -214,6 +214,13 @@ treats a missing verdict as a recoverable `parse_error` and proceeds.
 | `WORKFLOW_NAME` | Name of the workflow being analyzed |
 | `WORKFLOW_DESCRIPTION` | Description of the workflow |
 | `CUSTOM_PROMPT` | Additional detection instructions |
+| `THREAT_DETECTION_ENGINE` | Default engine when `--engine` is not specified (`copilot`, `claude`, `codex`) |
+| `THREAT_DETECTION_COPILOT_MODEL` | Default model for the Copilot engine when `--model` is not specified |
+| `THREAT_DETECTION_CLAUDE_MODEL` | Default model for the Claude engine when `--model` is not specified |
+| `THREAT_DETECTION_CODEX_MODEL` | Default model for the Codex engine when `--model` is not specified |
+| `THREAT_DETECTION_RETRIES` | Retries for malformed detection outputs (integer, default `1`) |
+
+The `--engine` flag overrides `THREAT_DETECTION_ENGINE`. The `--model` flag overrides the per-engine model env var. Per-engine model env vars are engine-scoped: `THREAT_DETECTION_COPILOT_MODEL` is only consulted when the Copilot engine is selected, and so on.
 
 **TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt building, unit test, or binary smoke test execution.
 
