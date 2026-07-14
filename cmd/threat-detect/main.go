@@ -27,6 +27,7 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
+	"github.com/github/gh-aw-threat-detection/pkg/runlog"
 )
 
 const (
@@ -83,9 +84,16 @@ func run() (code int) {
 	// reason is set at each terminal point; the deferred emitter writes the
 	// single status line. An empty reason (e.g. --version) emits nothing.
 	reason := ""
+	// logger, when non-nil, mirrors the run's key events (including the terminal
+	// status) to a JSONL log file. It is nil until --log-file is resolved.
+	var logger *runlog.Logger
 	defer func() {
 		if reason != "" {
 			emitStatus(reason, code)
+			logger.Info("status", map[string]any{"reason": reason, "exit": code})
+		}
+		if err := logger.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error closing log file: %v\n", err)
 		}
 	}()
 
@@ -94,6 +102,7 @@ func run() (code int) {
 		model      string
 		promptFile string
 		outputJSON string
+		logFile    string
 		version    bool
 		retries    int
 	)
@@ -107,6 +116,7 @@ func run() (code int) {
 	flag.StringVar(&model, "model", "", "Model to use for detection")
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
+	flag.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
@@ -123,6 +133,24 @@ func run() (code int) {
 		return exitSafe
 	}
 
+	// Open the JSONL run log if requested. A failure here is a config error:
+	// the caller explicitly asked for logs and should learn they were not written.
+	if logFile != "" {
+		l, err := runlog.Open(logFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
+			reason = reasonConfigError
+			return exitError
+		}
+		logger = l
+	}
+	logger.Info("run_start", map[string]any{
+		"version": detector.Version,
+		"engine":  engineID,
+		"model":   model,
+		"retries": retries,
+	})
+
 	// Determine artifacts directory from positional args
 	args := flag.Args()
 	if len(args) < 1 {
@@ -137,9 +165,11 @@ func run() (code int) {
 	arts, err := artifacts.Load(artifactsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading artifacts: %v\n", err)
+		logger.Error("artifacts_load_failed", map[string]any{"artifacts_dir": artifactsDir, "error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
+	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
 
 	// Build the prompt
 	promptTemplate := ""
@@ -156,14 +186,17 @@ func run() (code int) {
 	prompt, err := detector.BuildPrompt(arts, promptTemplate)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)
+		logger.Error("prompt_build_failed", map[string]any{"error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
+	logger.Info("prompt_built", map[string]any{"prompt_bytes": len(prompt)})
 
 	// Create engine
 	eng, err := engine.New(engineID, model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
+		logger.Error("engine_create_failed", map[string]any{"error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
@@ -181,7 +214,7 @@ func run() (code int) {
 	os.Remove(sinkPath)
 	defer os.Remove(sinkPath)
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
+	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
 		switch {
@@ -192,8 +225,16 @@ func run() (code int) {
 		default:
 			reason = reasonInvalidReportExhausted
 		}
+		logger.Error("detection_failed", map[string]any{"reason": reason, "error": err.Error()})
 		return exitError
 	}
+	logger.Info("verdict", map[string]any{
+		"prompt_injection": result.PromptInjection,
+		"secret_leak":      result.SecretLeak,
+		"malicious_patch":  result.MaliciousPatch,
+		"reasons":          result.Reasons,
+		"has_threats":      result.HasThreats(),
+	})
 
 	var resultReason string
 	code, resultReason = writeResult(result, outputJSON)
@@ -201,7 +242,7 @@ func run() (code int) {
 	return code
 }
 
-func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
+func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int, logger *runlog.Logger) (*detector.Result, error) {
 	if sinkPath == "" {
 		return nil, fmt.Errorf("result sink path is required for detection")
 	}
@@ -212,6 +253,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	currentPrompt := prompt
 	var lastErr error
 	for i := 0; i < attempts; i++ {
+		logger.Info("attempt_start", map[string]any{"attempt": i + 1, "attempts": attempts})
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
 		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
@@ -221,9 +263,11 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		// threat_detection_result tool, which records it to the sink.
 		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
+			logger.Info("attempt_recorded", map[string]any{"attempt": i + 1})
 			return result, nil
 		}
 		lastErr = err
+		logger.Info("attempt_no_verdict", map[string]any{"attempt": i + 1, "error": err.Error()})
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
