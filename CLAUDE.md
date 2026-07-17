@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (and other coding agents) when workin
 The component runs in two main contexts:
 
 1. **As a host CLI** (`./bin/threat-detect <artifacts-dir>`) inside a `gh-aw`-generated detection job.
-2. **As a published release-asset binary** (`threat-detect-linux-amd64`, downloaded via `gh release download` from [`github/gh-aw-threat-detection` releases](https://github.com/github/gh-aw-threat-detection/releases)) installed on the runner and executed under the AWF firewall (see [AWF section below](#agentic-workflow-firewall-awf)).
+2. **As a published release-asset binary** (`threat-detect-linux-amd64` / `threat-detect-linux-arm64`, downloaded via `gh release download` from [`github/gh-aw-threat-detection` releases](https://github.com/github/gh-aw-threat-detection/releases)) installed on the runner and executed under the AWF firewall (see [AWF section below](#agentic-workflow-firewall-awf)).
 
 It detects three categories: **prompt injection**, **secret leak**, and **malicious patch**, and emits a strict JSON contract.
 
@@ -17,7 +17,7 @@ It detects three categories: **prompt injection**, **secret leak**, and **malici
 
 - **Language**: Go 1.26+ (module `github.com/github/gh-aw-threat-detection`)
 - **Binary**: `bin/threat-detect` (built via `make build`)
-- **Distribution**: published as GitHub Release assets (`threat-detect-linux-amd64` + `checksums.txt`); no container image
+- **Distribution**: published as GitHub Release assets (`threat-detect-linux-amd64`, `threat-detect-linux-arm64` + `checksums.txt`); no container image
 - **Spec**: [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md) — W3C-style normative spec; the source of truth for behavior
 - **Engines supported**: `copilot` (default), `claude`, `codex` — invoked from `PATH`, not bundled into the binary
 - **Detection**: a single agentic CLI engine pass; the engine reports its verdict in-session via the `threat_detection_result` tool (out-of-band result sink), which is the sole source of the verdict
@@ -128,8 +128,8 @@ The detector reads the verdict exclusively from the out-of-band result sink. The
 Three workflows orchestrate releases:
 
 1. `.github/workflows/create-release-tag.yml` — manual; pushes `vX.Y.Z`.
-2. `.github/workflows/release.yml` — triggered by tag push; gated by `release-publish` environment; builds + publishes the `threat-detect-linux-amd64` binary as GitHub Release assets in a **prerelease**, recording the asset sha256 in the release notes.
-3. `.github/workflows/promote-release.yml` — manual; gated by `release-promote`; re-downloads the asset, verifies its sha256 against the recorded value, and marks the GitHub release **Latest** (stable).
+2. `.github/workflows/release.yml` — triggered by tag push; gated by `release-publish` environment; builds + publishes the `threat-detect-linux-amd64` and `threat-detect-linux-arm64` binaries as GitHub Release assets in a **prerelease**, recording each asset's sha256 in the release notes.
+3. `.github/workflows/promote-release.yml` — manual; gated by `release-promote`; re-downloads each per-arch asset, verifies its sha256 against the recorded value, and marks the GitHub release **Latest** (stable).
 
 The `latest` (non-prerelease) GitHub release and "Latest" badge **only move on explicit promotion** — never automatically.
 

@@ -1343,16 +1343,21 @@ jobs:
           set -euo pipefail
           dest_dir="${RUNNER_TEMP}/gh-aw/threat-detect-bin"
           mkdir -p "$dest_dir"
+          case "$(uname -m)" in
+            x86_64) asset="threat-detect-linux-amd64" ;;
+            aarch64|arm64) asset="threat-detect-linux-arm64" ;;
+            *) echo "::error::Unsupported runner architecture: $(uname -m)"; exit 1 ;;
+          esac
           download_dir="$(mktemp -d)"
           trap 'rm -rf "$download_dir"' EXIT
-          args=(--repo "$DETECTOR_REPO" --pattern threat-detect-linux-amd64 --pattern checksums.txt --dir "$download_dir")
+          args=(--repo "$DETECTOR_REPO" --pattern "$asset" --pattern checksums.txt --dir "$download_dir")
           if [ -n "${THREAT_DETECTION_VERSION:-}" ]; then
             gh release download "$THREAT_DETECTION_VERSION" "${args[@]}"
           else
             gh release download "${args[@]}"
           fi
           ( cd "$download_dir" && sha256sum --check --ignore-missing checksums.txt )
-          install -m 0755 "$download_dir/threat-detect-linux-amd64" "$dest_dir/threat-detect"
+          install -m 0755 "$download_dir/$asset" "$dest_dir/threat-detect"
       - name: Execute threat detection with AWF
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true

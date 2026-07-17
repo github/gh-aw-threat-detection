@@ -26,10 +26,12 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:7}"
           VERSION="main-${SHORT_SHA}"
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
-            -o dist/threat-detect-linux-amd64 ./cmd/threat-detect
-          ( cd dist && sha256sum threat-detect-linux-amd64 > checksums.txt )
+          for GOARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build \
+              -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
+              -o "dist/threat-detect-linux-${GOARCH}" ./cmd/threat-detect
+          done
+          ( cd dist && sha256sum threat-detect-linux-amd64 threat-detect-linux-arm64 > checksums.txt )
           {
             echo "short_sha=${SHORT_SHA}"
             echo "version=${VERSION}"
@@ -41,7 +43,8 @@ jobs:
           SHORT_SHA: ${{ steps.build.outputs.short_sha }}
         run: |
           set -euo pipefail
-          BINARY_SHA256="sha256:$(sha256sum dist/threat-detect-linux-amd64 | awk '{print $1}')"
+          AMD64_SHA256="sha256:$(sha256sum dist/threat-detect-linux-amd64 | awk '{print $1}')"
+          ARM64_SHA256="sha256:$(sha256sum dist/threat-detect-linux-arm64 | awk '{print $1}')"
           # Move the rolling `main` pre-release to this commit. Deleting and
           # recreating keeps the `main` tag pointed at the freshest build, mirroring
           # the moving `:main` container tag. The Latest release (the most recently
@@ -49,9 +52,10 @@ jobs:
           gh release delete main --yes --cleanup-tag 2>/dev/null || true
           gh release create main \
             dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
+            dist/threat-detect-linux-arm64#threat-detect-linux-arm64 \
             dist/checksums.txt#checksums.txt \
             --title "main (edge build ${SHORT_SHA})" \
-            --notes "Unverified branch build from ${GITHUB_SHA}. Binary asset sha256: ${BINARY_SHA256}. The Latest release continues to track the most recently promoted version." \
+            --notes "Unverified branch build from ${GITHUB_SHA}. Binary asset sha256 (linux-amd64): ${AMD64_SHA256}. Binary asset sha256 (linux-arm64): ${ARM64_SHA256}. The Latest release continues to track the most recently promoted version." \
             --target "${GITHUB_SHA}" \
             --prerelease
 
@@ -63,7 +67,7 @@ jobs:
             echo "## Published main binary"
             echo
             echo "- Rolling pre-release \`main\` updated to edge build \`${SHORT_SHA}\`"
-            echo "- Asset: \`threat-detect-linux-amd64\` (+ \`checksums.txt\`)"
+            echo "- Asset: \`threat-detect-linux-amd64\`, \`threat-detect-linux-arm64\` (+ \`checksums.txt\`)"
             echo
             echo "These are unverified branch builds. The Latest release is unaffected and continues to track the most recently promoted release."
           } >> "$GITHUB_STEP_SUMMARY"

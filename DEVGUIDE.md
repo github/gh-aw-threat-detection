@@ -188,8 +188,9 @@ Releases follow a **prerelease → promote** model:
 
 2. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
    [release workflow](.github/workflows/release.yml). It builds the
-   `threat-detect-linux-amd64` binary, attaches it (plus `checksums.txt`) to a
-   **prerelease** on GitHub, and records the asset sha256 in the release notes.
+   `threat-detect-linux-amd64` and `threat-detect-linux-arm64` binaries, attaches
+   them (plus `checksums.txt`) to a **prerelease** on GitHub, and records each
+   asset's sha256 in the release notes.
    The `release-publish` environment gate
    pauses the workflow before publishing so maintainers can abort if needed.
 
@@ -198,7 +199,7 @@ Releases follow a **prerelease → promote** model:
    **Actions → Promote Release → Run workflow**, entering the tag name. This
    workflow (gated by the `release-promote` environment):
    - verifies the release is still a prerelease
-   - re-downloads the asset and verifies its sha256 against the recorded value
+   - re-downloads each per-arch asset and verifies its sha256 against the recorded value
    - marks the GitHub release as stable and explicitly selects it as Latest (`--prerelease=false --latest`)
 
 The GitHub "Latest" release pointer only moves
@@ -211,9 +212,9 @@ In addition to release tags, every push to `main` triggers the
 [publish-main workflow](.github/workflows/publish-main.yml), which builds the
 binary and republishes a single rolling `main` pre-release:
 
-- The `main` pre-release always carries the `threat-detect-linux-amd64` asset
-  built from the most recent successful build from `main`, versioned
-  `main-<shortsha>`.
+- The `main` pre-release always carries the `threat-detect-linux-amd64` and
+  `threat-detect-linux-arm64` assets built from the most recent successful build
+  from `main`, versioned `main-<shortsha>`.
 
 These are **unverified branch builds**. The `main` pre-release is not eligible
 for promotion. The **Latest** stable release pointer is
@@ -240,7 +241,7 @@ After the tag is pushed:
 
 1. Approve the `release-publish` environment gate when the workflow pauses.
 2. Verify the prerelease on the [Releases page](../../releases) and test the
-   version-tagged `threat-detect-linux-amd64` asset.
+   version-tagged `threat-detect-linux-amd64` / `threat-detect-linux-arm64` assets.
 3. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
    the workflow. Approve the `release-promote` environment gate.
 4. Confirm the **Latest** release now resolves to the new version.
