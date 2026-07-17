@@ -170,6 +170,16 @@ threat-detection:
 
 **TD-20**: The detector MUST support writing the result to a file via the `--output` flag.
 
+**TD-20a**: The detector MUST support writing a structured run log in JSON Lines
+(JSONL) format to a file via the `--log-file` flag (also configurable through the
+`THREAT_DETECTION_LOG_FILE` environment variable). When enabled, the detector MUST
+write one JSON object per line, each containing at least the `time`, `level`, and
+`event` keys, and MUST record a terminal `status` event whose `reason` and `exit`
+fields carry the same reason string and exit code as the stderr status line. The
+run log is an additive observability
+sink: it MUST NOT alter the result JSON contract (TD-08) or the exit codes (TD-21).
+A failure to open the log file MUST be treated as a configuration error.
+
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
 contract (`conclusion`, `reason`, `success`) consumed by the parent orchestrator.

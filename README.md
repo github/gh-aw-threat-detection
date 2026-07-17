@@ -58,6 +58,7 @@ threat-detect [flags] <artifacts-dir>
 - `--model` — Model override for the engine
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
+- `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -107,6 +108,27 @@ recorded verdict (exit 0/1) and an `invalid_report_exhausted` outcome do not fai
 the step, so warn-mode workflows proceed exactly as they do under `gh-aw`'s native
 engine (which treats a missing verdict as a recoverable `parse_error`). Only genuine
 engine/config failures surface as a step failure. See spec TD-21a.
+
+#### JSONL run logs (`--log-file`)
+
+Pass `--log-file <path>` (or set `THREAT_DETECTION_LOG_FILE`) to record a
+structured trace of the run as [JSON Lines](https://jsonlines.org/): one JSON
+object per line, created fresh (truncating any existing file) with `0600`
+permissions. Every record starts with `time` (RFC 3339), `level`
+(`info`/`error`), and `event`, followed by event-specific fields. Emitted
+events include `run_start`, `artifacts_loaded`, `prompt_built`,
+`attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
+`detection_failed`, and a terminal `status` record carrying the same `reason`
+and `exit` code as the stderr status line. The verdict JSON contract
+(`--output`) is unchanged; the log file is an additive observability sink.
+`--log-file` and `--output` must not resolve to the same file — a collision is
+rejected as a configuration error to avoid corrupting both outputs.
+
+```jsonl
+{"time":"2026-07-14T18:00:00Z","level":"info","event":"run_start","engine":"copilot","model":"","retries":1,"version":"1.2.3"}
+{"time":"2026-07-14T18:00:03Z","level":"info","event":"verdict","has_threats":false,"malicious_patch":false,"prompt_injection":false,"reasons":[],"secret_leak":false}
+{"time":"2026-07-14T18:00:03Z","level":"info","event":"status","exit":0,"reason":"result_recorded"}
+```
 
 #### Concluding a run (`conclude`)
 

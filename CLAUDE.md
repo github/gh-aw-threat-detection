@@ -37,6 +37,7 @@ pkg/detector/             Core detection logic
 pkg/engine/               AI engine abstraction
   ├── engine.go           copilot/claude/codex CLI adapters; Copilot uses runCLIWithPromptFile, Claude uses runCLI with stdin, Codex passes prompts via codexArgs/runCLIEnv
   └── tool.go             threat_detection_result wrapper provisioning + result-sink watcher
+pkg/runlog/               Structured JSONL run-log writer (--log-file); nil-safe no-op logger
 specs/                    Normative spec (threat-detection-spec.md)
 scripts/                  create-threat-detection-sibling-workflows.py (regenerates *-container.lock.yml)
 skills/                   Repo-relevant agent skills (console-rendering, error-messages)
@@ -80,6 +81,7 @@ threat-detect [flags] <artifacts-dir>
 - `--model <name>` — model override forwarded to the engine
 - `--prompt-template <path>` — override the embedded default
 - `--output <path>` — write JSON result (defaults to stdout)
+- `--log-file <path>` — write structured JSONL run logs; env: `THREAT_DETECTION_LOG_FILE`
 - `--retries` (default `1`) — retries for malformed detection outputs; env: `THREAT_DETECTION_RETRIES`
 
 **Exit codes** (defined in `cmd/threat-detect/main.go`):

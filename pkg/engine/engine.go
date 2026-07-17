@@ -29,14 +29,23 @@ type Engine interface {
 	Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error)
 }
 
+// DefaultEngineID is the engine used when no engine is explicitly selected.
+const DefaultEngineID = "copilot"
+
+// Canonical normalizes an engine ID: it applies the default for an empty ID and
+// lowercases the result, matching the resolution performed by New. Callers use
+// it so audit/log records reflect the engine that will actually run.
+func Canonical(engineID string) string {
+	if engineID == "" {
+		return DefaultEngineID
+	}
+	return strings.ToLower(engineID)
+}
+
 // New creates a new engine instance based on the engine ID.
 // If engineID is empty, it defaults to "copilot".
 func New(engineID, model string) (Engine, error) {
-	if engineID == "" {
-		engineID = "copilot"
-	}
-
-	switch strings.ToLower(engineID) {
+	switch Canonical(engineID) {
 	case "copilot":
 		return &copilotEngine{model: model}, nil
 	case "claude":
