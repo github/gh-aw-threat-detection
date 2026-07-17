@@ -15,7 +15,7 @@ It detects three categories: **prompt injection**, **secret leak**, and **malici
 
 ### Key facts
 
-- **Language**: Go 1.23+ (module `github.com/github/gh-aw-threat-detection`)
+- **Language**: Go 1.26+ (module `github.com/github/gh-aw-threat-detection`)
 - **Binary**: `bin/threat-detect` (built via `make build`)
 - **Distribution**: published as GitHub Release assets (`threat-detect-linux-amd64` + `checksums.txt`); no container image
 - **Spec**: [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md) — W3C-style normative spec; the source of truth for behavior
