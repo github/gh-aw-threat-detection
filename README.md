@@ -178,15 +178,21 @@ log artifact) together with `gh-aw`'s `logs` tooling.
 
 ### Released binary
 
-The `threat-detect` binary is published as a GitHub Release asset
-(`threat-detect-linux-amd64`) alongside a `checksums.txt`. Download and run it
-directly:
+The `threat-detect` binary is published as GitHub Release assets
+(`threat-detect-linux-amd64` and `threat-detect-linux-arm64`) alongside a
+shared `checksums.txt`. Download the asset matching your runner architecture and
+run it directly:
 
 ```bash
+# Pick the asset for your architecture (amd64 or arm64).
+case "$(uname -m)" in
+  x86_64|amd64) asset=threat-detect-linux-amd64 ;;
+  aarch64|arm64) asset=threat-detect-linux-arm64 ;;
+esac
 gh release download --repo github/gh-aw-threat-detection \
-  --pattern threat-detect-linux-amd64 --pattern checksums.txt
+  --pattern "$asset" --pattern checksums.txt
 sha256sum --check --ignore-missing checksums.txt
-install -m 0755 threat-detect-linux-amd64 ./threat-detect
+install -m 0755 "$asset" ./threat-detect
 ./threat-detect /path/to/artifacts
 ```
 
@@ -231,7 +237,7 @@ Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token i
 Common dispatch examples:
 
 - Current checkout, direct CLI replay: set `run_id`, leave `detector_source=current`, `engine=copilot`, and `use_awf=false`.
-- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v0.0.2`. The workflow downloads the `threat-detect-linux-amd64` asset and runs it on the host so the selected engine CLI can be installed there.
+- Released detector replay: set `detector_source=release` and `detector_ref` to a release tag such as `v0.0.2`. The workflow downloads the release asset matching the runner architecture (`threat-detect-linux-amd64` or `threat-detect-linux-arm64`) and runs it on the host so the selected engine CLI can be installed there.
 - Model comparison: set `model` to the engine-specific model name to pass through `--model`.
 - Additional detection instructions: set `custom_prompt`; it is passed as `CUSTOM_PROMPT` and appended to the default detector prompt.
 - AWF mode: set `use_awf=true` only on a runner image that already provides the `awf` CLI. Direct mode is the default.
@@ -262,9 +268,10 @@ Decisions for the unresolved extraction questions:
 ## Release Asset Setup
 
 The repository can remain private while publishing release assets. The release
-workflow builds `threat-detect-linux-amd64`, records its sha256 in the release
-notes, and attaches it (plus `checksums.txt`) to a GitHub **prerelease** using
-the automatic `GITHUB_TOKEN` with `contents: write`.
+workflow builds `threat-detect-linux-amd64` and `threat-detect-linux-arm64`,
+records each asset's sha256 in the release notes, and attaches them (plus a
+shared `checksums.txt`) to a GitHub **prerelease** using the automatic
+`GITHUB_TOKEN` with `contents: write`.
 
 Maintainers need to configure the following before the binary is consumed by `gh-aw`:
 
@@ -397,7 +404,7 @@ const DefaultThreatDetectionRepo    = "github/gh-aw-threat-detection"
 const DefaultThreatDetectionVersion = "v0.0.2"
 ```
 
-The detection job in compiled workflows downloads the pinned `threat-detect-linux-amd64` release asset and runs it instead of inline AI engine invocation.
+The detection job in compiled workflows downloads the pinned `threat-detect` release asset matching the runner architecture (`threat-detect-linux-amd64` or `threat-detect-linux-arm64`) and runs it instead of inline AI engine invocation.
 
 ## Specification
 

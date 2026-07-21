@@ -21,18 +21,20 @@ jobs:
       - name: Run tests
         run: go test -v -race ./...
 
-      - name: Build release binary
+      - name: Build release binaries
         run: |
           VERSION=${GITHUB_REF_NAME}
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
-            -o dist/threat-detect-linux-amd64 ./cmd/threat-detect
+          for GOARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build \
+              -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
+              -o "dist/threat-detect-linux-${GOARCH}" ./cmd/threat-detect
+          done
 
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum threat-detect-linux-amd64 > checksums.txt
+          sha256sum threat-detect-linux-amd64 threat-detect-linux-arm64 > checksums.txt
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -59,13 +61,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Record the release-asset SHA-256 in the release body so the promote
-          # workflow can verify and pin the exact binary that was published.
-          BINARY_SHA256="sha256:$(sha256sum dist/threat-detect-linux-amd64 | awk '{print $1}')"
+          set -euo pipefail
+          # Record every release-asset SHA-256 in the release body so the promote
+          # workflow can verify and pin the exact binaries that were published.
+          notes_file="$(mktemp)"
+          for asset in threat-detect-linux-amd64 threat-detect-linux-arm64; do
+            asset_sha256="$(sha256sum "dist/${asset}" | awk '{print $1}')"
+            echo "Binary asset sha256 (${asset}): sha256:${asset_sha256}" >> "$notes_file"
+          done
           gh release create "${GITHUB_REF_NAME}" \
             dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
+            dist/threat-detect-linux-arm64#threat-detect-linux-arm64 \
             dist/checksums.txt#checksums.txt \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Binary asset sha256: ${BINARY_SHA256}" \
+            --notes-file "$notes_file" \
             --generate-notes \
             --prerelease
