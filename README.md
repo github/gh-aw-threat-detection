@@ -309,7 +309,7 @@ Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can b
 
 ### Detection-only Workflow
 
-`.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `smoke-copilot-standalone` smoke workflow, while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
+`.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `smoke-copilot-standalone` smoke workflow — it installs the released `threat-detect` binary, runs `threat-detect --engine copilot --output detection_result.json` under AWF, and concludes from the structured `detection_result.json` via `conclude_threat_detection.sh` — while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
 
 ### Testing a Release Candidate (`smoke-standalone-latest.yml`)
 

@@ -83,6 +83,9 @@ jobs:
     permissions:
       contents: read
       packages: read
+      copilot-requests: write
+    env:
+      GH_AW_RUNTIME_FEATURES: ${{ vars.GH_AW_RUNTIME_FEATURES }}
     outputs:
       detection_conclusion: ${{ steps.detection_conclusion.outputs.conclusion }}
       detection_reason: ${{ steps.detection_conclusion.outputs.reason }}
@@ -90,15 +93,17 @@ jobs:
     steps:
       - name: Setup Scripts
         id: setup
-        uses: github/gh-aw-actions/setup@v0.79.6
+        uses: github/gh-aw-actions/setup@v0.82.14
         with:
           destination: ${{ runner.temp }}/gh-aw/actions
           job-name: ${{ github.job }}
           trace-id: ${{ needs.activation.outputs.setup-trace-id }}
         env:
-          GH_AW_SETUP_WORKFLOW_NAME: "Smoke Copilot"
+          GH_AW_SETUP_WORKFLOW_NAME: "Smoke Copilot Standalone"
           GH_AW_CURRENT_WORKFLOW_REF: ${{ github.repository }}/.github/workflows/smoke-copilot-standalone.lock.yml@${{ github.ref }}
-          GH_AW_INFO_VERSION: "1.0.40"
+          GH_AW_INFO_VERSION: "1.0.71"
+          GH_AW_INFO_AWF_VERSION: "v0.27.37"
+          GH_AW_INFO_ENGINE_ID: "copilot"
       - name: Download agent output artifact
         id: download-agent-output
         continue-on-error: true
@@ -124,7 +129,7 @@ jobs:
           rm -rf /tmp/gh-aw/sandbox/firewall/logs
           rm -rf /tmp/gh-aw/sandbox/firewall/audit
       - name: Download container images
-        run: bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-firewall/agent:0.27.2@sha256:f88e5b17b6b7a600117bc121114d6ce2155c88c983c0c939c5df884f730fa1d6 ghcr.io/github/gh-aw-firewall/api-proxy:0.27.2@sha256:ee39841d980878ebbb87592903b06d31a1af500c71525c9616f7e8e2a27041a4 ghcr.io/github/gh-aw-firewall/squid:0.27.2@sha256:2e3a717e5f19a654cd9a2263beb52012b56bcb68562ec5ae2e42f9d156b49591
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/download_docker_images.sh" ghcr.io/github/gh-aw-firewall/agent:0.27.37@sha256:0d35e8682845f183c1c634699a8e8a6cbe2c271b867031410df74533243c5f67 ghcr.io/github/gh-aw-firewall/api-proxy:0.27.37@sha256:fc2970aadaeae05993e76697d29f03dc8bfb9248ff87a8f3d8b0975485a4b317 ghcr.io/github/gh-aw-firewall/squid:0.27.37@sha256:5abc51995e5901c5d1daeefc957301ee409980e2e607391ec22c06cb2513327b
       - name: Check if detection needed
         id: detection_guard
         if: always()
@@ -143,13 +148,17 @@ jobs:
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         run: |
           rm -f "${RUNNER_TEMP}/gh-aw/mcp-config/mcp-servers.json"
-          rm -f /home/runner/.copilot/mcp-config.json
+          rm -f "$HOME/.copilot/mcp-config.json"
           rm -f "$GITHUB_WORKSPACE/.gemini/settings.json"
       - name: Prepare threat detection files
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         run: |
           mkdir -p /tmp/gh-aw/threat-detection/aw-prompts
+          rm -f /tmp/gh-aw/agent_usage.json
           cp /tmp/gh-aw/aw-prompts/prompt.txt /tmp/gh-aw/threat-detection/aw-prompts/prompt.txt 2>/dev/null || true
+          if [ ! -s /tmp/gh-aw/threat-detection/aw-prompts/prompt.txt ]; then
+            echo "::warning::ERR_VALIDATION: Missing or empty detection context prompt at /tmp/gh-aw/threat-detection/aw-prompts/prompt.txt. Ensure the agent artifact includes /tmp/gh-aw/aw-prompts/prompt.txt. Detection will continue with fallback workflow context."
+          fi
           cp /tmp/gh-aw/agent_output.json /tmp/gh-aw/threat-detection/agent_output.json 2>/dev/null || true
           for f in /tmp/gh-aw/aw-*.patch; do
             [ -f "$f" ] && cp "$f" /tmp/gh-aw/threat-detection/ 2>/dev/null || true
@@ -163,8 +172,8 @@ jobs:
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          WORKFLOW_NAME: "Smoke Copilot"
-          WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
+          WORKFLOW_NAME: "Smoke Copilot Standalone"
+          WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution with the released threat-detect binary"
           HAS_PATCH: ${{ needs.agent.outputs.has_patch }}
         with:
           script: |
@@ -177,64 +186,79 @@ jobs:
         run: |
           mkdir -p /tmp/gh-aw/threat-detection
           touch /tmp/gh-aw/threat-detection/detection.log
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
+      - name: Install AWF binary
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.27.37
       - name: Install GitHub Copilot CLI
-        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.40
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.71
         env:
           GH_HOST: github.com
-      - name: Install AWF binary
-        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_awf_binary.sh" v0.27.2
-      - name: Download threat detection binary
+      - name: Install threat-detect binary
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
           THREAT_DETECTION_VERSION: ${{ vars.GH_AW_THREAT_DETECTION_VERSION || '' }}
-          DETECTOR_REPO: github/gh-aw-threat-detection
         run: |
-          set -euo pipefail
-          dest_dir="${RUNNER_TEMP}/gh-aw/threat-detect-bin"
-          mkdir -p "$dest_dir"
-          download_dir="$(mktemp -d)"
-          trap 'rm -rf "$download_dir"' EXIT
-          case "$(uname -m)" in
-            x86_64|amd64) asset="threat-detect-linux-amd64" ;;
-            aarch64|arm64) asset="threat-detect-linux-arm64" ;;
-            *) echo "::error::Unsupported architecture: $(uname -m)"; exit 1 ;;
-          esac
-          args=(--repo "$DETECTOR_REPO" --pattern "$asset" --pattern checksums.txt --dir "$download_dir")
-          if [ -n "${THREAT_DETECTION_VERSION:-}" ]; then
-            gh release download "$THREAT_DETECTION_VERSION" "${args[@]}"
-          else
-            gh release download "${args[@]}"
-          fi
-          ( cd "$download_dir" && sha256sum --check --ignore-missing checksums.txt )
-          install -m 0755 "$download_dir/$asset" "$dest_dir/threat-detect"
+          bash "${RUNNER_TEMP}/gh-aw/actions/install_threat_detect_binary.sh" "${THREAT_DETECTION_VERSION:-v0.2.2}"
       - name: Execute threat detection with AWF
+        id: detection_agentic_execution
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         continue-on-error: true
-        id: detection_agentic_execution
-        timeout-minutes: 20
-        env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-          THREAT_DETECTION_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT || '' }}
-          WORKFLOW_DESCRIPTION: "Smoke test workflow that validates Copilot engine execution in this repository"
-          WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           set -o pipefail
-          touch /tmp/gh-aw/agent-step-summary.md
+          printf '%s' "$(date +%s%3N)" > /tmp/gh-aw/agent_cli_start_ms.txt
           (umask 177 && touch /tmp/gh-aw/threat-detection/detection.log)
           GH_AW_MAX_AI_CREDITS="${{ vars.GH_AW_DEFAULT_DETECTION_MAX_AI_CREDITS || '400' }}"
           # Validate that the credit limit is a numeric JSON literal to prevent malformed JSON
           [[ "${GH_AW_MAX_AI_CREDITS}" =~ ^(0|[1-9][0-9]*)(\.[0-9]+)?$ ]] || GH_AW_MAX_AI_CREDITS="400"
-          printf '%s\n' "{\"\$schema\":\"https://github.com/github/gh-aw-firewall/releases/download/v0.27.2/awf-config.schema.json\",\"network\":{\"allowDomains\":[\"api.business.githubcopilot.com\",\"api.enterprise.githubcopilot.com\",\"api.github.com\",\"api.githubcopilot.com\",\"api.individual.githubcopilot.com\",\"github.com\",\"host.docker.internal\",\"telemetry.enterprise.githubcopilot.com\"]},\"apiProxy\":{\"enabled\":true,\"enableTokenSteering\":true,\"maxRuns\":500,\"maxAiCredits\":${GH_AW_MAX_AI_CREDITS}},\"container\":{\"imageTag\":\"0.27.2,squid=sha256:2e3a717e5f19a654cd9a2263beb52012b56bcb68562ec5ae2e42f9d156b49591,agent=sha256:f88e5b17b6b7a600117bc121114d6ce2155c88c983c0c939c5df884f730fa1d6,api-proxy=sha256:ee39841d980878ebbb87592903b06d31a1af500c71525c9616f7e8e2a27041a4,cli-proxy=sha256:02f3ec08f32dc26c5427920c6a2e2f3036238fce44802f2f11ef49ed8621b5d0\"}}" > "${RUNNER_TEMP}/gh-aw/awf-config.json" && cp "${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json
-          # shellcheck disable=SC1003
-          sudo -E awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" --env-all --exclude-env COPILOT_GITHUB_TOKEN --log-level info --proxy-logs-dir /tmp/gh-aw/sandbox/firewall/logs --audit-dir /tmp/gh-aw/sandbox/firewall/audit --enable-host-access --allow-host-ports 80,443,8080 --skip-pull --mount "/tmp/gh-aw/threat-detection:/tmp/gh-aw/threat-detection:rw" \
-            -- /bin/bash -c 'export PATH="$(find /opt/hostedtoolcache /home/runner/work/_tool -maxdepth 4 -type d -name bin 2>/dev/null | paste -sd: -):$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; result_path="/tmp/gh-aw/threat-detection/detection_result.json"; status_path="/tmp/gh-aw/threat-detection/detection-status.txt"; args=(--engine copilot); if [ -n "${THREAT_DETECTION_MODEL:-}" ]; then args+=(--model "$THREAT_DETECTION_MODEL"); fi; run_status=0; "${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect" "${args[@]}" --output "$result_path" /tmp/gh-aw/threat-detection 2>"$status_path" || run_status=$?; cat "$status_path" >&2 || true; if [ -f "$result_path" ]; then exit 0; fi; if grep -q "reason=invalid_report_exhausted" "$status_path" 2>/dev/null; then exit 0; fi; exit "$run_status"' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
-      - name: Upload threat detection artifacts
+          printf '%s\n' "{\"\$schema\":\"https://github.com/github/gh-aw-firewall/releases/download/v0.27.37/awf-config.schema.json\",\"network\":{\"allowDomains\":[\"api.business.githubcopilot.com\",\"api.enterprise.githubcopilot.com\",\"api.github.com\",\"api.githubcopilot.com\",\"api.individual.githubcopilot.com\",\"github.com\",\"go.dev\",\"golang.org\",\"goproxy.io\",\"host.docker.internal\",\"pkg.go.dev\",\"proxy.golang.org\",\"raw.githubusercontent.com\",\"registry.npmjs.org\",\"storage.googleapis.com\",\"sum.golang.org\",\"telemetry.enterprise.githubcopilot.com\"]},\"apiProxy\":{\"enabled\":true,\"enableTokenSteering\":true,\"maxRuns\":500,\"maxAiCredits\":${GH_AW_MAX_AI_CREDITS},\"maxCacheMisses\":5},\"container\":{\"imageTag\":\"0.27.37,squid=sha256:5abc51995e5901c5d1daeefc957301ee409980e2e607391ec22c06cb2513327b,agent=sha256:0d35e8682845f183c1c634699a8e8a6cbe2c271b867031410df74533243c5f67,api-proxy=sha256:fc2970aadaeae05993e76697d29f03dc8bfb9248ff87a8f3d8b0975485a4b317,cli-proxy=sha256:1d5300d9b08e1c4f2ad1830860656a0656383a83280058f17e805a7c3ecda203\"},\"logging\":{\"proxyLogsDir\":\"/tmp/gh-aw/sandbox/firewall/logs\",\"auditDir\":\"/tmp/gh-aw/sandbox/firewall/audit\"}}" > "${RUNNER_TEMP}/gh-aw/awf-config.json"
+          cp "${RUNNER_TEMP}/gh-aw/awf-config.json" /tmp/gh-aw/awf-config.json
+          export GH_AW_MODELS_JSON_PATH="/tmp/gh-aw/models.json"
+          GH_AW_DOCKER_HOST=""
+          if [[ "${DOCKER_HOST:-}" =~ ^tcp:// ]]; then
+            GH_AW_DOCKER_HOST="${DOCKER_HOST}"
+          fi
+          if [[ "${DOCKER_HOST:-}" =~ ^tcp:// ]]; then
+            _GH_AW_CHROOT_JSON=$(jq -c --arg src "${RUNNER_TEMP}/gh-aw" --arg user "$(id -un)" --argjson uid "$(id -u)" --argjson gid "$(id -g)" --arg home "${RUNNER_TEMP}/gh-aw/home" '.chroot={"binariesSourcePath":$src,"identity":{"user":$user,"uid":$uid,"gid":$gid,"home":$home}}' "${RUNNER_TEMP}/gh-aw/awf-config.json") || { echo "chroot config patch failed" >&2; exit 1; }
+            printf '%s\n' "$_GH_AW_CHROOT_JSON" > "${RUNNER_TEMP}/gh-aw/awf-config.json"
+            printf '%s\n' "$_GH_AW_CHROOT_JSON" > "${RUNNER_TEMP}/gh-aw/awf-config.json"
+          fi
+          GH_AW_TOOL_CACHE_MOUNT=""
+          GH_AW_TOOL_CACHE="${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE must be set}"
+          if [ -d "$GH_AW_TOOL_CACHE" ]; then
+            if [[ "$GH_AW_TOOL_CACHE" != /opt/* ]]; then
+              GH_AW_TOOL_CACHE_MOUNT="$GH_AW_TOOL_CACHE:$GH_AW_TOOL_CACHE:ro"
+            fi
+          fi
+          # shellcheck disable=SC1003,SC2016,SC2086
+          awf --config "${RUNNER_TEMP}/gh-aw/awf-config.json" --container-workdir "${GITHUB_WORKSPACE}" --mount "${RUNNER_TEMP}/gh-aw:${RUNNER_TEMP}/gh-aw:ro" --mount "${RUNNER_TEMP}/gh-aw:/host${RUNNER_TEMP}/gh-aw:ro" ${GH_AW_TOOL_CACHE_MOUNT:+--mount "$GH_AW_TOOL_CACHE_MOUNT"} ${GH_AW_DOCKER_HOST:+--docker-host "$GH_AW_DOCKER_HOST"} --env-all --exclude-env COPILOT_GITHUB_TOKEN --mount /tmp/gh-aw/threat-detection:/tmp/gh-aw/threat-detection:rw --log-level info --skip-pull \
+            -- /bin/bash -c 'set +o histexpand; : "${RUNNER_TOOL_CACHE:?RUNNER_TOOL_CACHE must be set}"; GH_AW_TOOL_CACHE="$RUNNER_TOOL_CACHE"; export PATH="$(find "$GH_AW_TOOL_CACHE" -maxdepth 5 -type d -name bin 2>/dev/null | tr '\''\n'\'' '\'':'\'')$PATH"; [ -n "$GOROOT" ] && export PATH="$GOROOT/bin:$PATH" || true; [ -n "$ERLANG_HOME" ] && export PATH="$ERLANG_HOME/bin:$PATH" || true && threat-detect --engine copilot --output /tmp/gh-aw/threat-detection/detection_result.json /tmp/gh-aw/threat-detection' 2>&1 | tee -a /tmp/gh-aw/threat-detection/detection.log
+        env:
+          AWF_REFLECT_ENABLED: 1
+          COPILOT_AGENT_RUNNER_TYPE: STANDALONE
+          COPILOT_DUMMY_BYOK: dummy-byok-key-for-offline-mode
+          COPILOT_GITHUB_TOKEN: ${{ github.token }}
+          COPILOT_MODEL: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT || vars.GH_AW_DEFAULT_MODEL_COPILOT || 'claude-sonnet-4.6' }}
+          GH_AW_LLM_PROVIDER: github
+          GH_AW_MAX_AI_CREDITS: ${{ vars.GH_AW_DEFAULT_DETECTION_MAX_AI_CREDITS || '400' }}
+          GH_AW_MAX_TURNS: ${{ vars.GH_AW_DEFAULT_MAX_TURNS || '' }}
+          GH_AW_PHASE: detection
+          GH_AW_PROMPT: /tmp/gh-aw/aw-prompts/prompt.txt
+          GH_AW_TIMEOUT_MINUTES: 20
+          GH_AW_VERSION: v0.82.14
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_AW: true
+          GITHUB_COPILOT_INTEGRATION_ID: agentic-workflows
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_STEP_SUMMARY: /tmp/gh-aw/agent-step-summary.md
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          RUNNER_TEMP: ${{ runner.temp }}
+          S2STOKENS: true
+      - name: Upload threat detection artifact
         if: always() && steps.detection_guard.outputs.run_detection == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -243,7 +267,7 @@ jobs:
             /tmp/gh-aw/threat-detection/detection_result.json
             /tmp/gh-aw/threat-detection/detection.log
           if-no-files-found: ignore
-      - name: Parse and conclude threat detection
+      - name: Conclude threat detection
         id: detection_conclusion
         if: always()
         continue-on-error: true
@@ -252,17 +276,4 @@ jobs:
           DETECTION_AGENTIC_EXECUTION_OUTCOME: ${{ steps.detection_agentic_execution.outcome }}
           GH_AW_DETECTION_CONTINUE_ON_ERROR: "true"
         run: |
-          bin="${RUNNER_TEMP}/gh-aw/threat-detect-bin/threat-detect"
-          if [ ! -x "$bin" ]; then
-            {
-              echo "conclusion=skipped"
-              echo "success=true"
-              echo "reason="
-            } >> "$GITHUB_OUTPUT"
-            {
-              echo "GH_AW_DETECTION_CONCLUSION=skipped"
-              echo "GH_AW_DETECTION_REASON="
-            } >> "$GITHUB_ENV"
-            exit 0
-          fi
-          "$bin" conclude --result-file /tmp/gh-aw/threat-detection/detection_result.json
+          bash "${RUNNER_TEMP}/gh-aw/actions/conclude_threat_detection.sh" /tmp/gh-aw/threat-detection/detection_result.json
