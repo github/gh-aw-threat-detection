@@ -135,7 +135,8 @@ func run() (code int) {
 	}
 
 	// When --model is not set, fall back to the engine-specific detection model
-	// environment variable (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}) so the
+	// environment variable (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}) or the
+	// engine CLI's native model env var (COPILOT_MODEL, ANTHROPIC_MODEL), so the
 	// standalone detector honors the model gh-aw configured for detection.
 	model = engine.ResolveModel(engineID, model)
 

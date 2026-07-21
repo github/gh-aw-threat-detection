@@ -121,11 +121,13 @@ func TestCodexConfigPathHonorsCodexHome(t *testing.T) {
 }
 
 func TestResolveModel(t *testing.T) {
-	// Ensure a clean slate for all detection-model env vars.
+	// Ensure a clean slate for all detection-model and native CLI model env vars.
 	for _, name := range []string{
 		"GH_AW_MODEL_DETECTION_COPILOT",
 		"GH_AW_MODEL_DETECTION_CLAUDE",
 		"GH_AW_MODEL_DETECTION_CODEX",
+		"COPILOT_MODEL",
+		"ANTHROPIC_MODEL",
 	} {
 		t.Setenv(name, "")
 	}
@@ -158,6 +160,30 @@ func TestResolveModel(t *testing.T) {
 		}
 	})
 
+	t.Run("copilot falls back to native COPILOT_MODEL", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_COPILOT", "")
+		t.Setenv("COPILOT_MODEL", "native-copilot-model")
+		if got := ResolveModel("copilot", ""); got != "native-copilot-model" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "native-copilot-model")
+		}
+	})
+
+	t.Run("claude falls back to native ANTHROPIC_MODEL", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_CLAUDE", "")
+		t.Setenv("ANTHROPIC_MODEL", "native-claude-model")
+		if got := ResolveModel("claude", ""); got != "native-claude-model" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "native-claude-model")
+		}
+	})
+
+	t.Run("detection env var takes precedence over native CLI env var", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_COPILOT", "detection-model")
+		t.Setenv("COPILOT_MODEL", "native-model")
+		if got := ResolveModel("copilot", ""); got != "detection-model" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "detection-model")
+		}
+	})
+
 	t.Run("empty engine uses default copilot env", func(t *testing.T) {
 		t.Setenv("GH_AW_MODEL_DETECTION_COPILOT", "default-engine-model")
 		if got := ResolveModel("", ""); got != "default-engine-model" {
@@ -175,6 +201,14 @@ func TestResolveModel(t *testing.T) {
 		t.Setenv("GH_AW_MODEL_DETECTION_CODEX", "  gpt-5.4  ")
 		if got := ResolveModel("codex", ""); got != "gpt-5.4" {
 			t.Fatalf("ResolveModel() = %q, want %q", got, "gpt-5.4")
+		}
+	})
+
+	t.Run("native CLI env value is trimmed", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_COPILOT", "")
+		t.Setenv("COPILOT_MODEL", "  claude-sonnet-4.6  ")
+		if got := ResolveModel("copilot", ""); got != "claude-sonnet-4.6" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "claude-sonnet-4.6")
 		}
 	})
 }
