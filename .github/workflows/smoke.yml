@@ -23,6 +23,9 @@ jobs:
             smoke-copilot.lock.yml
             smoke-claude.lock.yml
             smoke-codex.lock.yml
+            smoke-copilot-standalone.lock.yml
+            smoke-claude-standalone.lock.yml
+            smoke-codex-standalone.lock.yml
             smoke-copilot-container.lock.yml
             smoke-claude-container.lock.yml
             smoke-codex-container.lock.yml
