@@ -107,7 +107,8 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		return "", err
 	}
 	defer cleanup()
-	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, ""), prompt, toolEnv, opts.ResultSinkPath)
+	provider := codexForcedProvider(codexConfigPath())
+	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
 }
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
@@ -189,7 +190,7 @@ func claudeArgs(model string, allowBash bool) []string {
 	return append(args, "-")
 }
 
-func codexArgs(model, prompt string) []string {
+func codexArgs(model, provider, prompt string) []string {
 	args := []string{
 		"exec",
 		"-c", "web_search=disabled",
@@ -198,6 +199,9 @@ func codexArgs(model, prompt string) []string {
 		"--skip-git-repo-check",
 		"--",
 		prompt,
+	}
+	if provider != "" {
+		args = append([]string{"-c", "model_provider=" + provider}, args...)
 	}
 	if model != "" {
 		args = append([]string{"-c", "model=" + model}, args...)
