@@ -292,26 +292,19 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 
 ### AW Smoke Workflows
 
-This repository includes three Agentic Workflows smoke tests:
+This repository includes three Agentic Workflows smoke tests, each in two variants:
 
-- `.github/workflows/smoke-copilot.md`
-- `.github/workflows/smoke-claude.md`
-- `.github/workflows/smoke-codex.md`
+- `.github/workflows/smoke-copilot.md` (+ `smoke-copilot-standalone.md`)
+- `.github/workflows/smoke-claude.md` (+ `smoke-claude-standalone.md`)
+- `.github/workflows/smoke-codex.md` (+ `smoke-codex-standalone.md`)
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three containerized siblings. The matching `.lock.yml` files are the compiled AW workflows. The `*-container.lock.yml` siblings are generated from those lock files by `scripts/create-threat-detection-sibling-workflows.py`; they download the released `threat-detect-linux-amd64` binary via `gh release download` and execute it under the same AWF wrapper used by the generated detection job. The script also copies matching `*-container.md` source sidecars from the original smoke markdown files so gh-aw's stale lock-file check can resolve and verify the inherited frontmatter hash.
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three `*-standalone` variants. The matching `.lock.yml` files are the compiled AW workflows. The base `smoke-{engine}.lock.yml` workflows exercise gh-aw's in-band detection (the engine CLI writes a detection log that is parsed for the verdict). The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`.
 
 ### Detection-only Workflow
 
-`.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `-container` Copilot smoke sibling, while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
+`.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `smoke-copilot-standalone` smoke workflow, while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
 
-After recompiling the smoke workflows with `gh aw compile`, regenerate and verify the sibling workflows:
-
-```bash
-scripts/create-threat-detection-sibling-workflows.py
-scripts/create-threat-detection-sibling-workflows.py --check
-```
-
-Configure these Actions secrets to enable all smoke workflows:
+Recompile the smoke workflows with `gh aw compile` after editing their `.md` sources.
 
 | Secret | Required for | Notes |
 |--------|--------------|-------|
@@ -327,7 +320,7 @@ Optional Actions variables:
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. |
-| `GH_AW_THREAT_DETECTION_VERSION` | Override the detector release tag downloaded by the `*-container.lock.yml` siblings. Defaults to the latest stable (promoted) release. |
+| `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml` (defaults to the latest promoted release when unset). The `*-standalone` smoke workflows instead pin a specific promoted tag at compile time for reproducibility. |
 
 ### Build
 

@@ -39,10 +39,9 @@ pkg/engine/               AI engine abstraction
   └── tool.go             threat_detection_result wrapper provisioning + result-sink watcher
 pkg/runlog/               Structured JSONL run-log writer (--log-file); nil-safe no-op logger
 specs/                    Normative spec (threat-detection-spec.md)
-scripts/                  create-threat-detection-sibling-workflows.py (regenerates *-container.lock.yml)
 skills/                   Repo-relevant agent skills (console-rendering, error-messages)
 scratchpad/               Retained design references inherited from gh-aw
-.github/workflows/        CI, release, promote, replay-detection, smoke-{copilot,claude,codex}[-container]
+.github/workflows/        CI, release, promote, replay-detection, smoke-{copilot,claude,codex}[-standalone]
 .devcontainer/            Codespaces / devcontainer setup (Go, gh, Copilot CLI, optional Vertex)
 Makefile                  All build/test/lint/release targets
 ```
@@ -133,20 +132,15 @@ Three workflows orchestrate releases:
 
 The `latest` (non-prerelease) GitHub release and "Latest" badge **only move on explicit promotion** — never automatically.
 
-## Smoke Workflows (and Container Siblings)
+## Smoke Workflows (and Standalone Variants)
 
 This repo runs daily AW smoke tests against all three engines:
 
-- `.github/workflows/smoke-{copilot,claude,codex}.md` — AW source files
+- `.github/workflows/smoke-{copilot,claude,codex}.md` — AW source files (in-band detection: engine CLI writes a detection log that gh-aw parses for the verdict)
 - `.github/workflows/smoke-{copilot,claude,codex}.lock.yml` — compiled by `gh aw compile`
-- `.github/workflows/smoke-{copilot,claude,codex}-container.{md,lock.yml}` — sibling workflows that download the released `threat-detect` binary via `gh release download` and run it under AWF
+- `.github/workflows/smoke-{copilot,claude,codex}-standalone.{md,lock.yml}` — variants with `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect` binary (pinned to a promoted release tag), runs it under AWF, and concludes from the structured `detection_result.json` via `threat-detect conclude`
 
-**To regenerate the container siblings** after recompiling smokes:
-
-```bash
-scripts/create-threat-detection-sibling-workflows.py
-scripts/create-threat-detection-sibling-workflows.py --check
-```
+Recompile with `gh aw compile` after editing any smoke `.md` source.
 
 The top-level `smoke.yml` workflow can be dispatched to start all six smokes at once.
 
@@ -199,7 +193,7 @@ For workflow-artifact triage there is a generic gh-aw helper (`scripts/download-
 
 # Agentic Workflow Firewall (AWF)
 
-> This section is reference material. AWF is a **separate project** ([`github/gh-aw-firewall`](https://github.com/github/gh-aw-firewall)) — it is **not** built or developed in this repo. It is documented here because the threat detection job runs **inside AWF** in `gh-aw`-compiled workflows, and the `*-container.lock.yml` smoke siblings exercise that path. When debugging detection-job network behavior, reach for these facts.
+> This section is reference material. AWF is a **separate project** ([`github/gh-aw-firewall`](https://github.com/github/gh-aw-firewall)) — it is **not** built or developed in this repo. It is documented here because the threat detection job runs **inside AWF** in `gh-aw`-compiled workflows, and the `*-standalone.lock.yml` smoke variants exercise that path. When debugging detection-job network behavior, reach for these facts.
 
 ## Overview
 
