@@ -22,50 +22,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify prerelease and binary asset
+      - name: Verify prerelease and binary assets
         id: verify
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ASSET="threat-detect-linux-amd64"
           RELEASE_INFO=$(gh release view "$PROMOTE_TAG" --json body,isPrerelease,tagName)
           IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
           if [ "$IS_PRERELEASE" != "true" ]; then
             echo "::error::Release ${PROMOTE_TAG} is not a prerelease. Nothing to promote."
             exit 1
           fi
-          # Extract the recorded binary asset digest from the release body.
-          DIGEST_LINE_PREFIX="Binary asset sha256: sha256:"
-          RECORDED_SHA256=""
-          while IFS= read -r line; do
-            case "$line" in
-              "$DIGEST_LINE_PREFIX"*)
-                RECORDED_SHA256="${line#Binary asset sha256: sha256:}"
-                break
-                ;;
-            esac
-          done < <(echo "$RELEASE_INFO" | jq -r '.body // ""')
-          if [ -z "$RECORDED_SHA256" ]; then
-            echo "::error::Release ${PROMOTE_TAG} does not record a binary asset sha256. Nothing to promote."
-            exit 1
-          fi
-          if ! echo "$RECORDED_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
-            echo "::error::Release ${PROMOTE_TAG} records a binary asset sha256 with invalid format. Nothing to promote."
-            exit 1
-          fi
-          # Download the published asset and confirm it matches the recorded digest,
-          # so promotion can never mark a tampered or missing binary as Latest.
+          BODY=$(echo "$RELEASE_INFO" | jq -r '.body // ""')
+
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
-          gh release download "$PROMOTE_TAG" --pattern "$ASSET" --dir "$tmp"
-          ACTUAL_SHA256="$(sha256sum "$tmp/$ASSET" | awk '{print $1}')"
-          if [ "$ACTUAL_SHA256" != "$RECORDED_SHA256" ]; then
-            echo "::error::Release ${PROMOTE_TAG} asset sha256 ${ACTUAL_SHA256} does not match recorded ${RECORDED_SHA256}. Nothing to promote."
+
+          # Collect "<asset> <sha256>" pairs recorded in the release body. Newer
+          # releases record one line per asset:
+          #   Binary asset sha256 (threat-detect-linux-amd64): sha256:<hash>
+          # Legacy releases record a single amd64-only line:
+          #   Binary asset sha256: sha256:<hash>
+          pairs_file="$tmp/pairs.txt"
+          : > "$pairs_file"
+          while IFS= read -r line; do
+            case "$line" in
+              "Binary asset sha256 ("*"): sha256:"*)
+                asset="${line#Binary asset sha256 (}"
+                asset="${asset%%): sha256:*}"
+                sha="${line##*): sha256:}"
+                echo "${asset} ${sha}" >> "$pairs_file"
+                ;;
+              "Binary asset sha256: sha256:"*)
+                sha="${line#Binary asset sha256: sha256:}"
+                echo "threat-detect-linux-amd64 ${sha}" >> "$pairs_file"
+                ;;
+            esac
+          done < <(printf '%s\n' "$BODY")
+
+          if [ ! -s "$pairs_file" ]; then
+            echo "::error::Release ${PROMOTE_TAG} does not record any binary asset sha256. Nothing to promote."
             exit 1
           fi
-          echo "binary_sha256=sha256:${RECORDED_SHA256}" >> "$GITHUB_OUTPUT"
-          echo "✅ Verified ${PROMOTE_TAG} is a prerelease with binary asset sha256:${RECORDED_SHA256} — proceeding with promotion."
+
+          # Download each recorded asset and confirm it matches the recorded digest,
+          # so promotion can never mark a tampered or missing binary as Latest.
+          while read -r asset sha; do
+            if ! echo "$sha" | grep -Eq '^[0-9a-f]{64}$'; then
+              echo "::error::Release ${PROMOTE_TAG} records ${asset} with an invalid sha256 format. Nothing to promote."
+              exit 1
+            fi
+            gh release download "$PROMOTE_TAG" --pattern "$asset" --dir "$tmp"
+            actual="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+            if [ "$actual" != "$sha" ]; then
+              echo "::error::Release ${PROMOTE_TAG} asset ${asset} sha256 ${actual} does not match recorded ${sha}. Nothing to promote."
+              exit 1
+            fi
+            echo "✅ Verified ${asset} sha256:${sha}"
+          done < "$pairs_file"
+          echo "✅ ${PROMOTE_TAG} is a prerelease with all recorded binary assets verified — proceeding with promotion."
 
       - name: Promote release to stable
         env:
