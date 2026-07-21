@@ -61,9 +61,10 @@ architecture: `threat-detect-linux-amd64` or `threat-detect-linux-arm64`.
 recorded for that asset (via `checksums.txt` published alongside the assets, or
 the sha256 recorded in the release notes) before executing it.
 
-**U-04**: The host MUST pin acquisition to an explicit release tag (per TD-25).
-A host MAY resolve the latest promoted (stable) release when no tag is pinned,
-but SHOULD NOT do so in reproducible production workflows.
+**U-04**: The host MUST pin acquisition to an explicit release tag (per TD-25,
+U-24, and U-26). A host that resolves the latest promoted (stable) release MUST
+first resolve it to a concrete release tag and then download that pinned tag; it
+MUST NOT download an unpinned "latest" reference directly.
 
 **U-05**: Acquisition MUST succeed with only `contents: read` against the
 detector repository, including when that repository is private but the consuming
@@ -216,8 +217,11 @@ success/failure outcome MUST NOT be stricter than `gh-aw`'s native engine step
 (per TD-21a). Specifically, a recorded verdict (exit `0` or `1`) and an
 "engine ran but recorded no verdict" outcome (exit `2` with status reason
 `invalid_report_exhausted`) MUST NOT mark the detection step as failed. Only a
-genuine engine or configuration failure (status reason `engine_error`,
-`config_error`, or `cancelled`) MAY surface as a step failure.
+genuine engine, configuration, or output failure (status reason `engine_error`,
+`config_error`, `cancelled`, or `output_write_error`) MAY surface as a step
+failure. In particular `output_write_error` — the verdict was obtained but could
+not be written — MUST NOT be treated like a recoverable missing report, because
+the unwritten verdict may have contained a threat.
 
 **U-23**: The host MAY parse the terminal stderr status line
 `THREAT_DETECTION_STATUS: reason=<reason> exit=<code>` to distinguish outcomes
