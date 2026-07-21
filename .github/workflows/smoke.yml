@@ -14,7 +14,8 @@ on:
       detector_tag:
         description: >-
           Detector tag forwarded to smoke-standalone-latest.yml when
-          include_latest is enabled. Empty resolves the newest prerelease.
+          include_latest is enabled. If empty, that workflow falls back to the
+          GH_AW_THREAT_DETECTION_VERSION variable, then the newest prerelease.
         required: false
         default: ''
         type: string
@@ -73,4 +74,8 @@ jobs:
             args+=(--field "detector_tag=${DETECTOR_TAG}")
           fi
           gh workflow run "${args[@]}"
-          echo "Dispatched smoke-standalone-latest.yml (detector_tag='${DETECTOR_TAG:-<newest prerelease>}')"
+          if [ -n "${DETECTOR_TAG:-}" ]; then
+            echo "Dispatched smoke-standalone-latest.yml (detector_tag='${DETECTOR_TAG}')"
+          else
+            echo "Dispatched smoke-standalone-latest.yml (detector_tag empty; child resolves GH_AW_THREAT_DETECTION_VERSION, else newest prerelease)"
+          fi

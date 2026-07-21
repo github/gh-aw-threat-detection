@@ -306,21 +306,25 @@ Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can b
 
 ### Testing a Release Candidate (`smoke-standalone-latest.yml`)
 
-`.github/workflows/smoke-standalone-latest.yml` is an **opt-in** workflow that runs the released `threat-detect` binary at a **non-default tag** — by default the newest prerelease — against each engine. It exists so a freshly tagged prerelease can be validated end-to-end before it is promoted to **Latest**, without disturbing the reproducible, compile-time pin used by the scheduled `*-standalone` smokes.
+`.github/workflows/smoke-standalone-latest.yml` runs the released `threat-detect` binary at a **non-default tag** — a release candidate — against each engine. It exists so a freshly published prerelease can be validated end-to-end before it is promoted to **Latest**, without disturbing the reproducible, compile-time pin used by the scheduled `*-standalone` smokes.
 
-It never runs on a schedule, so steady-state behaviour is unchanged. On dispatch it:
+It runs in two ways:
 
-1. Resolves the detector tag with this precedence, logging the choice to the run summary:
-   1. the `detector_tag` `workflow_dispatch` input, if provided;
-   2. the `GH_AW_THREAT_DETECTION_VERSION` repository variable, if set;
-   3. otherwise the newest **prerelease** (`gh release list --json ... isPrerelease`).
-2. For each selected engine (`all` by default, or a single engine), installs the engine CLI, installs the resolved `threat-detect` tag via the checksum-verifying `install_threat_detect_binary.sh`, and runs a detection over a minimal benign artifacts directory.
-3. Passes the job when the binary produces a verdict (`detection_result.json`) — a `safe` (exit 0) or `threat` (exit 1) result both count as a working binary; only a missing verdict / infrastructure error (exit 2) fails the smoke.
+- **Automatically** after the **Release** workflow finishes publishing a new (pre)release (`workflow_run`). The Release workflow creates the release with `GITHUB_TOKEN`, so a plain `on: release` trigger would never fire — hence the `workflow_run` hook. Auto-runs test the just-published tag across all three engines.
+- **Manually** via `workflow_dispatch`, with optional `detector_tag` and `engine` inputs.
+
+It never runs on a schedule, so steady-state behaviour is unchanged. On each run it:
+
+1. Resolves the detector tag and logs the choice (and trigger) to the run summary:
+   - **Auto-runs** test the release that just published: the triggering **Release** tag, or the newest **prerelease** when the event omits it. The pinned override variable is intentionally ignored so auto-runs always exercise the new binary.
+   - **Manual runs** use this precedence: the `detector_tag` input → the `GH_AW_THREAT_DETECTION_VERSION` repository variable → the newest **prerelease** (`gh release list --json ... isPrerelease`).
+2. For each selected engine (`all` on auto-runs; `all` or a single engine on manual runs) installs the engine CLI, installs the resolved `threat-detect` tag via the checksum-verifying `install_threat_detect_binary.sh`, and runs a detection over a minimal benign artifacts directory. Each engine runs as an independent matrix job (`fail-fast: false`), and the job has a 30-minute timeout.
+3. Passes only when the binary exits `0` (safe) or `1` (threat) **and** emits a well-formed verdict JSON (`prompt_injection`, `secret_leak`, `malicious_patch` booleans plus a `reasons` array). An infrastructure error (exit `2`), a missing verdict, or malformed JSON fails the smoke.
 
 **Tag → test → promote loop:**
 
-1. Cut a release tag (`create-release-tag.yml`); `release.yml` publishes a version-tagged **prerelease** with the recorded asset sha256.
-2. Run **Smoke Standalone Latest** (`workflow_dispatch`). Leave `detector_tag` empty to pick up the prerelease you just published, or pin an explicit tag. Optionally scope to a single engine.
+1. Cut a release tag (`create-release-tag.yml`); `release.yml` publishes a version-tagged **prerelease** with the recorded asset sha256. **Smoke Standalone Latest** then starts automatically against that tag.
+2. To re-run or pin an explicit tag manually, dispatch **Smoke Standalone Latest** (`workflow_dispatch`) with a `detector_tag` (or leave it empty). Optionally scope to a single engine.
 3. Confirm every engine job is green and the run summary shows the expected tag.
 4. Promote with `promote-release.yml`; it re-verifies the asset sha256 and marks the release **Latest** (stable). The pinned `*-standalone` smokes continue to run against the promoted tag.
 

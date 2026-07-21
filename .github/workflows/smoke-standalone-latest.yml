@@ -1,22 +1,29 @@
 name: Smoke Standalone Latest
 
-# Opt-in smoke test that exercises the released `threat-detect` binary at a
-# NON-DEFAULT tag (by default the newest prerelease) against each engine.
+# Smoke test that exercises the released `threat-detect` binary at a
+# NON-DEFAULT tag (a release candidate) against each engine.
 #
 # The scheduled `*-standalone` smoke workflows deliberately pin a specific
-# promoted tag at compile time for reproducibility. This workflow provides the
-# complementary "release candidate" path: point it at a freshly tagged
-# prerelease, confirm the binary produces a verdict with every engine, then
-# promote the release. It never runs on a schedule and never changes the
-# steady-state behaviour of the pinned smokes.
+# promoted tag at compile time for reproducibility. This workflow is the
+# complementary "release candidate" path: it validates a freshly published
+# prerelease end-to-end so it can be promoted with confidence. It never
+# changes the steady-state behaviour of the pinned smokes.
+#
+# Triggers:
+#   * workflow_dispatch — manual, with optional tag / engine overrides.
+#   * workflow_run       — automatically after the "Release" workflow finishes
+#                          publishing a new (pre)release. (The Release workflow
+#                          creates the release with GITHUB_TOKEN, so a plain
+#                          `on: release` trigger would never fire.)
 
 on:
   workflow_dispatch:
     inputs:
       detector_tag:
         description: >-
-          Detector release tag to test (e.g. v0.3.0-rc.1). Leave empty to
-          resolve the newest prerelease automatically.
+          Detector release tag to test (e.g. v0.3.0-rc.1). Leave empty to fall
+          back, in order, to the GH_AW_THREAT_DETECTION_VERSION repository
+          variable and then the newest prerelease.
         required: false
         default: ''
         type: string
@@ -30,6 +37,10 @@ on:
           - copilot
           - claude
           - codex
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -37,6 +48,9 @@ permissions:
 jobs:
   resolve:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # For workflow_run triggers, only proceed when the Release workflow succeeded.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       detector_tag: ${{ steps.tag.outputs.detector_tag }}
       is_prerelease: ${{ steps.tag.outputs.is_prerelease }}
@@ -47,22 +61,45 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
           REPO: github/gh-aw-threat-detection
+          EVENT: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.detector_tag }}
           VAR_TAG: ${{ vars.GH_AW_THREAT_DETECTION_VERSION }}
+          # Tag of the release whose Release workflow just completed (auto-run).
+          # Tag pushes often leave head_branch null, so this may be empty.
+          RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
-          # Precedence: workflow_dispatch input > repo variable > newest prerelease.
-          tag="${INPUT_TAG:-}"
-          source="workflow_dispatch input"
-          if [ -z "$tag" ]; then
-            tag="${VAR_TAG:-}"
-            source="GH_AW_THREAT_DETECTION_VERSION variable"
-          fi
-          if [ -z "$tag" ]; then
-            tag="$(gh release list --repo "$REPO" --exclude-drafts --limit 50 \
+          newest_prerelease() {
+            gh release list --repo "$REPO" --exclude-drafts --limit 50 \
               --json tagName,isPrerelease,publishedAt \
-              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName')"
-            source="newest prerelease"
+              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName'
+          }
+          tag=""
+          source=""
+          if [ "$EVENT" = "workflow_run" ]; then
+            # Auto-run: always test the release that just published. Prefer the
+            # triggering tag; fall back to the newest prerelease when the event
+            # payload omits it. The pinned override variable is ignored here so
+            # auto-runs deterministically exercise the new binary.
+            if [ -n "${RELEASE_TAG:-}" ]; then
+              tag="$RELEASE_TAG"
+              source="triggering Release run"
+            else
+              tag="$(newest_prerelease)"
+              source="newest prerelease (auto-run)"
+            fi
+          else
+            # Manual run precedence: input > repository variable > newest prerelease.
+            if [ -n "${INPUT_TAG:-}" ]; then
+              tag="$INPUT_TAG"
+              source="workflow_dispatch input"
+            elif [ -n "${VAR_TAG:-}" ]; then
+              tag="$VAR_TAG"
+              source="GH_AW_THREAT_DETECTION_VERSION variable"
+            else
+              tag="$(newest_prerelease)"
+              source="newest prerelease"
+            fi
           fi
           if [ -z "$tag" ] || [ "$tag" = "null" ]; then
             echo "::error::Could not resolve a detector tag to test. Provide 'detector_tag' or publish a prerelease."
@@ -80,11 +117,13 @@ jobs:
             echo "| Tag | \`$tag\` |"
             echo "| Source | $source |"
             echo "| Prerelease | $is_pre |"
+            echo "| Trigger | ${{ github.event_name }} |"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Select engines
         id: engines
         env:
-          ENGINE: ${{ inputs.engine }}
+          # Auto-runs (workflow_run) always cover every engine.
+          ENGINE: ${{ github.event_name == 'workflow_dispatch' && inputs.engine || 'all' }}
         run: |
           set -euo pipefail
           case "${ENGINE:-all}" in
@@ -97,16 +136,13 @@ jobs:
     needs: resolve
     runs-on: ubuntu-latest
     name: smoke (${{ matrix.engine }})
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         engine: ${{ fromJSON(needs.resolve.outputs.engines) }}
     env:
       DETECTOR_TAG: ${{ needs.resolve.outputs.detector_tag }}
-      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
     steps:
       - name: Setup gh-aw action scripts
         uses: github/gh-aw-actions/setup@b6d1443e05b8716267fa19425b99aa4f12006b4a # v0.82.14
@@ -154,9 +190,16 @@ jobs:
           ls -la "$dir"
       - name: Run threat-detect
         id: detect
+        # Provider credentials are scoped to this step only, and only the
+        # secret for the engine under test is populated — so the setup action
+        # and npm install scripts in earlier steps never receive them.
         env:
           ENGINE: ${{ matrix.engine }}
           ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+          COPILOT_GITHUB_TOKEN: ${{ matrix.engine == 'copilot' && secrets.COPILOT_GITHUB_TOKEN || '' }}
+          ANTHROPIC_API_KEY: ${{ matrix.engine == 'claude' && secrets.ANTHROPIC_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ matrix.engine == 'codex' && secrets.OPENAI_API_KEY || '' }}
+          CODEX_API_KEY: ${{ matrix.engine == 'codex' && secrets.CODEX_API_KEY || '' }}
           MODEL_COPILOT: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT }}
           MODEL_CLAUDE: ${{ vars.GH_AW_MODEL_DETECTION_CLAUDE }}
           MODEL_CODEX: ${{ vars.GH_AW_MODEL_DETECTION_CODEX }}
@@ -178,33 +221,56 @@ jobs:
           status=0
           threat-detect "${args[@]}" "$ARTIFACTS_DIR" || status=$?
           echo "exit_status=$status" >> "$GITHUB_OUTPUT"
-          # A verdict (exit 0 safe or exit 1 threat) means the binary worked.
-          # Only a missing verdict / infrastructure error (exit 2) is a smoke failure.
-          if [ ! -f "$result" ]; then
-            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) produced no verdict (exit ${status})."
+          # Exit-code contract: 0 = safe, 1 = threat detected, 2 = infra error.
+          # A healthy candidate MUST exit 0 or 1 AND emit a well-formed verdict.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) exited ${status} (infrastructure error)."
             exit 1
           fi
-          echo "Verdict produced (threat-detect exit ${status}):"
-          cat "$result"
+          if [ ! -f "$result" ]; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) produced no verdict file."
+            exit 1
+          fi
+          if ! jq -e '
+              type == "object"
+              and (.prompt_injection | type == "boolean")
+              and (.secret_leak      | type == "boolean")
+              and (.malicious_patch  | type == "boolean")
+              and (.reasons          | type == "array")
+            ' "$result" >/dev/null 2>&1; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) produced a malformed verdict:"
+            cat "$result" || true
+            exit 1
+          fi
+          echo "Valid verdict produced (threat-detect exit ${status}):"
+          jq . "$result"
       - name: Summarize
         if: always()
         env:
           ENGINE: ${{ matrix.engine }}
           ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+          STATUS: ${{ steps.detect.outcome }}
         run: |
           result="${ARTIFACTS_DIR}/detection_result.json"
           {
             echo "### Smoke: ${ENGINE} @ \`${DETECTOR_TAG}\`"
             echo ""
-            if [ -f "$result" ]; then
-              echo "Result: ✅ verdict produced"
+            if [ "${STATUS}" = "success" ] && [ -f "$result" ]; then
+              echo "Result: ✅ valid verdict produced"
               echo ""
               echo '```json'
               cat "$result"
               echo ""
               echo '```'
             else
-              echo "Result: ❌ no verdict produced"
+              echo "Result: ❌ smoke failed (step outcome: ${STATUS})"
+              if [ -f "$result" ]; then
+                echo ""
+                echo '```json'
+                cat "$result"
+                echo ""
+                echo '```'
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload detection artifacts
