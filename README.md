@@ -392,7 +392,7 @@ pkg/detector/          Core detection logic (prompt building, result parsing)
 pkg/engine/            AI engine abstraction (copilot, claude, codex)
 pkg/artifacts/         Artifact reading and validation
 pkg/detector/prompts/  Embedded AI prompt template
-specs/                 W3C-style specification
+specs/                 W3C-style specifications (detection behavior + usage)
 ```
 
 ## Integration with gh-aw
@@ -408,7 +408,7 @@ The detection job in compiled workflows downloads the pinned `threat-detect` rel
 
 ## Specification
 
-See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification.
+See [specs/threat-detection-spec.md](specs/threat-detection-spec.md) for the full W3C-style specification of detection behavior, and [specs/usage-spec.md](specs/usage-spec.md) for the W3C-style usage specification covering how a host acquires, invokes, and concludes a detection run.
 
 ## Contributing
 
