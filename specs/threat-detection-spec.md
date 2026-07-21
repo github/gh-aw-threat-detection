@@ -225,6 +225,13 @@ treats a missing verdict as a recoverable `parse_error` and proceeds.
 | `WORKFLOW_DESCRIPTION` | Description of the workflow |
 | `CUSTOM_PROMPT` | Additional detection instructions |
 
+**TD-22a**: When the model is not set explicitly (via the `--model` flag or engine configuration), the detector MUST resolve the model for the selected engine from environment variables, in the following precedence:
+
+1. the engine-specific detection model variable `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`;
+2. the engine CLI's native model environment variable (`COPILOT_MODEL` for copilot, `ANTHROPIC_MODEL` for claude).
+
+This keeps the standalone detector consistent with the model `gh-aw` configures for the harness-driven detection path. Codex has no native model environment variable and relies solely on the detection variable.
+
 **TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt building, unit test, or binary smoke test execution.
 
 The implementation MAY pass through engine-specific authentication variables required by the selected CLI, including:

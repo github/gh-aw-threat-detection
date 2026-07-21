@@ -42,17 +42,64 @@ func Canonical(engineID string) string {
 	return strings.ToLower(engineID)
 }
 
-// ResolveModel returns the model to use for detection. An explicit flagModel
-// always wins. Otherwise it falls back to the engine-specific detection model
-// environment variable set by gh-aw (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}),
-// so the standalone detector honors the same model the caller configured for the
-// base (harness-driven) detection path.
+// Native CLI model environment variables. Setting these is equivalent to
+// passing --model to the corresponding engine CLI. gh-aw uses the same names,
+// so honoring them keeps the standalone detector consistent with the harness.
+const (
+	// copilotCLIModelEnvVar is read natively by the Copilot CLI. gh-aw sets it
+	// (resolved from the GH_AW_MODEL_DETECTION_COPILOT Actions variable) in the
+	// compiled standalone detection step.
+	copilotCLIModelEnvVar = "COPILOT_MODEL"
+	// claudeCLIModelEnvVar is read natively by the Claude CLI.
+	claudeCLIModelEnvVar = "ANTHROPIC_MODEL"
+)
+
+// detectionModelEnvVar returns the gh-aw detection model environment variable
+// name for the given canonical engine ID
+// (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}).
+func detectionModelEnvVar(canonicalEngineID string) string {
+	return "GH_AW_MODEL_DETECTION_" + strings.ToUpper(canonicalEngineID)
+}
+
+// nativeCLIModelEnvVar returns the engine CLI's own model environment variable
+// name for the given canonical engine ID, or "" when the engine's CLI has no
+// native model env var (Codex selects the model via a -c model= flag).
+func nativeCLIModelEnvVar(canonicalEngineID string) string {
+	switch canonicalEngineID {
+	case "copilot":
+		return copilotCLIModelEnvVar
+	case "claude":
+		return claudeCLIModelEnvVar
+	default:
+		return ""
+	}
+}
+
+// ResolveModel returns the model to use for detection, mirroring how gh-aw
+// configures the model for each engine. Resolution precedence:
+//
+//  1. an explicit flagModel (the --model flag) always wins;
+//  2. the engine-specific detection model variable set by gh-aw
+//     (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX});
+//  3. the engine CLI's native model environment variable (COPILOT_MODEL for
+//     copilot, ANTHROPIC_MODEL for claude), which gh-aw sets directly for some
+//     engines in the compiled standalone detection step.
+//
+// This keeps the standalone detector consistent with the model the caller
+// configured for the base (harness-driven) detection path, and makes the
+// resolved model observable in logs and the run report.
 func ResolveModel(engineID, flagModel string) string {
 	if flagModel != "" {
 		return flagModel
 	}
-	envName := "GH_AW_MODEL_DETECTION_" + strings.ToUpper(Canonical(engineID))
-	return strings.TrimSpace(os.Getenv(envName))
+	canonical := Canonical(engineID)
+	if v := strings.TrimSpace(os.Getenv(detectionModelEnvVar(canonical))); v != "" {
+		return v
+	}
+	if native := nativeCLIModelEnvVar(canonical); native != "" {
+		return strings.TrimSpace(os.Getenv(native))
+	}
+	return ""
 }
 
 // New creates a new engine instance based on the engine ID.

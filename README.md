@@ -55,7 +55,7 @@ threat-detect [flags] <artifacts-dir>
 
 **Flags:**
 - `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
-- `--model` — Model override for the engine
+- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`)
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`
@@ -348,7 +348,7 @@ Optional Actions variables:
 | Variable | Purpose |
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
-| `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. |
+| `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. When `--model` is not passed, the detector reads the variable matching the selected engine; if it is unset, it falls back to the engine CLI's native model env var (`COPILOT_MODEL` for copilot, `ANTHROPIC_MODEL` for claude). |
 | `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml`, and the default override tag for `smoke-standalone-latest.yml` when its `detector_tag` input is empty (defaults to the latest promoted release for `detection-only.yml`, or the newest prerelease for `smoke-standalone-latest.yml`, when unset). The scheduled `*-standalone` smoke workflows instead pin a specific promoted tag at compile time for reproducibility. |
 
 ### Build
