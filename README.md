@@ -304,7 +304,36 @@ Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can b
 
 `.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `smoke-copilot-standalone` smoke workflow, while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
 
-Recompile the smoke workflows with `gh aw compile` after editing their `.md` sources.
+### Testing a Release Candidate (`smoke-standalone-latest.yml`)
+
+`.github/workflows/smoke-standalone-latest.yml` runs the released `threat-detect` binary at a **non-default tag** — a release candidate — against each engine. It exists so a freshly published prerelease can be validated end-to-end before it is promoted to **Latest**, without disturbing the reproducible, compile-time pin used by the scheduled `*-standalone` smokes.
+
+It runs in two ways:
+
+- **Automatically** after the **Release** workflow finishes publishing a new (pre)release (`workflow_run`). The Release workflow creates the release with `GITHUB_TOKEN`, so a plain `on: release` trigger would never fire — hence the `workflow_run` hook. Auto-runs test the just-published tag across all three engines.
+- **Manually** via `workflow_dispatch`, with optional `detector_tag` and `engine` inputs.
+
+It never runs on a schedule, so steady-state behaviour is unchanged. On each run it:
+
+1. Resolves the detector tag and logs the choice (and trigger) to the run summary:
+   - **Auto-runs** test the release that just published: the triggering **Release** tag, or the newest **prerelease** when the event omits it. The pinned override variable is intentionally ignored so auto-runs always exercise the new binary.
+   - **Manual runs** use this precedence: the `detector_tag` input → the `GH_AW_THREAT_DETECTION_VERSION` repository variable → the newest **prerelease** (`gh release list --json ... isPrerelease`).
+2. For each selected engine (`all` on auto-runs; `all` or a single engine on manual runs) installs the engine CLI, installs the resolved `threat-detect` tag via the checksum-verifying `install_threat_detect_binary.sh`, and runs a detection over a minimal benign artifacts directory. Each engine runs as an independent matrix job (`fail-fast: false`), and the job has a 30-minute timeout.
+3. Passes only when the binary exits `0` (safe) or `1` (threat) **and** emits a well-formed verdict JSON (`prompt_injection`, `secret_leak`, `malicious_patch` booleans plus a `reasons` array). An infrastructure error (exit `2`), a missing verdict, or malformed JSON fails the smoke.
+
+**Tag → test → promote loop:**
+
+1. Cut a release tag (`create-release-tag.yml`); `release.yml` publishes a version-tagged **prerelease** with the recorded asset sha256. **Smoke Standalone Latest** then starts automatically against that tag.
+2. To re-run or pin an explicit tag manually, dispatch **Smoke Standalone Latest** (`workflow_dispatch`) with a `detector_tag` (or leave it empty). Optionally scope to a single engine.
+3. Confirm every engine job is green and the run summary shows the expected tag.
+4. Promote with `promote-release.yml`; it re-verifies the asset sha256 and marks the release **Latest** (stable). The pinned `*-standalone` smokes continue to run against the promoted tag.
+
+You can also start it from the top-level **Smoke** workflow by dispatching it with `include_latest: true` (and an optional `detector_tag`); the default pinned smokes still dispatch unchanged.
+
+> [!NOTE]
+> This workflow runs the detector binary directly on the runner to keep it self-contained and free of AWF image/version drift. The firewall (AWF) execution path is continuously validated by the scheduled `*-standalone` smokes against the promoted release.
+
+Recompile the smoke workflows with `gh aw compile` after editing their `.md` sources. `smoke-standalone-latest.yml` is a hand-authored workflow (not compiled from a `.md`).
 
 | Secret | Required for | Notes |
 |--------|--------------|-------|
@@ -320,7 +349,7 @@ Optional Actions variables:
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. |
-| `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml` (defaults to the latest promoted release when unset). The `*-standalone` smoke workflows instead pin a specific promoted tag at compile time for reproducibility. |
+| `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml`, and the default override tag for `smoke-standalone-latest.yml` when its `detector_tag` input is empty (defaults to the latest promoted release for `detection-only.yml`, or the newest prerelease for `smoke-standalone-latest.yml`, when unset). The scheduled `*-standalone` smoke workflows instead pin a specific promoted tag at compile time for reproducibility. |
 
 ### Build
 
