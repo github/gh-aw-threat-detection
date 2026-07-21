@@ -207,4 +207,3 @@ func TestCloseSurfacesFirstWriteError(t *testing.T) {
 		t.Fatalf("Close() error = %v, want disk full", err)
 	}
 }
-
