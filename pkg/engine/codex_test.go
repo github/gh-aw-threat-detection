@@ -119,3 +119,62 @@ func TestCodexConfigPathHonorsCodexHome(t *testing.T) {
 		t.Fatalf("codexConfigPath() = %q, want %q", got, want)
 	}
 }
+
+func TestResolveModel(t *testing.T) {
+	// Ensure a clean slate for all detection-model env vars.
+	for _, name := range []string{
+		"GH_AW_MODEL_DETECTION_COPILOT",
+		"GH_AW_MODEL_DETECTION_CLAUDE",
+		"GH_AW_MODEL_DETECTION_CODEX",
+	} {
+		t.Setenv(name, "")
+	}
+
+	t.Run("explicit flag always wins", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_CODEX", "gpt-5.4")
+		if got := ResolveModel("codex", "gpt-flag"); got != "gpt-flag" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "gpt-flag")
+		}
+	})
+
+	t.Run("codex falls back to env", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_CODEX", "gpt-5.4")
+		if got := ResolveModel("codex", ""); got != "gpt-5.4" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "gpt-5.4")
+		}
+	})
+
+	t.Run("claude falls back to env", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_CLAUDE", "claude-sonnet-4.6")
+		if got := ResolveModel("claude", ""); got != "claude-sonnet-4.6" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "claude-sonnet-4.6")
+		}
+	})
+
+	t.Run("copilot falls back to env", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_COPILOT", "some-copilot-model")
+		if got := ResolveModel("copilot", ""); got != "some-copilot-model" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "some-copilot-model")
+		}
+	})
+
+	t.Run("empty engine uses default copilot env", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_COPILOT", "default-engine-model")
+		if got := ResolveModel("", ""); got != "default-engine-model" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "default-engine-model")
+		}
+	})
+
+	t.Run("no flag and no env yields empty", func(t *testing.T) {
+		if got := ResolveModel("codex", ""); got != "" {
+			t.Fatalf("ResolveModel() = %q, want empty", got)
+		}
+	})
+
+	t.Run("env value is trimmed", func(t *testing.T) {
+		t.Setenv("GH_AW_MODEL_DETECTION_CODEX", "  gpt-5.4  ")
+		if got := ResolveModel("codex", ""); got != "gpt-5.4" {
+			t.Fatalf("ResolveModel() = %q, want %q", got, "gpt-5.4")
+		}
+	})
+}

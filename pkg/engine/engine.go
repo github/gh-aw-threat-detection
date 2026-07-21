@@ -42,6 +42,19 @@ func Canonical(engineID string) string {
 	return strings.ToLower(engineID)
 }
 
+// ResolveModel returns the model to use for detection. An explicit flagModel
+// always wins. Otherwise it falls back to the engine-specific detection model
+// environment variable set by gh-aw (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}),
+// so the standalone detector honors the same model the caller configured for the
+// base (harness-driven) detection path.
+func ResolveModel(engineID, flagModel string) string {
+	if flagModel != "" {
+		return flagModel
+	}
+	envName := "GH_AW_MODEL_DETECTION_" + strings.ToUpper(Canonical(engineID))
+	return strings.TrimSpace(os.Getenv(envName))
+}
+
 // New creates a new engine instance based on the engine ID.
 // If engineID is empty, it defaults to "copilot".
 func New(engineID, model string) (Engine, error) {

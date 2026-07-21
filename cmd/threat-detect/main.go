@@ -134,6 +134,11 @@ func run() (code int) {
 		return exitSafe
 	}
 
+	// When --model is not set, fall back to the engine-specific detection model
+	// environment variable (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}) so the
+	// standalone detector honors the model gh-aw configured for detection.
+	model = engine.ResolveModel(engineID, model)
+
 	// Reject a --log-file that collides with --output: they are opened and
 	// truncated independently, so sharing an inode would interleave the JSONL
 	// trace and the result JSON and corrupt both while still reporting success.
