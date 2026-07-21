@@ -199,7 +199,7 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("codex", func(t *testing.T) {
-		got := codexArgs("gpt-5-codex", "detect threats")
+		got := codexArgs("gpt-5-codex", "", "detect threats")
 		want := []string{
 			"-c", "model=gpt-5-codex",
 			"exec",
@@ -216,8 +216,26 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("codex default model", func(t *testing.T) {
-		got := codexArgs("", "detect threats")
+		got := codexArgs("", "", "detect threats")
 		want := []string{
+			"exec",
+			"-c", "web_search=disabled",
+			"-c", "fetch=disabled",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--skip-git-repo-check",
+			"--",
+			"detect threats",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("codex with forced provider", func(t *testing.T) {
+		got := codexArgs("gpt-5-codex", "openai-proxy", "detect threats")
+		want := []string{
+			"-c", "model=gpt-5-codex",
+			"-c", "model_provider=openai-proxy",
 			"exec",
 			"-c", "web_search=disabled",
 			"-c", "fetch=disabled",

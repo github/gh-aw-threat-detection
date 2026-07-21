@@ -42,6 +42,19 @@ func Canonical(engineID string) string {
 	return strings.ToLower(engineID)
 }
 
+// ResolveModel returns the model to use for detection. An explicit flagModel
+// always wins. Otherwise it falls back to the engine-specific detection model
+// environment variable set by gh-aw (GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}),
+// so the standalone detector honors the same model the caller configured for the
+// base (harness-driven) detection path.
+func ResolveModel(engineID, flagModel string) string {
+	if flagModel != "" {
+		return flagModel
+	}
+	envName := "GH_AW_MODEL_DETECTION_" + strings.ToUpper(Canonical(engineID))
+	return strings.TrimSpace(os.Getenv(envName))
+}
+
 // New creates a new engine instance based on the engine ID.
 // If engineID is empty, it defaults to "copilot".
 func New(engineID, model string) (Engine, error) {
@@ -107,7 +120,8 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		return "", err
 	}
 	defer cleanup()
-	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, ""), prompt, toolEnv, opts.ResultSinkPath)
+	provider := codexForcedProvider(codexConfigPath())
+	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
 }
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
@@ -189,7 +203,7 @@ func claudeArgs(model string, allowBash bool) []string {
 	return append(args, "-")
 }
 
-func codexArgs(model, prompt string) []string {
+func codexArgs(model, provider, prompt string) []string {
 	args := []string{
 		"exec",
 		"-c", "web_search=disabled",
@@ -198,6 +212,9 @@ func codexArgs(model, prompt string) []string {
 		"--skip-git-repo-check",
 		"--",
 		prompt,
+	}
+	if provider != "" {
+		args = append([]string{"-c", "model_provider=" + provider}, args...)
 	}
 	if model != "" {
 		args = append([]string{"-c", "model=" + model}, args...)
