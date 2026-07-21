@@ -2,6 +2,22 @@ name: Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      include_latest:
+        description: >-
+          Also dispatch smoke-standalone-latest.yml, which tests a non-default
+          detector tag (newest prerelease by default). Leave off for the
+          reproducible, pinned smokes only.
+        required: false
+        default: false
+        type: boolean
+      detector_tag:
+        description: >-
+          Detector tag forwarded to smoke-standalone-latest.yml when
+          include_latest is enabled. Empty resolves the newest prerelease.
+        required: false
+        default: ''
+        type: string
 
 permissions:
   actions: write
@@ -43,3 +59,18 @@ jobs:
             printf '  %s\n' "${failures[@]}" >&2
             exit 1
           fi
+      - name: Dispatch latest-prerelease smoke
+        if: ${{ inputs.include_latest }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          DETECTOR_TAG: ${{ inputs.detector_tag }}
+        run: |
+          set -euo pipefail
+          args=(smoke-standalone-latest.yml --repo "$REPO" --ref "$REF")
+          if [ -n "${DETECTOR_TAG:-}" ]; then
+            args+=(--field "detector_tag=${DETECTOR_TAG}")
+          fi
+          gh workflow run "${args[@]}"
+          echo "Dispatched smoke-standalone-latest.yml (detector_tag='${DETECTOR_TAG:-<newest prerelease>}')"

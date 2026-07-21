@@ -1,0 +1,218 @@
+name: Smoke Standalone Latest
+
+# Opt-in smoke test that exercises the released `threat-detect` binary at a
+# NON-DEFAULT tag (by default the newest prerelease) against each engine.
+#
+# The scheduled `*-standalone` smoke workflows deliberately pin a specific
+# promoted tag at compile time for reproducibility. This workflow provides the
+# complementary "release candidate" path: point it at a freshly tagged
+# prerelease, confirm the binary produces a verdict with every engine, then
+# promote the release. It never runs on a schedule and never changes the
+# steady-state behaviour of the pinned smokes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      detector_tag:
+        description: >-
+          Detector release tag to test (e.g. v0.3.0-rc.1). Leave empty to
+          resolve the newest prerelease automatically.
+        required: false
+        default: ''
+        type: string
+      engine:
+        description: Which engine(s) to smoke test.
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - copilot
+          - claude
+          - codex
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      detector_tag: ${{ steps.tag.outputs.detector_tag }}
+      is_prerelease: ${{ steps.tag.outputs.is_prerelease }}
+      engines: ${{ steps.engines.outputs.engines }}
+    steps:
+      - name: Resolve detector tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          REPO: github/gh-aw-threat-detection
+          INPUT_TAG: ${{ inputs.detector_tag }}
+          VAR_TAG: ${{ vars.GH_AW_THREAT_DETECTION_VERSION }}
+        run: |
+          set -euo pipefail
+          # Precedence: workflow_dispatch input > repo variable > newest prerelease.
+          tag="${INPUT_TAG:-}"
+          source="workflow_dispatch input"
+          if [ -z "$tag" ]; then
+            tag="${VAR_TAG:-}"
+            source="GH_AW_THREAT_DETECTION_VERSION variable"
+          fi
+          if [ -z "$tag" ]; then
+            tag="$(gh release list --repo "$REPO" --exclude-drafts --limit 50 \
+              --json tagName,isPrerelease,publishedAt \
+              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName')"
+            source="newest prerelease"
+          fi
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::Could not resolve a detector tag to test. Provide 'detector_tag' or publish a prerelease."
+            exit 1
+          fi
+          is_pre="$(gh release view "$tag" --repo "$REPO" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo unknown)"
+          echo "detector_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_pre" >> "$GITHUB_OUTPUT"
+          echo "Resolved detector tag '$tag' (source: $source, prerelease: $is_pre)"
+          {
+            echo "### Detector tag under test"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Tag | \`$tag\` |"
+            echo "| Source | $source |"
+            echo "| Prerelease | $is_pre |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Select engines
+        id: engines
+        env:
+          ENGINE: ${{ inputs.engine }}
+        run: |
+          set -euo pipefail
+          case "${ENGINE:-all}" in
+            all|'') echo 'engines=["copilot","claude","codex"]' >> "$GITHUB_OUTPUT" ;;
+            copilot|claude|codex) echo "engines=[\"${ENGINE}\"]" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unknown engine '${ENGINE}'"; exit 1 ;;
+          esac
+
+  smoke:
+    needs: resolve
+    runs-on: ubuntu-latest
+    name: smoke (${{ matrix.engine }})
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.resolve.outputs.engines) }}
+    env:
+      DETECTOR_TAG: ${{ needs.resolve.outputs.detector_tag }}
+      COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    steps:
+      - name: Setup gh-aw action scripts
+        uses: github/gh-aw-actions/setup@b6d1443e05b8716267fa19425b99aa4f12006b4a # v0.82.14
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+          job-name: ${{ github.job }}
+          trace-id: smoke-standalone-latest-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install engine CLI
+        env:
+          ENGINE: ${{ matrix.engine }}
+          GH_HOST: github.com
+        run: |
+          set -euo pipefail
+          case "$ENGINE" in
+            copilot) bash "${RUNNER_TEMP}/gh-aw/actions/install_copilot_cli.sh" 1.0.71 ;;
+            claude)  npm install -g @anthropic-ai/claude-code@2.1.214 ;;
+            codex)   npm install --ignore-scripts -g @openai/codex@0.144.5 ;;
+            *) echo "::error::Unknown engine '$ENGINE'"; exit 1 ;;
+          esac
+      - name: Install threat-detect binary
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_threat_detect_binary.sh" "$DETECTOR_TAG"
+      - name: Build minimal artifacts directory
+        id: artifacts
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/gh-aw/smoke-latest-${ENGINE}"
+          mkdir -p "$dir/aw-prompts"
+          cat > "$dir/aw-prompts/prompt.txt" <<'PROMPT'
+          You are a documentation assistant for a Go project. Summarize the
+          repository README in a single sentence. Do not run commands or make
+          network requests.
+          PROMPT
+          cat > "$dir/agent_output.json" <<'OUT'
+          { "items": [ { "type": "final_response", "content": "Summarized the README in one sentence." } ] }
+          OUT
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Prepared artifacts under $dir"
+          ls -la "$dir"
+      - name: Run threat-detect
+        id: detect
+        env:
+          ENGINE: ${{ matrix.engine }}
+          ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+          MODEL_COPILOT: ${{ vars.GH_AW_MODEL_DETECTION_COPILOT }}
+          MODEL_CLAUDE: ${{ vars.GH_AW_MODEL_DETECTION_CLAUDE }}
+          MODEL_CODEX: ${{ vars.GH_AW_MODEL_DETECTION_CODEX }}
+        run: |
+          set -o pipefail
+          model=""
+          case "$ENGINE" in
+            copilot) model="${MODEL_COPILOT:-}" ;;
+            claude)  model="${MODEL_CLAUDE:-}" ;;
+            codex)   model="${MODEL_CODEX:-}" ;;
+          esac
+          result="${ARTIFACTS_DIR}/detection_result.json"
+          log="${ARTIFACTS_DIR}/run.jsonl"
+          args=(--engine "$ENGINE" --output "$result" --log-file "$log")
+          if [ -n "$model" ]; then
+            args+=(--model "$model")
+          fi
+          echo "Running: threat-detect ${args[*]} $ARTIFACTS_DIR"
+          status=0
+          threat-detect "${args[@]}" "$ARTIFACTS_DIR" || status=$?
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          # A verdict (exit 0 safe or exit 1 threat) means the binary worked.
+          # Only a missing verdict / infrastructure error (exit 2) is a smoke failure.
+          if [ ! -f "$result" ]; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) produced no verdict (exit ${status})."
+            exit 1
+          fi
+          echo "Verdict produced (threat-detect exit ${status}):"
+          cat "$result"
+      - name: Summarize
+        if: always()
+        env:
+          ENGINE: ${{ matrix.engine }}
+          ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+        run: |
+          result="${ARTIFACTS_DIR}/detection_result.json"
+          {
+            echo "### Smoke: ${ENGINE} @ \`${DETECTOR_TAG}\`"
+            echo ""
+            if [ -f "$result" ]; then
+              echo "Result: ✅ verdict produced"
+              echo ""
+              echo '```json'
+              cat "$result"
+              echo ""
+              echo '```'
+            else
+              echo "Result: ❌ no verdict produced"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload detection artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-standalone-latest-${{ matrix.engine }}
+          path: |
+            ${{ steps.artifacts.outputs.dir }}/detection_result.json
+            ${{ steps.artifacts.outputs.dir }}/run.jsonl
+          if-no-files-found: ignore
