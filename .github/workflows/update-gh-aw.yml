@@ -1,0 +1,132 @@
+name: Update gh-aw
+
+# Watches github/gh-aw for new (pre)releases. When a newer version than the one
+# currently used to compile the workflows is published, it installs that gh-aw
+# CLI version, recompiles every agentic workflow (.md -> .lock.yml), and opens a
+# pull request with the regenerated files.
+#
+# GitHub Actions cannot subscribe to another repository's release event directly,
+# so this runs on a schedule (and can be dispatched manually). Prereleases are
+# included on purpose.
+
+on:
+  schedule:
+    # Every 6 hours.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'gh-aw release tag to update to (e.g. v0.83.0). Leave empty to use the latest (pre)release.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-gh-aw
+  cancel-in-progress: false
+
+jobs:
+  update:
+    # Never run on forks.
+    if: ${{ github.repository == 'github/gh-aw-threat-detection' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target and current gh-aw versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Current version = the compiler_version recorded in a compiled lock file.
+          current="$(grep -o '"compiler_version":"[^"]*"' .github/workflows/smoke-copilot.lock.yml | head -n1 | sed 's/.*:"//;s/"//')"
+          if [ -z "${current}" ]; then
+            echo "Could not determine current gh-aw version from lock files" >&2
+            exit 1
+          fi
+
+          if [ -n "${INPUT_VERSION}" ]; then
+            target="${INPUT_VERSION}"
+          else
+            # Latest published (pre)release, drafts excluded, most recent by publish date.
+            # The API returns releases newest-first, so the first page is sufficient.
+            target="$(gh api 'repos/github/gh-aw/releases?per_page=100' \
+              --jq 'map(select(.draft == false)) | sort_by(.published_at) | last | .tag_name')"
+          fi
+          if [ -z "${target}" ] || [ "${target}" = "null" ]; then
+            echo "Could not determine target gh-aw version" >&2
+            exit 1
+          fi
+
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+          if [ "${current}" = "${target}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Current gh-aw: ${current}"
+          echo "Target  gh-aw: ${target}"
+
+      - name: Install gh-aw CLI
+        if: ${{ steps.versions.outputs.changed == 'true' }}
+        uses: github/gh-aw-actions/setup-cli@b6d1443e05b8716267fa19425b99aa4f12006b4a # v0.82.14
+        with:
+          version: ${{ steps.versions.outputs.target }}
+
+      - name: Recompile workflows
+        if: ${{ steps.versions.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh aw compile
+
+      - name: Create pull request
+        if: ${{ steps.versions.outputs.changed == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.versions.outputs.target }}
+          CURRENT: ${{ steps.versions.outputs.current }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Recompiling with ${TARGET} produced no changes; nothing to do."
+            exit 0
+          fi
+
+          branch="chore/update-gh-aw-${TARGET}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # If a PR branch already exists for this target, don't recreate it.
+          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
+            echo "Branch ${branch} already exists; assuming a PR is already open."
+            exit 0
+          fi
+
+          git checkout -b "${branch}"
+          git add -A
+          git commit \
+            -m "chore: recompile workflows for gh-aw ${TARGET}" \
+            -m "Regenerate .lock.yml files using gh-aw ${TARGET} (was ${CURRENT})." \
+            -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+          git push origin "${branch}"
+
+          body="$(printf 'Automated update triggered by a new github/gh-aw release.\n\n- **Previous compiler version:** %s\n- **New compiler version:** %s\n\nThe agentic workflow .lock.yml files were regenerated with `gh aw compile` using gh-aw %s. Review the diff before merging.\n\nRelease notes: https://github.com/github/gh-aw/releases/tag/%s\n' "${CURRENT}" "${TARGET}" "${TARGET}" "${TARGET}")"
+
+          gh pr create \
+            --title "chore: update gh-aw to ${TARGET}" \
+            --body "${body}" \
+            --head "${branch}" \
+            --base main
