@@ -23,6 +23,7 @@ tools:
   bash:
     - "*"
   github:
+    mode: gh-proxy
   web-fetch:
 runtimes:
   go:
