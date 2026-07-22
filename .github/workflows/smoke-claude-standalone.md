@@ -24,6 +24,7 @@ tools:
   bash:
     - "*"
   github:
+    mode: gh-proxy
 runtimes:
   go:
     version: "1.26"
