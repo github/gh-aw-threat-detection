@@ -1,9 +1,9 @@
 name: Update gh-aw
 
 # Watches github/gh-aw for new (pre)releases. When a newer version than the one
-# currently used to compile the workflows is published, it installs that gh-aw
-# CLI version, recompiles every agentic workflow (.md -> .lock.yml), and opens a
-# pull request with the regenerated files.
+# currently used to compile the workflows is published, it opens a tracking
+# issue so a maintainer can recompile the agentic workflows (.md -> .lock.yml)
+# with the new gh-aw CLI.
 #
 # GitHub Actions cannot subscribe to another repository's release event directly,
 # so this runs on a schedule (and can be dispatched manually). Prereleases are
@@ -11,12 +11,12 @@ name: Update gh-aw
 
 on:
   schedule:
-    # Every 6 hours.
-    - cron: '0 */6 * * *'
+    # Daily.
+    - cron: '0 8 * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'gh-aw release tag to update to (e.g. v0.83.0). Leave empty to use the latest (pre)release.'
+        description: 'gh-aw release tag to check against (e.g. v0.83.0). Leave empty to use the latest (pre)release.'
         required: false
         type: string
 
@@ -33,14 +33,12 @@ jobs:
     if: ${{ github.repository == 'github/gh-aw-threat-detection' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Always branch from main, even when dispatched from another ref, so
-          # the update PR only contains regenerated workflow files.
           ref: main
 
       - name: Resolve target and current gh-aw versions
@@ -85,19 +83,7 @@ jobs:
           echo "Current gh-aw: ${current}"
           echo "Target  gh-aw: ${target}"
 
-      - name: Install gh-aw CLI
-        if: ${{ steps.versions.outputs.changed == 'true' }}
-        uses: github/gh-aw-actions/setup-cli@b6d1443e05b8716267fa19425b99aa4f12006b4a # v0.82.14
-        with:
-          version: ${{ steps.versions.outputs.target }}
-
-      - name: Recompile workflows
-        if: ${{ steps.versions.outputs.changed == 'true' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh aw compile
-
-      - name: Create pull request
+      - name: Open update issue
         if: ${{ steps.versions.outputs.changed == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -106,34 +92,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$(git status --porcelain)" ]; then
-            echo "Recompiling with ${TARGET} produced no changes; nothing to do."
+          title="chore: update gh-aw to ${TARGET}"
+
+          # Don't open a duplicate if an open issue for this target already exists.
+          existing="$(gh issue list \
+            --state open \
+            --search "in:title ${title}" \
+            --json title,number \
+            --jq ".[] | select(.title == \"${title}\") | .number" \
+            | head -n1)"
+          if [ -n "${existing}" ]; then
+            echo "Issue #${existing} already tracks the update to ${TARGET}; nothing to do."
             exit 0
           fi
 
-          branch="chore/update-gh-aw-${TARGET}"
+          body="$(printf 'A newer github/gh-aw release is available.\n\n- **Current compiler version:** %s\n- **New compiler version:** %s\n\nThe agentic workflow `.lock.yml` files should be regenerated with `gh aw compile` using gh-aw %s.\n\nTo update:\n\n```bash\n# Install the target gh-aw CLI, then from the repo root:\ngh aw compile\n```\n\nOpen a pull request with the regenerated files and review the diff before merging.\n\nRelease notes: https://github.com/github/gh-aw/releases/tag/%s\n' "${CURRENT}" "${TARGET}" "${TARGET}" "${TARGET}")"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # If a PR branch already exists for this target, don't recreate it.
-          if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
-            echo "Branch ${branch} already exists; assuming a PR is already open."
-            exit 0
-          fi
-
-          git checkout -b "${branch}"
-          git add -A
-          git commit \
-            -m "chore: recompile workflows for gh-aw ${TARGET}" \
-            -m "Regenerate .lock.yml files using gh-aw ${TARGET} (was ${CURRENT})." \
-            -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-          git push origin "${branch}"
-
-          body="$(printf 'Automated update triggered by a new github/gh-aw release.\n\n- **Previous compiler version:** %s\n- **New compiler version:** %s\n\nThe agentic workflow .lock.yml files were regenerated with `gh aw compile` using gh-aw %s. Review the diff before merging.\n\nRelease notes: https://github.com/github/gh-aw/releases/tag/%s\n' "${CURRENT}" "${TARGET}" "${TARGET}" "${TARGET}")"
-
-          gh pr create \
-            --title "chore: update gh-aw to ${TARGET}" \
-            --body "${body}" \
-            --head "${branch}" \
-            --base main
+          gh issue create \
+            --title "${title}" \
+            --body "${body}"
