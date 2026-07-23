@@ -299,13 +299,13 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 
 ### AW Smoke Workflows
 
-This repository includes three Agentic Workflows smoke tests, each in two variants:
+This repository includes three Agentic Workflows smoke tests, one per engine:
 
-- `.github/workflows/smoke-copilot.md` (+ `smoke-copilot-standalone.md`)
-- `.github/workflows/smoke-claude.md` (+ `smoke-claude-standalone.md`)
-- `.github/workflows/smoke-codex.md` (+ `smoke-codex-standalone.md`)
+- `.github/workflows/smoke-copilot-standalone.md`
+- `.github/workflows/smoke-claude-standalone.md`
+- `.github/workflows/smoke-codex-standalone.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three compiled smoke workflows and their three `*-standalone` variants. The matching `.lock.yml` files are the compiled AW workflows. The base `smoke-{engine}.lock.yml` workflows exercise gh-aw's in-band detection (the engine CLI writes a detection log that is parsed for the verdict). The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`.
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three `*-standalone` smoke workflows. The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`.
 
 ### Detection-only Workflow
 
