@@ -37,9 +37,6 @@ jobs:
           set -euo pipefail
 
           workflows=(
-            smoke-copilot.lock.yml
-            smoke-claude.lock.yml
-            smoke-codex.lock.yml
             smoke-copilot-standalone.lock.yml
             smoke-claude-standalone.lock.yml
             smoke-codex-standalone.lock.yml

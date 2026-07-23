@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
 
           # Current version = the compiler_version recorded in a compiled lock file.
-          current="$(grep -o '"compiler_version":"[^"]*"' .github/workflows/smoke-copilot.lock.yml | head -n1 | sed 's/.*:"//;s/"//')"
+          current="$(grep -o '"compiler_version":"[^"]*"' .github/workflows/smoke-copilot-standalone.lock.yml | head -n1 | sed 's/.*:"//;s/"//')"
           if [ -z "${current}" ]; then
             echo "Could not determine current gh-aw version from lock files" >&2
             exit 1

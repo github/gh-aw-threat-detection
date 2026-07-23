@@ -41,7 +41,7 @@ pkg/runlog/               Structured JSONL run-log writer (--log-file); nil-safe
 specs/                    Normative spec (threat-detection-spec.md)
 skills/                   Repo-relevant agent skills (console-rendering, error-messages)
 scratchpad/               Retained design references inherited from gh-aw
-.github/workflows/        CI, release, promote, replay-detection, smoke-{copilot,claude,codex}[-standalone]
+.github/workflows/        CI, release, promote, replay-detection, smoke-{copilot,claude,codex}-standalone
 .devcontainer/            Codespaces / devcontainer setup (Go, gh, Copilot CLI, optional Vertex)
 Makefile                  All build/test/lint/release targets
 ```
@@ -132,17 +132,15 @@ Three workflows orchestrate releases:
 
 The `latest` (non-prerelease) GitHub release and "Latest" badge **only move on explicit promotion** — never automatically.
 
-## Smoke Workflows (and Standalone Variants)
+## Smoke Workflows
 
 This repo runs daily AW smoke tests against all three engines:
 
-- `.github/workflows/smoke-{copilot,claude,codex}.md` — AW source files (in-band detection: engine CLI writes a detection log that gh-aw parses for the verdict)
-- `.github/workflows/smoke-{copilot,claude,codex}.lock.yml` — compiled by `gh aw compile`
-- `.github/workflows/smoke-{copilot,claude,codex}-standalone.{md,lock.yml}` — variants with `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect` binary (pinned to a promoted release tag), runs it under AWF, and concludes from the structured `detection_result.json` via `threat-detect conclude`
+- `.github/workflows/smoke-{copilot,claude,codex}-standalone.{md,lock.yml}` — `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect` binary (pinned to a promoted release tag), runs it under AWF, and concludes from the structured `detection_result.json` via `threat-detect conclude`. The `.lock.yml` files are compiled by `gh aw compile`.
 
 Recompile with `gh aw compile` after editing any smoke `.md` source.
 
-The top-level `smoke.yml` workflow can be dispatched to start all six smokes at once.
+The top-level `smoke.yml` workflow can be dispatched to start all three standalone smokes at once.
 
 Required Actions secrets/variables for smokes are documented in [README.md → Development → AW Smoke Workflows](README.md#aw-smoke-workflows).
 
