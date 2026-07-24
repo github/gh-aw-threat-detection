@@ -201,8 +201,8 @@ func TestEngineCommandArgs(t *testing.T) {
 	t.Run("codex", func(t *testing.T) {
 		got := codexArgs("gpt-5-codex", "", "detect threats")
 		want := []string{
-			"-c", "model=gpt-5-codex",
 			"exec",
+			"-c", "model=gpt-5-codex",
 			"-c", "web_search=disabled",
 			"-c", "fetch=disabled",
 			"--dangerously-bypass-approvals-and-sandbox",
@@ -234,9 +234,9 @@ func TestEngineCommandArgs(t *testing.T) {
 	t.Run("codex with forced provider", func(t *testing.T) {
 		got := codexArgs("gpt-5-codex", "openai-proxy", "detect threats")
 		want := []string{
+			"exec",
 			"-c", "model=gpt-5-codex",
 			"-c", "model_provider=openai-proxy",
-			"exec",
 			"-c", "web_search=disabled",
 			"-c", "fetch=disabled",
 			"--dangerously-bypass-approvals-and-sandbox",
