@@ -251,21 +251,27 @@ func claudeArgs(model string, allowBash bool) []string {
 }
 
 func codexArgs(model, provider, prompt string) []string {
-	args := []string{
-		"exec",
+	// The model and model_provider overrides MUST be passed as `-c` flags of the
+	// `exec` subcommand (i.e. after `exec`). Codex ignores `-c` config overrides
+	// placed before the subcommand, so prepending them silently drops the model
+	// and provider selection — causing Codex to fall back to its default `openai`
+	// provider (bypassing the AWF API proxy and hitting api.openai.com directly
+	// with the isolation placeholder key, which returns 401).
+	args := []string{"exec"}
+	if model != "" {
+		args = append(args, "-c", "model="+model)
+	}
+	if provider != "" {
+		args = append(args, "-c", "model_provider="+provider)
+	}
+	args = append(args,
 		"-c", "web_search=disabled",
 		"-c", "fetch=disabled",
 		"--dangerously-bypass-approvals-and-sandbox",
 		"--skip-git-repo-check",
 		"--",
 		prompt,
-	}
-	if provider != "" {
-		args = append([]string{"-c", "model_provider=" + provider}, args...)
-	}
-	if model != "" {
-		args = append([]string{"-c", "model=" + model}, args...)
-	}
+	)
 	return args
 }
 
