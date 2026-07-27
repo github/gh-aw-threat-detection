@@ -1,0 +1,218 @@
+name: Smoke Claude Standalone Latest
+
+# Smoke test that exercises the released `threat-detect` binary at the LATEST
+# published `github/gh-aw-threat-detection` release against the Claude engine.
+#
+# Unlike the scheduled `smoke-claude-standalone` workflow — which runs through
+# gh-aw + AWF using the `threat-detect` version pinned by production gh-aw at
+# compile time — this workflow always resolves the newest release of THIS
+# repository. It exists so freshly published changes can be diagnosed and
+# validated end-to-end before production gh-aw pins them.
+#
+# The detector binary is run directly on the runner (not under AWF) so this
+# workflow is self-contained and free of AWF image/version drift; the AWF
+# execution path is continuously validated by the scheduled `*-standalone`
+# smokes.
+#
+# Triggers:
+#   * workflow_dispatch — manual, with an optional detector_tag override.
+#   * workflow_run       — automatically after the "Release" workflow finishes
+#                          publishing a new (pre)release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      detector_tag:
+        description: >-
+          Detector release tag to test (e.g. v0.3.0-rc.1). Leave empty to test
+          the newest published release of github/gh-aw-threat-detection.
+        required: false
+        default: ''
+        type: string
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    name: smoke (claude)
+    timeout-minutes: 30
+    # For workflow_run triggers, only proceed when the Release workflow succeeded.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      ENGINE: claude
+    steps:
+      - name: Resolve detector tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+          REPO: github/gh-aw-threat-detection
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.detector_tag }}
+          # Tag of the release whose Release workflow just completed (auto-run).
+          # Tag pushes often leave head_branch null, so this may be empty.
+          RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
+        run: |
+          set -euo pipefail
+          newest_release() {
+            gh release list --repo "$REPO" --exclude-drafts --limit 50 \
+              --json tagName,publishedAt \
+              --jq 'sort_by(.publishedAt) | last | .tagName'
+          }
+          tag=""
+          source=""
+          if [ "$EVENT" = "workflow_run" ]; then
+            # Auto-run: test the release that just published; fall back to the
+            # newest release when the event payload omits the tag.
+            if [ -n "${RELEASE_TAG:-}" ]; then
+              tag="$RELEASE_TAG"
+              source="triggering Release run"
+            else
+              tag="$(newest_release)"
+              source="newest release (auto-run)"
+            fi
+          elif [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+            source="workflow_dispatch input"
+          else
+            tag="$(newest_release)"
+            source="newest release"
+          fi
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::Could not resolve a detector tag to test. Provide 'detector_tag' or publish a release."
+            exit 1
+          fi
+          is_pre="$(gh release view "$tag" --repo "$REPO" --json isPrerelease --jq '.isPrerelease' 2>/dev/null || echo unknown)"
+          echo "detector_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved detector tag '$tag' (source: $source, prerelease: $is_pre)"
+          {
+            echo "### Detector tag under test"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Tag | \`$tag\` |"
+            echo "| Source | $source |"
+            echo "| Prerelease | $is_pre |"
+            echo "| Engine | claude |"
+            echo "| Trigger | ${{ github.event_name }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Setup gh-aw action scripts
+        uses: github/gh-aw-actions/setup@b6d1443e05b8716267fa19425b99aa4f12006b4a # v0.82.14
+        with:
+          destination: ${{ runner.temp }}/gh-aw/actions
+          job-name: ${{ github.job }}
+          trace-id: smoke-claude-standalone-latest-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install engine CLI
+        run: npm install -g @anthropic-ai/claude-code@2.1.220
+      - name: Install threat-detect binary
+        env:
+          DETECTOR_TAG: ${{ steps.tag.outputs.detector_tag }}
+        run: bash "${RUNNER_TEMP}/gh-aw/actions/install_threat_detect_binary.sh" "$DETECTOR_TAG"
+      - name: Build minimal artifacts directory
+        id: artifacts
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/gh-aw/smoke-latest-${ENGINE}"
+          mkdir -p "$dir/aw-prompts"
+          cat > "$dir/aw-prompts/prompt.txt" <<'PROMPT'
+          You are a documentation assistant for a Go project. Summarize the
+          repository README in a single sentence. Do not run commands or make
+          network requests.
+          PROMPT
+          cat > "$dir/agent_output.json" <<'OUT'
+          { "items": [ { "type": "final_response", "content": "Summarized the README in one sentence." } ] }
+          OUT
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "Prepared artifacts under $dir"
+          ls -la "$dir"
+      - name: Run threat-detect
+        id: detect
+        # Provider credentials are scoped to this step only.
+        env:
+          ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+          DETECTOR_TAG: ${{ steps.tag.outputs.detector_tag }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ vars.GH_AW_MODEL_DETECTION_CLAUDE }}
+        run: |
+          set -o pipefail
+          result="${ARTIFACTS_DIR}/detection_result.json"
+          log="${ARTIFACTS_DIR}/run.jsonl"
+          args=(--engine "$ENGINE" --output "$result" --log-file "$log")
+          if [ -n "${MODEL:-}" ]; then
+            args+=(--model "$MODEL")
+          fi
+          echo "Running: threat-detect ${args[*]} $ARTIFACTS_DIR"
+          status=0
+          threat-detect "${args[@]}" "$ARTIFACTS_DIR" || status=$?
+          echo "exit_status=$status" >> "$GITHUB_OUTPUT"
+          # Exit-code contract: 0 = safe, 1 = threat detected, 2 = infra error.
+          # A healthy candidate MUST exit 0 or 1 AND emit a well-formed verdict.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) exited ${status} (infrastructure error)."
+            exit 1
+          fi
+          if [ ! -f "$result" ]; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) produced no verdict file."
+            exit 1
+          fi
+          if ! jq -e '
+              type == "object"
+              and (.prompt_injection | type == "boolean")
+              and (.secret_leak      | type == "boolean")
+              and (.malicious_patch  | type == "boolean")
+              and (.reasons          | type == "array")
+            ' "$result" >/dev/null 2>&1; then
+            echo "::error::threat-detect (${ENGINE} @ ${DETECTOR_TAG}) produced a malformed verdict:"
+            cat "$result" || true
+            exit 1
+          fi
+          echo "Valid verdict produced (threat-detect exit ${status}):"
+          jq . "$result"
+      - name: Summarize
+        if: always()
+        env:
+          ARTIFACTS_DIR: ${{ steps.artifacts.outputs.dir }}
+          DETECTOR_TAG: ${{ steps.tag.outputs.detector_tag }}
+          STATUS: ${{ steps.detect.outcome }}
+        run: |
+          result="${ARTIFACTS_DIR}/detection_result.json"
+          {
+            echo "### Smoke: ${ENGINE} @ \`${DETECTOR_TAG}\`"
+            echo ""
+            if [ "${STATUS}" = "success" ] && [ -f "$result" ]; then
+              echo "Result: ✅ valid verdict produced"
+              echo ""
+              echo '```json'
+              cat "$result"
+              echo ""
+              echo '```'
+            else
+              echo "Result: ❌ smoke failed (step outcome: ${STATUS})"
+              if [ -f "$result" ]; then
+                echo ""
+                echo '```json'
+                cat "$result"
+                echo ""
+                echo '```'
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload detection artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-claude-standalone-latest
+          path: |
+            ${{ steps.artifacts.outputs.dir }}/detection_result.json
+            ${{ steps.artifacts.outputs.dir }}/run.jsonl
+          if-no-files-found: ignore
