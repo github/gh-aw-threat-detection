@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -248,4 +249,75 @@ func TestEngineCommandArgs(t *testing.T) {
 			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
 		}
 	})
+}
+
+func TestEngineExitError(t *testing.T) {
+	tests := []struct {
+		name     string
+		stdout   string
+		stderr   string
+		wantSub  []string
+		wantMiss []string
+	}{
+		{
+			name:    "stderr only",
+			stderr:  "boom on stderr",
+			wantSub: []string{"exited with code 1", "stderr: boom on stderr"},
+		},
+		{
+			name:    "stream-json error on stdout with empty stderr",
+			stdout:  `{"type":"system"}` + "\n" + `{"type":"error","error":{"type":"invalid_request_error","message":"model: claude-bogus not found"}}`,
+			wantSub: []string{"engine error: model: claude-bogus not found"},
+		},
+		{
+			name:    "result is_error on stdout",
+			stdout:  `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"credit balance too low"}`,
+			wantSub: []string{"engine error: credit balance too low"},
+		},
+		{
+			name:    "unstructured stdout falls back to raw",
+			stdout:  "panic: something bad",
+			wantSub: []string{"stdout: panic: something bad"},
+		},
+		{
+			name:    "no output at all",
+			wantSub: []string{"no output captured on stdout or stderr"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := engineExitError("claude", 1, tt.stdout, tt.stderr)
+			msg := err.Error()
+			for _, want := range tt.wantSub {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error %q missing %q", msg, want)
+				}
+			}
+			for _, miss := range tt.wantMiss {
+				if strings.Contains(msg, miss) {
+					t.Errorf("error %q unexpectedly contains %q", msg, miss)
+				}
+			}
+		})
+	}
+}
+
+func TestTailTruncate(t *testing.T) {
+	if got := tailTruncate("short", 100); got != "short" {
+		t.Errorf("tailTruncate short = %q", got)
+	}
+	got := tailTruncate("abcdefghij", 4)
+	if !strings.HasSuffix(got, "ghij") {
+		t.Errorf("tailTruncate should keep tail, got %q", got)
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("tailTruncate should mark truncation, got %q", got)
+	}
+}
+
+func TestExtractStreamJSONErrorNoError(t *testing.T) {
+	stdout := `{"type":"system","subtype":"init"}` + "\n" + `{"type":"result","subtype":"success","is_error":false}`
+	if msg := extractStreamJSONError(stdout); msg != "" {
+		t.Errorf("expected no error message, got %q", msg)
+	}
 }

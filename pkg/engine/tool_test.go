@@ -113,3 +113,17 @@ func TestRunCLIEnvWithSinkSurfacesErrorWithoutSink(t *testing.T) {
 		t.Fatal("expected error when no valid sink result exists")
 	}
 }
+
+// A failing engine that writes only to stdout (as claude --output-format
+// stream-json does) must still have that output surfaced in the error, so the
+// failure is diagnosable rather than an opaque exit code.
+func TestRunCLIEnvWithSinkIncludesStdoutOnFailure(t *testing.T) {
+	sink := filepath.Join(t.TempDir(), "missing.json")
+	_, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", `echo '{"type":"error","error":{"message":"model not found: claude-bogus"}}'; exit 1`}, "", nil, sink)
+	if err == nil {
+		t.Fatal("expected error when no valid sink result exists")
+	}
+	if !strings.Contains(err.Error(), "model not found: claude-bogus") {
+		t.Fatalf("expected stdout error surfaced, got %q", err.Error())
+	}
+}
