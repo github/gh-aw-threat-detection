@@ -13,6 +13,7 @@ engine:
   id: claude
   max-turns: 20
   bare: true
+model: claude-sonnet-4.6
 strict: false
 features:
   gh-aw-detection: true
