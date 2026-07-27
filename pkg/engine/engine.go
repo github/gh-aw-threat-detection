@@ -153,7 +153,9 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 	}
 	defer cleanup()
 	enableBashTool := opts.ResultSinkPath != ""
-	return runCLIEnvWithSink(ctx, "claude", claudeArgs(e.model, enableBashTool), prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+		return "claude", claudeArgs(e.model, enableBashTool, promptPath)
+	}, "", toolEnv, opts.ResultSinkPath)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -239,7 +241,7 @@ func copilotEnv(model string) []string {
 	return []string{"COPILOT_MODEL=" + model}
 }
 
-func claudeArgs(model string, allowBash bool) []string {
+func claudeArgs(model string, allowBash bool, promptPath string) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowBash {
 		args = append(args, "--allowed-tools", "Bash")
@@ -247,7 +249,7 @@ func claudeArgs(model string, allowBash bool) []string {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	return append(args, "-")
+	return append(args, "--prompt-file", promptPath)
 }
 
 func codexArgs(model, provider, prompt string) []string {
@@ -345,7 +347,11 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 			}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%s exited with code %d: %s", name, exitErr.ExitCode(), stderr.String())
+			detail := stderr.String()
+			if detail == "" {
+				detail = stdout.String()
+			}
+			return "", fmt.Errorf("%s exited with code %d: %s", name, exitErr.ExitCode(), detail)
 		}
 		return "", fmt.Errorf("failed to execute %s: %w", name, err)
 	}

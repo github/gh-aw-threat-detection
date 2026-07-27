@@ -183,16 +183,16 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("claude", func(t *testing.T) {
-		got := claudeArgs("claude-sonnet-4.6", false)
-		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "-"}
+		got := claudeArgs("claude-sonnet-4.6", false, "/tmp/prompt.txt")
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
 		}
 	})
 
 	t.Run("claude with bash grant", func(t *testing.T) {
-		got := claudeArgs("claude-sonnet-4.6", true)
-		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash", "--model", "claude-sonnet-4.6", "-"}
+		got := claudeArgs("claude-sonnet-4.6", true, "/tmp/prompt.txt")
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
 		}
