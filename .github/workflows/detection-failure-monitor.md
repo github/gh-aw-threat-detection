@@ -42,8 +42,8 @@ detection jobs and **link** to them in a single report issue.
 - A **detection job** is a job named exactly `detection` inside a compiled
   agentic workflow run. Ignore every other job.
 - A detection job is **failing** when its `conclusion` is any of:
-  `failure`, `timed_out`, `cancelled`, or `action_required`. A `success` or
-  `skipped` conclusion is NOT a failure.
+  `failure`, `timed_out`, or `action_required`. A `success`, `skipped`, or
+  `cancelled` conclusion is NOT a failure.
 
 ## Steps
 
