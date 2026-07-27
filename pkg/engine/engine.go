@@ -6,6 +6,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -345,10 +346,104 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 			}
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%s exited with code %d: %s", name, exitErr.ExitCode(), stderr.String())
+			return "", engineExitError(name, exitErr.ExitCode(), stdout.String(), stderr.String())
 		}
 		return "", fmt.Errorf("failed to execute %s: %w", name, err)
 	}
 
 	return stdout.String(), nil
+}
+
+// maxEngineOutputInError bounds how much captured engine output is embedded in a
+// failure message, keeping the tail (where fatal errors and stack traces appear).
+const maxEngineOutputInError = 4000
+
+// engineExitError builds a diagnostic error for a non-zero engine exit. It
+// surfaces both stderr and stdout because engines that emit structured output
+// (notably `claude --output-format stream-json`) report the real failure —
+// e.g. an invalid model or an API 4xx — as a JSON line on stdout while leaving
+// stderr empty. Without stdout the caller only sees an opaque
+// "<engine> exited with code N", which is not actionable.
+func engineExitError(name string, exitCode int, stdout, stderr string) error {
+	var parts []string
+	if s := strings.TrimSpace(stderr); s != "" {
+		parts = append(parts, "stderr: "+tailTruncate(s, maxEngineOutputInError))
+	}
+	if s := strings.TrimSpace(stdout); s != "" {
+		if msg := extractStreamJSONError(s); msg != "" {
+			parts = append(parts, "engine error: "+tailTruncate(msg, maxEngineOutputInError))
+		} else {
+			parts = append(parts, "stdout: "+tailTruncate(s, maxEngineOutputInError))
+		}
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "no output captured on stdout or stderr")
+	}
+	return fmt.Errorf("%s exited with code %d: %s", name, exitCode, strings.Join(parts, "; "))
+}
+
+// tailTruncate returns at most max characters from the end of s, prefixing an
+// ellipsis marker when content was dropped. The tail is kept because fatal
+// engine diagnostics are emitted last.
+func tailTruncate(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return "...(truncated)... " + s[len(s)-max:]
+}
+
+// extractStreamJSONError scans newline-delimited JSON output (the format used by
+// the Claude CLI's stream-json mode) for objects that describe a failure and
+// returns a concatenated, human-readable summary. It returns "" when no
+// structured error is found, so callers can fall back to the raw stdout tail.
+func extractStreamJSONError(stdout string) string {
+	var messages []string
+	seen := make(map[string]struct{})
+	add := func(msg string) {
+		msg = strings.TrimSpace(msg)
+		if msg == "" {
+			return
+		}
+		if _, ok := seen[msg]; ok {
+			return
+		}
+		seen[msg] = struct{}{}
+		messages = append(messages, msg)
+	}
+
+	for _, line := range strings.Split(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] != '{' {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			continue
+		}
+		// Shape 1: {"type":"error","error":{"type":..,"message":..}}
+		if errField, ok := obj["error"].(map[string]any); ok {
+			if msg, ok := errField["message"].(string); ok {
+				add(msg)
+				continue
+			}
+		}
+		// Shape 2: {"type":"result","is_error":true,"result":"..."}
+		if isErr, _ := obj["is_error"].(bool); isErr {
+			if res, ok := obj["result"].(string); ok {
+				add(res)
+				continue
+			}
+			if sub, ok := obj["subtype"].(string); ok {
+				add(sub)
+				continue
+			}
+		}
+		// Shape 3: top-level {"type":"error","message":"..."}.
+		if t, _ := obj["type"].(string); t == "error" {
+			if msg, ok := obj["message"].(string); ok {
+				add(msg)
+			}
+		}
+	}
+	return strings.Join(messages, " | ")
 }
