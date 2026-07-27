@@ -35,6 +35,10 @@ safe-outputs:
   allowed-domains: [default-safe-outputs]
   threat-detection:
     continue-on-error: false
+    engine:
+      id: claude
+      env:
+        ANTHROPIC_MODEL: claude-sonnet-4.6
   create-issue:
     expires: 2h
     close-older-issues: true
