@@ -305,7 +305,7 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-claude-standalone.md`
 - `.github/workflows/smoke-codex-standalone.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three `*-standalone` smoke workflows (and, with `include_latest: true`, their `*-standalone-latest` counterparts). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf-refresh-latest-smokesyml).
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf-refresh-latest-smokesyml).
 
 ### Detection-only Workflow
 
@@ -338,7 +338,7 @@ The `smoke-<engine>-standalone-latest` workflows themselves are **dispatch-only*
 3. Review and merge the PR, then confirm every `smoke-<engine>-standalone-latest` run is green.
 4. Promote with `promote-release.yml`; it re-verifies the asset sha256 and marks the release **Latest** (stable). The pinned `*-standalone` smokes continue to run against the promoted tag.
 
-You can also start the latest smokes from the top-level **Smoke** workflow by dispatching it with `include_latest: true`; the default pinned smokes still dispatch unchanged.
+You can also start the latest smokes from the top-level **Smoke** workflow by dispatching it with `scope: latest` (or `scope: standard+latest` to run both alongside the pinned smokes).
 
 > [!NOTE]
 > `refresh-latest-smokes.yml` needs `contents: write` and `pull-requests: write` (to push the refresh branch and open the PR). It builds the gh-aw compiler from source and regenerates the same compiled workflows production uses, so the latest smokes exercise the AWF firewall path — no separate non-AWF code path is maintained.

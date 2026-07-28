@@ -3,15 +3,20 @@ name: Smoke
 on:
   workflow_dispatch:
     inputs:
-      include_latest:
+      scope:
         description: >-
-          Also dispatch the smoke-<engine>-standalone-latest workflows, which
-          test the newest detector build (as last refreshed by
-          refresh-latest-smokes.yml). Leave off for the reproducible, pinned
-          smokes only.
+          Which smokes to dispatch: the reproducible pinned smokes only
+          (standard), both the pinned and the latest-detector smokes
+          (standard+latest), or only the latest-detector smokes (latest). The
+          latest smokes test the newest detector build as last refreshed by
+          refresh-latest-smokes.yml.
         required: false
-        default: false
-        type: boolean
+        default: standard
+        type: choice
+        options:
+          - standard
+          - standard+latest
+          - latest
 
 permissions:
   actions: write
@@ -21,7 +26,8 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch smoke workflows
+      - name: Dispatch standard smoke workflows
+        if: ${{ inputs.scope == 'standard' || inputs.scope == 'standard+latest' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -51,7 +57,7 @@ jobs:
             exit 1
           fi
       - name: Dispatch latest smoke workflows
-        if: ${{ inputs.include_latest }}
+        if: ${{ inputs.scope == 'latest' || inputs.scope == 'standard+latest' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
