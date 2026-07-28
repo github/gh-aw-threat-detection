@@ -99,15 +99,33 @@ jobs:
           RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
+          # Newest release that is flagged as a prerelease (empty if none exist).
           newest_prerelease() {
             gh release list --repo "$1" --exclude-drafts --limit 50 \
               --json tagName,isPrerelease,publishedAt \
-              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName'
+              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName // empty'
+          }
+          # The release marked "Latest" (never a prerelease).
+          latest_release() {
+            gh release view --repo "$1" --json tagName --jq '.tagName // empty' 2>/dev/null || true
+          }
+          # Newest prerelease, or the latest stable release if no prerelease exists.
+          newest_release() {
+            local tag
+            tag="$(newest_prerelease "$1")"
+            if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+              tag="$(latest_release "$1")"
+            fi
+            printf '%s' "$tag"
+          }
+          # Is $2 a published release tag of repo $1?
+          is_release_tag() {
+            gh release view --repo "$1" "$2" >/dev/null 2>&1
           }
 
           gh_aw_ref="${INPUT_GH_AW_REF:-}"
           if [ -z "$gh_aw_ref" ]; then
-            gh_aw_ref="$(newest_prerelease github/gh-aw)"
+            gh_aw_ref="$(newest_release github/gh-aw)"
           fi
 
           detector_ref="${INPUT_DETECTOR_REF:-}"
@@ -117,8 +135,8 @@ jobs:
             detector_source="triggering Release run"
           fi
           if [ -z "$detector_ref" ]; then
-            detector_ref="$(newest_prerelease github/gh-aw-threat-detection)"
-            detector_source="newest detector prerelease"
+            detector_ref="$(newest_release github/gh-aw-threat-detection)"
+            detector_source="newest detector (pre)release"
           fi
 
           if [ -z "$gh_aw_ref" ] || [ "$gh_aw_ref" = "null" ]; then
@@ -130,15 +148,33 @@ jobs:
             exit 1
           fi
 
+          # The gh-aw-actions setup action is version-locked to gh-aw *release
+          # tags*, so --action-tag must be a real gh-aw release tag. When the
+          # compiler ref is itself a release tag we reuse it; when it is a branch
+          # or a commit SHA we fall back to the newest gh-aw release so the
+          # recompiled locks still SHA-pin a runnable github/gh-aw-actions ref.
+          if is_release_tag github/gh-aw "$gh_aw_ref"; then
+            action_tag="$gh_aw_ref"
+          else
+            action_tag="$(newest_release github/gh-aw)"
+            echo "::warning::gh-aw ref '$gh_aw_ref' is not a release tag; pinning github/gh-aw-actions to '$action_tag' for the setup action."
+          fi
+          if [ -z "$action_tag" ] || [ "$action_tag" = "null" ]; then
+            echo "::error::Could not resolve a github/gh-aw release tag for --action-tag."
+            exit 1
+          fi
+
           echo "gh_aw_ref=$gh_aw_ref" >> "$GITHUB_OUTPUT"
+          echo "action_tag=$action_tag" >> "$GITHUB_OUTPUT"
           echo "detector_ref=$detector_ref" >> "$GITHUB_OUTPUT"
-          echo "Resolved gh-aw ref '$gh_aw_ref', detector ref '$detector_ref' ($detector_source)"
+          echo "Resolved gh-aw ref '$gh_aw_ref' (action tag '$action_tag'), detector ref '$detector_ref' ($detector_source)"
           {
             echo "### Versions under test"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
             echo "| gh-aw compiler ref | \`$gh_aw_ref\` |"
+            echo "| gh-aw-actions tag | \`$action_tag\` |"
             echo "| Detector tag | \`$detector_ref\` (source: $detector_source) |"
             echo "| Trigger | ${{ github.event_name }} |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -163,7 +199,14 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf "${RUNNER_TEMP}/gh-aw-src"
-          git clone --depth 1 --branch "$GH_AW_REF" https://github.com/github/gh-aw "${RUNNER_TEMP}/gh-aw-src"
+          # Fetch the exact ref rather than `clone --branch`, so tags, branches,
+          # and raw commit SHAs all work (GitHub allows fetching an arbitrary
+          # SHA). --action-tag is resolved separately to a real gh-aw release tag.
+          mkdir -p "${RUNNER_TEMP}/gh-aw-src"
+          git -C "${RUNNER_TEMP}/gh-aw-src" init -q
+          git -C "${RUNNER_TEMP}/gh-aw-src" remote add origin https://github.com/github/gh-aw
+          git -C "${RUNNER_TEMP}/gh-aw-src" fetch --depth 1 origin "$GH_AW_REF"
+          git -C "${RUNNER_TEMP}/gh-aw-src" checkout -q FETCH_HEAD
           constFile="${RUNNER_TEMP}/gh-aw-src/pkg/constants/version_constants.go"
           if ! grep -q 'DefaultThreatDetectVersion Version =' "$constFile"; then
             echo "::error::DefaultThreatDetectVersion not found in $constFile (gh-aw layout changed?)"
@@ -190,7 +233,7 @@ jobs:
 
       - name: Recompile smoke workflows against latest detector
         env:
-          GH_AW_REF: ${{ steps.refs.outputs.gh_aw_ref }}
+          ACTION_TAG: ${{ steps.refs.outputs.action_tag }}
           ENGINES: ${{ steps.engines.outputs.engines }}
           GITHUB_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
         run: |
@@ -198,11 +241,11 @@ jobs:
           for engine in $ENGINES; do
             md=".github/workflows/smoke-${engine}-standalone.md"
             echo "Compiling $md ..."
-            # Action mode + tag matches the gh-aw prerelease so the setup action
+            # Action mode + a real gh-aw release tag so the setup action
             # (github/gh-aw-actions) is SHA-pinned exactly as in production.
             "${RUNNER_TEMP}/gh-aw-bin" compile \
               --action-mode action \
-              --action-tag "$GH_AW_REF" \
+              --action-tag "$ACTION_TAG" \
               --no-check-update \
               "$md"
           done
@@ -222,11 +265,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Best-effort cleanup of stale throwaway branches from earlier runs.
-          # Runs are serialized via concurrency, so prior child smokes have
-          # normally finished by now.
+          # Best-effort cleanup of stale throwaway branches from earlier runs,
+          # but only once all of a branch's child smoke runs have completed.
+          # Child smokes have their own concurrency groups and can still be
+          # queued/running after this meta-run's concurrency slot is released,
+          # so deleting a branch out from under an in-flight child would break
+          # its checkout. We therefore skip any branch that still has active runs.
           for stale in $(git ls-remote --heads origin 'smoke-latest/*' | awk '{print $2}' | sed 's#refs/heads/##'); do
             [ "$stale" = "$branch" ] && continue
+            active="$(gh run list --repo "$REPO" --branch "$stale" --limit 100 \
+              --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)"
+            if [ "${active:-0}" != "0" ]; then
+              echo "Keeping branch $stale ($active child run(s) still active)"
+              continue
+            fi
             git push origin --delete "$stale" || echo "Could not delete stale branch $stale (continuing)"
           done
 
