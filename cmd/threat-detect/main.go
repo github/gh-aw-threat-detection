@@ -278,7 +278,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		logger.Info("attempt_start", map[string]any{"attempt": i + 1, "attempts": attempts})
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
-		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
+		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath, Logger: logger}); err != nil {
 			return nil, fmt.Errorf("%w: %w", errEngineExecution, err)
 		}
 		// The verdict must be reported in-session through the

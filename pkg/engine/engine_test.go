@@ -199,6 +199,66 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("claude harness args", func(t *testing.T) {
+		got := claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true)
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("claudeHarnessArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("claude harness command", func(t *testing.T) {
+		t.Setenv("GH_AW_NODE_BIN", "/custom/node")
+		runnerTemp := t.TempDir()
+		t.Setenv("RUNNER_TEMP", runnerTemp)
+		harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "claude_harness.cjs")
+		if err := os.MkdirAll(filepath.Dir(harnessPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(harnessPath, []byte(""), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		gotName, gotArgs := nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true)...)
+		wantName := "/custom/node"
+		wantArgs := []string{
+			harnessPath, "claude",
+			"--print", "--verbose", "--output-format", "stream-json",
+			"--allowed-tools", "Bash",
+			"--model", "claude-sonnet-4.6",
+			"--prompt-file", "/tmp/prompt.txt",
+		}
+		if gotName != wantName {
+			t.Fatalf("claude harness command name = %q, want %q", gotName, wantName)
+		}
+		if !reflect.DeepEqual(gotArgs, wantArgs) {
+			t.Fatalf("claude harness command args = %#v, want %#v", gotArgs, wantArgs)
+		}
+	})
+
+	t.Run("claude harness path detected", func(t *testing.T) {
+		runnerTemp := t.TempDir()
+		t.Setenv("RUNNER_TEMP", runnerTemp)
+		harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "claude_harness.cjs")
+		if err := os.MkdirAll(filepath.Dir(harnessPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(harnessPath, []byte(""), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		got, ok := claudeHarnessPath()
+		if !ok || got != harnessPath {
+			t.Fatalf("claudeHarnessPath() = (%q, %v), want (%q, true)", got, ok, harnessPath)
+		}
+	})
+
+	t.Run("claude harness path absent", func(t *testing.T) {
+		t.Setenv("RUNNER_TEMP", t.TempDir())
+		if _, ok := claudeHarnessPath(); ok {
+			t.Fatal("claudeHarnessPath() = true when harness absent, want false")
+		}
+	})
+
 	t.Run("codex", func(t *testing.T) {
 		got := codexArgs("gpt-5-codex", "", "detect threats")
 		want := []string{
@@ -247,6 +307,78 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("codexArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("codex harness args", func(t *testing.T) {
+		got := codexHarnessArgs("/tmp/prompt.txt", "gpt-5-codex", "openai-proxy")
+		want := []string{
+			"exec",
+			"-c", "model=gpt-5-codex",
+			"-c", "model_provider=openai-proxy",
+			"-c", "web_search=disabled",
+			"-c", "fetch=disabled",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--skip-git-repo-check",
+			"--prompt-file", "/tmp/prompt.txt",
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("codexHarnessArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("codex harness command", func(t *testing.T) {
+		t.Setenv("GH_AW_NODE_BIN", "/custom/node")
+		runnerTemp := t.TempDir()
+		t.Setenv("RUNNER_TEMP", runnerTemp)
+		harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "codex_harness.cjs")
+		if err := os.MkdirAll(filepath.Dir(harnessPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(harnessPath, []byte(""), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		gotName, gotArgs := nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("/tmp/prompt.txt", "gpt-5-codex", "")...)
+		wantName := "/custom/node"
+		wantArgs := []string{
+			harnessPath, "codex",
+			"exec",
+			"-c", "model=gpt-5-codex",
+			"-c", "web_search=disabled",
+			"-c", "fetch=disabled",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--skip-git-repo-check",
+			"--prompt-file", "/tmp/prompt.txt",
+		}
+		if gotName != wantName {
+			t.Fatalf("codex harness command name = %q, want %q", gotName, wantName)
+		}
+		if !reflect.DeepEqual(gotArgs, wantArgs) {
+			t.Fatalf("codex harness command args = %#v, want %#v", gotArgs, wantArgs)
+		}
+	})
+
+	t.Run("codex harness path detected", func(t *testing.T) {
+		runnerTemp := t.TempDir()
+		t.Setenv("RUNNER_TEMP", runnerTemp)
+		harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "codex_harness.cjs")
+		if err := os.MkdirAll(filepath.Dir(harnessPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(harnessPath, []byte(""), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		got, ok := codexHarnessPath()
+		if !ok || got != harnessPath {
+			t.Fatalf("codexHarnessPath() = (%q, %v), want (%q, true)", got, ok, harnessPath)
+		}
+	})
+
+	t.Run("codex harness path absent", func(t *testing.T) {
+		t.Setenv("RUNNER_TEMP", t.TempDir())
+		if _, ok := codexHarnessPath(); ok {
+			t.Fatal("codexHarnessPath() = true when harness absent, want false")
 		}
 	})
 }

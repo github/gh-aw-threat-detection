@@ -8,12 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
+	"github.com/github/gh-aw-threat-detection/pkg/runlog"
 )
 
 // AnalyzeOptions carries optional in-session reporting configuration.
@@ -22,6 +24,10 @@ type AnalyzeOptions struct {
 	// the engine provisions the wrapper on PATH, sets THREAT_DETECTION_RESULT_FILE,
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
+	// Logger, when non-nil, receives structured diagnostic events for the engine
+	// invocation — including the resolved binary path, arg count, and model —
+	// so failures can be diagnosed even when the engine subprocess produces no output.
+	Logger *runlog.Logger
 }
 
 // Engine represents an AI engine capable of analyzing content for threats.
@@ -132,11 +138,13 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 	defer cleanup()
 	env = append(env, toolEnv...)
 
-	if _, ok := copilotHarnessPath(); ok {
+	if harnessPath, ok := copilotHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs("<prompt-file>")...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
 		}, "", env, opts.ResultSinkPath)
 	}
+	logEngineInvoke(opts.Logger, "copilot", copilotDirectArgs("<prompt-file>"), e.model)
 	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 		return "copilot", copilotDirectArgs(promptPath)
 	}, prompt, env, opts.ResultSinkPath)
@@ -154,7 +162,16 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 	}
 	defer cleanup()
 	enableBashTool := opts.ResultSinkPath != ""
-	return runCLIEnvWithSink(ctx, "claude", claudeArgs(e.model, enableBashTool), prompt, toolEnv, opts.ResultSinkPath)
+
+	if harnessPath, ok := claudeHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableBashTool)...), e.model)
+		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableBashTool)...)
+		}, "", toolEnv, opts.ResultSinkPath)
+	}
+	args := claudeArgs(e.model, enableBashTool)
+	logEngineInvoke(opts.Logger, "claude", args, e.model)
+	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -169,6 +186,16 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 	}
 	defer cleanup()
 	provider := codexForcedProvider(codexConfigPath())
+
+	if harnessPath, ok := codexHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
+		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+			return nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs(promptPath, e.model, provider)...)
+		}, "", toolEnv, opts.ResultSinkPath)
+	}
+	// Codex embeds the prompt as a positional argument; pass a placeholder here
+	// so the logged args do not expose the detection prompt.
+	logEngineInvoke(opts.Logger, "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
 	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
 }
 
@@ -208,11 +235,26 @@ func copilotDirectArgs(promptPath string) []string {
 }
 
 func copilotHarnessPath() (string, bool) {
+	return engineHarnessPath("copilot_harness.cjs")
+}
+
+func claudeHarnessPath() (string, bool) {
+	return engineHarnessPath("claude_harness.cjs")
+}
+
+func codexHarnessPath() (string, bool) {
+	return engineHarnessPath("codex_harness.cjs")
+}
+
+// engineHarnessPath returns the absolute path to a gh-aw harness script and
+// true when the file exists. All engine harnesses live under the same
+// $RUNNER_TEMP/gh-aw/actions/ directory.
+func engineHarnessPath(filename string) (string, bool) {
 	runnerTemp := os.Getenv("RUNNER_TEMP")
 	if runnerTemp == "" {
 		return "", false
 	}
-	harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "copilot_harness.cjs")
+	harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", filename)
 	if _, err := os.Stat(harnessPath); err != nil {
 		return "", false
 	}
@@ -251,6 +293,21 @@ func claudeArgs(model string, allowBash bool) []string {
 	return append(args, "-")
 }
 
+// claudeHarnessArgs builds the claude flags for harness invocation. It is
+// identical to claudeArgs except that it uses --prompt-file <path> instead of
+// the stdin sentinel "-", matching the invocation pattern used by the gh-aw
+// claude_harness.cjs script.
+func claudeHarnessArgs(promptPath, model string, allowBash bool) []string {
+	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
+	if allowBash {
+		args = append(args, "--allowed-tools", "Bash")
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return append(args, "--prompt-file", promptPath)
+}
+
 func codexArgs(model, provider, prompt string) []string {
 	// The model and model_provider overrides MUST be passed as `-c` flags of the
 	// `exec` subcommand (i.e. after `exec`). Codex ignores `-c` config overrides
@@ -272,6 +329,28 @@ func codexArgs(model, provider, prompt string) []string {
 		"--skip-git-repo-check",
 		"--",
 		prompt,
+	)
+	return args
+}
+
+// codexHarnessArgs builds the codex flags for harness invocation. It is
+// equivalent to codexArgs except that the prompt is passed via --prompt-file
+// <path> instead of being embedded as a positional argument, matching the
+// invocation pattern used by the gh-aw codex_harness.cjs script.
+func codexHarnessArgs(promptPath, model, provider string) []string {
+	args := []string{"exec"}
+	if model != "" {
+		args = append(args, "-c", "model="+model)
+	}
+	if provider != "" {
+		args = append(args, "-c", "model_provider="+provider)
+	}
+	args = append(args,
+		"-c", "web_search=disabled",
+		"-c", "fetch=disabled",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--skip-git-repo-check",
+		"--prompt-file", promptPath,
 	)
 	return args
 }
@@ -335,8 +414,13 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Tee both stdout and stderr to os.Stderr so that harness lifecycle output
+	// ([copilot-harness], [claude-harness], [codex-harness]) and engine errors
+	// appear in the GitHub Actions job log in real-time, mirroring the agent
+	// job's "2>&1 | tee" pattern. The buffers are still populated for error
+	// reporting and sink-result checking.
+	cmd.Stdout = io.MultiWriter(&stdout, os.Stderr)
+	cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
 
 	if err := cmd.Run(); err != nil {
 		if sinkPath != "" {
@@ -392,8 +476,44 @@ func tailTruncate(s string, max int) string {
 	return "...(truncated)... " + s[len(s)-max:]
 }
 
+// logEngineInvoke logs the engine subprocess invocation details to both the
+// structured run log and stderr. It is called immediately before the engine
+// process starts so that silent engine failures (exit with no output) leave
+// enough context in the logs to diagnose the root cause.
+//
+// args must not contain sensitive data (prompt text, API keys). For engines
+// that embed the prompt in argv (Codex), callers pass a safe placeholder.
+func logEngineInvoke(logger *runlog.Logger, name string, args []string, model string) {
+	resolvedPath, err := exec.LookPath(name)
+	if err != nil {
+		resolvedPath = ""
+	}
+
+	// Emit to stderr so the message appears in the GitHub Actions job log even
+	// when the engine subprocess produces no output of its own.
+	if resolvedPath != "" {
+		fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: %s (%s), args: %d\n", name, resolvedPath, len(args))
+	} else {
+		fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: %s (binary not found in PATH), args: %d\n", name, len(args))
+	}
+
+	fields := map[string]any{
+		"name":       name,
+		"args":       args,
+		"args_count": len(args),
+	}
+	if resolvedPath != "" {
+		fields["binary"] = resolvedPath
+	} else {
+		fields["binary_not_found"] = true
+	}
+	if model != "" {
+		fields["model"] = model
+	}
+	logger.Info("engine_invoke", fields)
+}
+
 // extractStreamJSONError scans newline-delimited JSON output (the format used by
-// the Claude CLI's stream-json mode) for objects that describe a failure and
 // returns a concatenated, human-readable summary. It returns "" when no
 // structured error is found, so callers can fall back to the raw stdout tail.
 func extractStreamJSONError(stdout string) string {
