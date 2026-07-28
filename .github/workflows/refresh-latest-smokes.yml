@@ -10,7 +10,8 @@ name: Refresh Latest Smokes
 # cannot exercise a newer detector. This workflow closes that gap without
 # hand-porting the AWF plumbing:
 #
-#   1. Resolve the newest (pre)release of github/gh-aw and of
+#   1. Resolve the newest version release (prerelease or stable, whichever is
+#      most recent; rolling refs like `main` are ignored) of github/gh-aw and of
 #      github/gh-aw-threat-detection (both overridable via inputs).
 #   2. Clone gh-aw at that ref, patch DefaultThreatDetectVersion to the resolved
 #      detector tag, and build the `gh-aw` compiler from source.
@@ -33,14 +34,16 @@ on:
       gh_aw_ref:
         description: >-
           github/gh-aw ref (tag/branch/SHA) to build the compiler from. Leave
-          empty to use the newest gh-aw (pre)release.
+          empty to use the newest gh-aw version release (prerelease or stable,
+          whichever is most recent).
         required: false
         default: ''
         type: string
       detector_ref:
         description: >-
-          github/gh-aw-threat-detection release tag to test (e.g. main, v0.3.1).
-          Leave empty to use the newest detector (pre)release.
+          github/gh-aw-threat-detection release tag to test (e.g. v0.3.1). Leave
+          empty to use the newest detector version release (prerelease or stable,
+          whichever is most recent; the rolling `main` tag is ignored).
         required: false
         default: ''
         type: string
@@ -87,68 +90,68 @@ jobs:
           INPUT_DETECTOR_REF: ${{ inputs.detector_ref }}
           # Tag of the detector release whose Release workflow just completed
           # (auto-run). Tag pushes often leave head_branch null, so this may be
-          # empty, in which case we fall back to the newest (pre)release.
+          # empty, in which case we fall back to the newest version release.
           RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
         run: |
           set -euo pipefail
-          # Newest release flagged as a prerelease (empty if none exist).
-          newest_prerelease() {
-            gh release list --repo "$1" --exclude-drafts --limit 50 \
-              --json tagName,isPrerelease,publishedAt \
-              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName // empty'
-          }
-          # The release marked "Latest" (never a prerelease).
-          latest_release() {
-            gh release view --repo "$1" --json tagName --jq '.tagName // empty' 2>/dev/null || true
-          }
-          # Newest prerelease, or the latest stable release if none exists.
-          newest_release() {
-            local tag
-            tag="$(newest_prerelease "$1")"
-            if [ -z "$tag" ] || [ "$tag" = "null" ]; then
-              tag="$(latest_release "$1")"
-            fi
-            printf '%s' "$tag"
+          # Newest release by publish date whose tag looks like a semantic
+          # version (v<digit>...). This deliberately:
+          #   * considers prereleases AND stable releases together and picks the
+          #     most recent, so a newer stable release wins over an older
+          #     prerelease (and vice versa); and
+          #   * excludes rolling refs such as `main`, which are re-published in
+          #     place and would make the pinned locks non-reproducible.
+          newest_version_release() {
+            gh release list --repo "$1" --exclude-drafts --limit 100 \
+              --json tagName,publishedAt \
+              --jq 'map(select(.tagName | test("^v[0-9]"))) | sort_by(.publishedAt) | last | .tagName // empty'
           }
           # Is $2 a published release tag of repo $1?
           is_release_tag() {
             gh release view --repo "$1" "$2" >/dev/null 2>&1
           }
+          # Does $1 look like a semantic version tag (not a rolling ref)?
+          is_version_tag() {
+            printf '%s' "$1" | grep -Eq '^v[0-9]'
+          }
 
           gh_aw_ref="${INPUT_GH_AW_REF:-}"
           if [ -z "$gh_aw_ref" ]; then
-            gh_aw_ref="$(newest_release github/gh-aw)"
+            gh_aw_ref="$(newest_version_release github/gh-aw)"
           fi
 
           detector_ref="${INPUT_DETECTOR_REF:-}"
           detector_source="workflow_dispatch input"
-          if [ -z "$detector_ref" ] && [ "$EVENT" = "workflow_run" ] && [ -n "${RELEASE_TAG:-}" ]; then
+          # Only honour the auto-trigger's tag when it is a real version tag, so a
+          # rolling `main` release can never pin the locks.
+          if [ -z "$detector_ref" ] && [ "$EVENT" = "workflow_run" ] \
+             && [ -n "${RELEASE_TAG:-}" ] && is_version_tag "$RELEASE_TAG"; then
             detector_ref="$RELEASE_TAG"
             detector_source="triggering Release run"
           fi
           if [ -z "$detector_ref" ]; then
-            detector_ref="$(newest_release github/gh-aw-threat-detection)"
-            detector_source="newest detector (pre)release"
+            detector_ref="$(newest_version_release github/gh-aw-threat-detection)"
+            detector_source="newest detector version release"
           fi
 
           if [ -z "$gh_aw_ref" ] || [ "$gh_aw_ref" = "null" ]; then
-            echo "::error::Could not resolve a github/gh-aw ref."
+            echo "::error::Could not resolve a github/gh-aw version release."
             exit 1
           fi
           if [ -z "$detector_ref" ] || [ "$detector_ref" = "null" ]; then
-            echo "::error::Could not resolve a github/gh-aw-threat-detection ref."
+            echo "::error::Could not resolve a github/gh-aw-threat-detection version release."
             exit 1
           fi
 
           # gh-aw-actions (the setup action) is version-locked to gh-aw *release
           # tags*, so --action-tag must be a real gh-aw release tag. Reuse the
           # compiler ref when it is a release tag; otherwise (branch/SHA) fall
-          # back to the newest gh-aw release so the locks still SHA-pin a runnable
-          # github/gh-aw-actions.
+          # back to the newest gh-aw version release so the locks still SHA-pin a
+          # runnable github/gh-aw-actions.
           if is_release_tag github/gh-aw "$gh_aw_ref"; then
             action_tag="$gh_aw_ref"
           else
-            action_tag="$(newest_release github/gh-aw)"
+            action_tag="$(newest_version_release github/gh-aw)"
             echo "::warning::gh-aw ref '$gh_aw_ref' is not a release tag; pinning github/gh-aw-actions to '$action_tag'."
           fi
           if [ -z "$action_tag" ] || [ "$action_tag" = "null" ]; then
