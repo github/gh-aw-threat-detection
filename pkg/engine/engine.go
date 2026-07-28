@@ -137,8 +137,8 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 	defer cleanup()
 	env = append(env, toolEnv...)
 
-	if _, ok := copilotHarnessPath(); ok {
-		logEngineInvoke(opts.Logger, nodeCommand(), copilotArgs("<prompt-file>"), e.model)
+	if harnessPath, ok := copilotHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs("<prompt-file>")...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
 		}, "", env, opts.ResultSinkPath)
@@ -161,6 +161,13 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 	}
 	defer cleanup()
 	enableBashTool := opts.ResultSinkPath != ""
+
+	if harnessPath, ok := claudeHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableBashTool)...), e.model)
+		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableBashTool)...)
+		}, "", toolEnv, opts.ResultSinkPath)
+	}
 	args := claudeArgs(e.model, enableBashTool)
 	logEngineInvoke(opts.Logger, "claude", args, e.model)
 	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
@@ -178,8 +185,15 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 	}
 	defer cleanup()
 	provider := codexForcedProvider(codexConfigPath())
-	// codexArgs embeds the prompt as the final positional argument; pass a
-	// placeholder here so the logged args do not expose the detection prompt.
+
+	if harnessPath, ok := codexHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
+		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
+			return nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs(promptPath, e.model, provider)...)
+		}, "", toolEnv, opts.ResultSinkPath)
+	}
+	// Codex embeds the prompt as a positional argument; pass a placeholder here
+	// so the logged args do not expose the detection prompt.
 	logEngineInvoke(opts.Logger, "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
 	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
 }
@@ -220,11 +234,26 @@ func copilotDirectArgs(promptPath string) []string {
 }
 
 func copilotHarnessPath() (string, bool) {
+	return engineHarnessPath("copilot_harness.cjs")
+}
+
+func claudeHarnessPath() (string, bool) {
+	return engineHarnessPath("claude_harness.cjs")
+}
+
+func codexHarnessPath() (string, bool) {
+	return engineHarnessPath("codex_harness.cjs")
+}
+
+// engineHarnessPath returns the absolute path to a gh-aw harness script and
+// true when the file exists. All engine harnesses live under the same
+// $RUNNER_TEMP/gh-aw/actions/ directory.
+func engineHarnessPath(filename string) (string, bool) {
 	runnerTemp := os.Getenv("RUNNER_TEMP")
 	if runnerTemp == "" {
 		return "", false
 	}
-	harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", "copilot_harness.cjs")
+	harnessPath := filepath.Join(runnerTemp, "gh-aw", "actions", filename)
 	if _, err := os.Stat(harnessPath); err != nil {
 		return "", false
 	}
@@ -263,6 +292,21 @@ func claudeArgs(model string, allowBash bool) []string {
 	return append(args, "-")
 }
 
+// claudeHarnessArgs builds the claude flags for harness invocation. It is
+// identical to claudeArgs except that it uses --prompt-file <path> instead of
+// the stdin sentinel "-", matching the invocation pattern used by the gh-aw
+// claude_harness.cjs script.
+func claudeHarnessArgs(promptPath, model string, allowBash bool) []string {
+	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
+	if allowBash {
+		args = append(args, "--allowed-tools", "Bash")
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return append(args, "--prompt-file", promptPath)
+}
+
 func codexArgs(model, provider, prompt string) []string {
 	// The model and model_provider overrides MUST be passed as `-c` flags of the
 	// `exec` subcommand (i.e. after `exec`). Codex ignores `-c` config overrides
@@ -284,6 +328,28 @@ func codexArgs(model, provider, prompt string) []string {
 		"--skip-git-repo-check",
 		"--",
 		prompt,
+	)
+	return args
+}
+
+// codexHarnessArgs builds the codex flags for harness invocation. It is
+// equivalent to codexArgs except that the prompt is passed via --prompt-file
+// <path> instead of being embedded as a positional argument, matching the
+// invocation pattern used by the gh-aw codex_harness.cjs script.
+func codexHarnessArgs(promptPath, model, provider string) []string {
+	args := []string{"exec"}
+	if model != "" {
+		args = append(args, "-c", "model="+model)
+	}
+	if provider != "" {
+		args = append(args, "-c", "model_provider="+provider)
+	}
+	args = append(args,
+		"-c", "web_search=disabled",
+		"-c", "fetch=disabled",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--skip-git-repo-check",
+		"--prompt-file", promptPath,
 	)
 	return args
 }
