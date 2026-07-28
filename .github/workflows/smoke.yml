@@ -3,22 +3,20 @@ name: Smoke
 on:
   workflow_dispatch:
     inputs:
-      include_latest:
+      scope:
         description: >-
-          Also dispatch smoke-standalone-latest.yml, which tests a non-default
-          detector tag (newest prerelease by default). Leave off for the
-          reproducible, pinned smokes only.
+          Which smokes to dispatch: the reproducible pinned smokes only
+          (standard), both the pinned and the latest-detector smokes
+          (standard+latest), or only the latest-detector smokes (latest). The
+          latest smokes test the newest detector build as last refreshed by
+          refresh-latest-smokes.yml.
         required: false
-        default: false
-        type: boolean
-      detector_tag:
-        description: >-
-          Detector tag forwarded to smoke-standalone-latest.yml when
-          include_latest is enabled. If empty, that workflow falls back to the
-          GH_AW_THREAT_DETECTION_VERSION variable, then the newest prerelease.
-        required: false
-        default: ''
-        type: string
+        default: standard
+        type: choice
+        options:
+          - standard
+          - standard+latest
+          - latest
 
 permissions:
   actions: write
@@ -28,7 +26,8 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch smoke workflows
+      - name: Dispatch standard smoke workflows
+        if: ${{ inputs.scope == 'standard' || inputs.scope == 'standard+latest' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -57,22 +56,30 @@ jobs:
             printf '  %s\n' "${failures[@]}" >&2
             exit 1
           fi
-      - name: Dispatch latest-prerelease smoke
-        if: ${{ inputs.include_latest }}
+      - name: Dispatch latest smoke workflows
+        if: ${{ inputs.scope == 'latest' || inputs.scope == 'standard+latest' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
-          DETECTOR_TAG: ${{ inputs.detector_tag }}
         run: |
           set -euo pipefail
-          args=(smoke-standalone-latest.yml --repo "$REPO" --ref "$REF")
-          if [ -n "${DETECTOR_TAG:-}" ]; then
-            args+=(--field "detector_tag=${DETECTOR_TAG}")
-          fi
-          gh workflow run "${args[@]}"
-          if [ -n "${DETECTOR_TAG:-}" ]; then
-            echo "Dispatched smoke-standalone-latest.yml (detector_tag='${DETECTOR_TAG}')"
-          else
-            echo "Dispatched smoke-standalone-latest.yml (detector_tag empty; child resolves GH_AW_THREAT_DETECTION_VERSION, else newest prerelease)"
+          latest=(
+            smoke-copilot-standalone-latest.lock.yml
+            smoke-claude-standalone-latest.lock.yml
+            smoke-codex-standalone-latest.lock.yml
+          )
+          failures=()
+          for workflow in "${latest[@]}"; do
+            if gh workflow run "$workflow" --repo "$REPO" --ref "$REF"; then
+              echo "Dispatched $workflow"
+            else
+              echo "Failed to dispatch $workflow" >&2
+              failures+=("$workflow")
+            fi
+          done
+          if [ "${#failures[@]}" -gt 0 ]; then
+            printf 'Failed to dispatch %d latest workflow(s):\n' "${#failures[@]}" >&2
+            printf '  %s\n' "${failures[@]}" >&2
+            exit 1
           fi
