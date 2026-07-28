@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
+	"github.com/github/gh-aw-threat-detection/pkg/runlog"
 )
 
 // AnalyzeOptions carries optional in-session reporting configuration.
@@ -22,6 +23,10 @@ type AnalyzeOptions struct {
 	// the engine provisions the wrapper on PATH, sets THREAT_DETECTION_RESULT_FILE,
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
+	// Logger, when non-nil, receives structured diagnostic events for the engine
+	// invocation — including the resolved binary path, arg count, and model —
+	// so failures can be diagnosed even when the engine subprocess produces no output.
+	Logger *runlog.Logger
 }
 
 // Engine represents an AI engine capable of analyzing content for threats.
@@ -133,10 +138,12 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 	env = append(env, toolEnv...)
 
 	if _, ok := copilotHarnessPath(); ok {
+		logEngineInvoke(opts.Logger, nodeCommand(), copilotArgs("<prompt-file>"), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
 		}, "", env, opts.ResultSinkPath)
 	}
+	logEngineInvoke(opts.Logger, "copilot", copilotDirectArgs("<prompt-file>"), e.model)
 	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 		return "copilot", copilotDirectArgs(promptPath)
 	}, prompt, env, opts.ResultSinkPath)
@@ -154,7 +161,9 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 	}
 	defer cleanup()
 	enableBashTool := opts.ResultSinkPath != ""
-	return runCLIEnvWithSink(ctx, "claude", claudeArgs(e.model, enableBashTool), prompt, toolEnv, opts.ResultSinkPath)
+	args := claudeArgs(e.model, enableBashTool)
+	logEngineInvoke(opts.Logger, "claude", args, e.model)
+	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -169,6 +178,9 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 	}
 	defer cleanup()
 	provider := codexForcedProvider(codexConfigPath())
+	// codexArgs embeds the prompt as the final positional argument; pass a
+	// placeholder here so the logged args do not expose the detection prompt.
+	logEngineInvoke(opts.Logger, "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
 	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
 }
 
@@ -392,8 +404,44 @@ func tailTruncate(s string, max int) string {
 	return "...(truncated)... " + s[len(s)-max:]
 }
 
+// logEngineInvoke logs the engine subprocess invocation details to both the
+// structured run log and stderr. It is called immediately before the engine
+// process starts so that silent engine failures (exit with no output) leave
+// enough context in the logs to diagnose the root cause.
+//
+// args must not contain sensitive data (prompt text, API keys). For engines
+// that embed the prompt in argv (Codex), callers pass a safe placeholder.
+func logEngineInvoke(logger *runlog.Logger, name string, args []string, model string) {
+	resolvedPath, err := exec.LookPath(name)
+	if err != nil {
+		resolvedPath = ""
+	}
+
+	// Emit to stderr so the message appears in the GitHub Actions job log even
+	// when the engine subprocess produces no output of its own.
+	if resolvedPath != "" {
+		fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: %s (%s), args: %d\n", name, resolvedPath, len(args))
+	} else {
+		fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: %s (binary not found in PATH), args: %d\n", name, len(args))
+	}
+
+	fields := map[string]any{
+		"name":       name,
+		"args":       args,
+		"args_count": len(args),
+	}
+	if resolvedPath != "" {
+		fields["binary"] = resolvedPath
+	} else {
+		fields["binary_not_found"] = true
+	}
+	if model != "" {
+		fields["model"] = model
+	}
+	logger.Info("engine_invoke", fields)
+}
+
 // extractStreamJSONError scans newline-delimited JSON output (the format used by
-// the Claude CLI's stream-json mode) for objects that describe a failure and
 // returns a concatenated, human-readable summary. It returns "" when no
 // structured error is found, so callers can fall back to the raw stdout tail.
 func extractStreamJSONError(stdout string) string {
