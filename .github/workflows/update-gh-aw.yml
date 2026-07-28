@@ -1,9 +1,14 @@
 name: Update gh-aw
 
 # Watches github/gh-aw for new (pre)releases. When a newer version than the one
-# currently used to compile the workflows is published, it opens a tracking
-# issue so a maintainer can recompile the agentic workflows (.md -> .lock.yml)
-# with the new gh-aw CLI.
+# currently used to compile the workflows is published, it installs that gh-aw
+# CLI, recompiles the agentic workflows (.md -> .lock.yml), and opens a pull
+# request with the regenerated locks so a maintainer can review and merge.
+#
+# The `smoke-<engine>-standalone-latest.{md,lock.yml}` workflows are intentionally
+# NOT recompiled here — their locks pin a patched detector version and are owned
+# by `refresh-latest-smokes.yml`. Running the plain compiler over them would
+# revert that patch.
 #
 # GitHub Actions cannot subscribe to another repository's release event directly,
 # so this runs on a schedule (and can be dispatched manually). Prereleases are
@@ -32,19 +37,24 @@ jobs:
     # Never run on forks.
     if: ${{ github.repository == 'github/gh-aw-threat-detection' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
-      contents: read
-      issues: write
+      contents: write
+      pull-requests: write
+    env:
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Resolve target and current gh-aw versions
         id: versions
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
@@ -83,31 +93,100 @@ jobs:
           echo "Current gh-aw: ${current}"
           echo "Target  gh-aw: ${target}"
 
-      - name: Open update issue
+      - name: Install target gh-aw CLI
         if: ${{ steps.versions.outputs.changed == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: ${{ steps.versions.outputs.target }}
+        run: |
+          set -euo pipefail
+          # Reinstall pinned to the target release so `gh aw compile` reproduces
+          # the exact locks that gh-aw ${TARGET} would generate.
+          gh extension remove gh-aw >/dev/null 2>&1 || true
+          gh extension install github/gh-aw --pin "${TARGET}"
+          gh aw version
+
+      - name: Recompile workflows (excluding latest smokes)
+        id: compile
+        if: ${{ steps.versions.outputs.changed == 'true' }}
+        env:
+          TARGET: ${{ steps.versions.outputs.target }}
+        run: |
+          set -euo pipefail
+
+          # Compile every agentic workflow source EXCEPT the *-standalone-latest
+          # ones, whose locks pin a patched detector version owned by
+          # refresh-latest-smokes.yml.
+          mapfile -t sources < <(find .github/workflows -maxdepth 1 -name '*.md' \
+            ! -name '*-standalone-latest.md' | sort)
+
+          if [ "${#sources[@]}" -eq 0 ]; then
+            echo "No agentic workflow sources found to compile" >&2
+            exit 1
+          fi
+
+          echo "Compiling with gh-aw ${TARGET}:"
+          printf '  %s\n' "${sources[@]}"
+
+          # Action mode + the release tag so github/gh-aw-actions/setup is
+          # SHA-pinned exactly as in production release-binary compiles.
+          gh aw compile \
+            --action-mode action \
+            --action-tag "${TARGET}" \
+            --no-check-update \
+            "${sources[@]}"
+
+          # Defensive: never let the latest smoke locks drift from this job.
+          git checkout -- .github/workflows/*-standalone-latest.lock.yml 2>/dev/null || true
+
+          if git diff --quiet -- .github/workflows; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Recompiled locks are identical; nothing to update."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update pull request
+        if: ${{ steps.versions.outputs.changed == 'true' && steps.compile.outputs.changed == 'true' }}
+        env:
           TARGET: ${{ steps.versions.outputs.target }}
           CURRENT: ${{ steps.versions.outputs.current }}
         run: |
           set -euo pipefail
 
+          branch="update-gh-aw/update"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add .github/workflows
+          git commit -m "chore: update gh-aw to ${TARGET}"
+          git push --force origin "$branch"
+
           title="chore: update gh-aw to ${TARGET}"
+          body="$(cat <<EOF
+          Recompiled the agentic workflow \`.lock.yml\` files with the gh-aw CLI.
 
-          # Don't open a duplicate if an open issue for this target already exists.
-          existing="$(gh issue list \
-            --state open \
-            --search "in:title ${title}" \
-            --json title,number \
-            --jq ".[] | select(.title == \"${title}\") | .number" \
-            | head -n1)"
-          if [ -n "${existing}" ]; then
-            echo "Issue #${existing} already tracks the update to ${TARGET}; nothing to do."
-            exit 0
+          | Field | Value |
+          |-------|-------|
+          | Previous compiler version | \`${CURRENT}\` |
+          | New compiler version | \`${TARGET}\` |
+
+          The \`smoke-<engine>-standalone-latest.lock.yml\` files are intentionally
+          left untouched — they pin a patched detector version and are regenerated by
+          \`refresh-latest-smokes.yml\`.
+
+          Review the diff, then merge to adopt gh-aw \`${TARGET}\`.
+
+          Release notes: https://github.com/github/gh-aw/releases/tag/${TARGET}
+
+          Generated by \`.github/workflows/update-gh-aw.yml\`.
+          EOF
+          )"
+
+          if gh pr view "$branch" --repo "$REPO" >/dev/null 2>&1; then
+            gh pr edit "$branch" --repo "$REPO" --title "$title" --body "$body"
+            echo "Updated existing PR for $branch"
+          else
+            gh pr create --repo "$REPO" --base main --head "$branch" --title "$title" --body "$body"
+            echo "Opened PR for $branch"
           fi
-
-          body="$(printf 'A newer github/gh-aw release is available.\n\n- **Current compiler version:** %s\n- **New compiler version:** %s\n\nThe agentic workflow `.lock.yml` files should be regenerated with `gh aw compile` using gh-aw %s.\n\nTo update:\n\n```bash\n# Install the target gh-aw CLI, then from the repo root:\ngh aw compile\n```\n\nOpen a pull request with the regenerated files and review the diff before merging.\n\nRelease notes: https://github.com/github/gh-aw/releases/tag/%s\n' "${CURRENT}" "${TARGET}" "${TARGET}" "${TARGET}")"
-
-          gh issue create \
-            --title "${title}" \
-            --body "${body}"
+          echo "Opened/updated PR from branch \`$branch\` (gh-aw ${TARGET})." >> "$GITHUB_STEP_SUMMARY"
