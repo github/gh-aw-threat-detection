@@ -5,21 +5,13 @@ on:
     inputs:
       include_latest:
         description: >-
-          Also dispatch smoke-standalone-latest.yml, which recompiles the smoke
-          workflows against the newest gh-aw + gh-aw-threat-detection
-          prereleases and runs them under AWF. Leave off for the reproducible,
-          pinned smokes only.
+          Also dispatch the smoke-<engine>-standalone-latest workflows, which
+          test the newest detector build (as last refreshed by
+          refresh-latest-smokes.yml). Leave off for the reproducible, pinned
+          smokes only.
         required: false
         default: false
         type: boolean
-      detector_ref:
-        description: >-
-          Detector ref forwarded to smoke-standalone-latest.yml when
-          include_latest is enabled. If empty, that workflow tests the newest
-          github/gh-aw-threat-detection prerelease.
-        required: false
-        default: ''
-        type: string
 
 permissions:
   actions: write
@@ -58,22 +50,30 @@ jobs:
             printf '  %s\n' "${failures[@]}" >&2
             exit 1
           fi
-      - name: Dispatch latest smoke meta-workflow
+      - name: Dispatch latest smoke workflows
         if: ${{ inputs.include_latest }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
-          DETECTOR_REF: ${{ inputs.detector_ref }}
         run: |
           set -euo pipefail
-          args=(smoke-standalone-latest.yml --repo "$REPO" --ref "$REF")
-          if [ -n "${DETECTOR_REF:-}" ]; then
-            args+=(--field "detector_ref=${DETECTOR_REF}")
-          fi
-          gh workflow run "${args[@]}"
-          if [ -n "${DETECTOR_REF:-}" ]; then
-            echo "Dispatched smoke-standalone-latest.yml (detector_ref='${DETECTOR_REF}')"
-          else
-            echo "Dispatched smoke-standalone-latest.yml (detector_ref empty; tests newest prereleases)"
+          latest=(
+            smoke-copilot-standalone-latest.lock.yml
+            smoke-claude-standalone-latest.lock.yml
+            smoke-codex-standalone-latest.lock.yml
+          )
+          failures=()
+          for workflow in "${latest[@]}"; do
+            if gh workflow run "$workflow" --repo "$REPO" --ref "$REF"; then
+              echo "Dispatched $workflow"
+            else
+              echo "Failed to dispatch $workflow" >&2
+              failures+=("$workflow")
+            fi
+          done
+          if [ "${#failures[@]}" -gt 0 ]; then
+            printf 'Failed to dispatch %d latest workflow(s):\n' "${#failures[@]}" >&2
+            printf '  %s\n' "${failures[@]}" >&2
+            exit 1
           fi

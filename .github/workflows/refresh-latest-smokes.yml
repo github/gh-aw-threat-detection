@@ -1,0 +1,280 @@
+name: Refresh Latest Smokes
+
+# Regenerates the `smoke-<engine>-standalone-latest.lock.yml` files so they test
+# the NEWEST github/gh-aw-threat-detection build through the REAL native gh-aw +
+# AWF detection path, then opens a pull request with the result.
+#
+# Production gh-aw hard-pins the `threat-detect` binary version as a compile-time
+# Go constant (`constants.DefaultThreatDetectVersion`). The scheduled
+# `smoke-<engine>-standalone` workflows are therefore faithful to production but
+# cannot exercise a newer detector. This workflow closes that gap without
+# hand-porting the AWF plumbing:
+#
+#   1. Resolve the newest (pre)release of github/gh-aw and of
+#      github/gh-aw-threat-detection (both overridable via inputs).
+#   2. Clone gh-aw at that ref, patch DefaultThreatDetectVersion to the resolved
+#      detector tag, and build the `gh-aw` compiler from source.
+#   3. Recompile the three committed `smoke-<engine>-standalone-latest.md` sources
+#      with that patched compiler (SHA-pinned action mode, matching gh-aw).
+#   4. Open / update a pull request with the regenerated `.lock.yml` files.
+#
+# The only thing that differs from production is the detector version. Once the
+# PR is merged to `main`, the `.lock.yml` changes trigger the per-engine
+# `smoke-<engine>-standalone-latest` workflows (they also allow manual dispatch),
+# so detection runs under AWF exactly as in production but with the new detector.
+#
+# This is a two-step, fully reviewable flow: open the PR here, eyeball the version
+# diff, merge, then let the smokes run. No throwaway branches or cross-branch
+# dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      gh_aw_ref:
+        description: >-
+          github/gh-aw ref (tag/branch/SHA) to build the compiler from. Leave
+          empty to use the newest gh-aw (pre)release.
+        required: false
+        default: ''
+        type: string
+      detector_ref:
+        description: >-
+          github/gh-aw-threat-detection release tag to test (e.g. main, v0.3.1).
+          Leave empty to use the newest detector (pre)release.
+        required: false
+        default: ''
+        type: string
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-latest-smokes
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    # Never run on forks.
+    if: >-
+      ${{ github.repository == 'github/gh-aw-threat-detection'
+      && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+      ENGINES: copilot claude codex
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve gh-aw and detector refs
+        id: refs
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_GH_AW_REF: ${{ inputs.gh_aw_ref }}
+          INPUT_DETECTOR_REF: ${{ inputs.detector_ref }}
+          # Tag of the detector release whose Release workflow just completed
+          # (auto-run). Tag pushes often leave head_branch null, so this may be
+          # empty, in which case we fall back to the newest (pre)release.
+          RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || '' }}
+        run: |
+          set -euo pipefail
+          # Newest release flagged as a prerelease (empty if none exist).
+          newest_prerelease() {
+            gh release list --repo "$1" --exclude-drafts --limit 50 \
+              --json tagName,isPrerelease,publishedAt \
+              --jq 'map(select(.isPrerelease)) | sort_by(.publishedAt) | last | .tagName // empty'
+          }
+          # The release marked "Latest" (never a prerelease).
+          latest_release() {
+            gh release view --repo "$1" --json tagName --jq '.tagName // empty' 2>/dev/null || true
+          }
+          # Newest prerelease, or the latest stable release if none exists.
+          newest_release() {
+            local tag
+            tag="$(newest_prerelease "$1")"
+            if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+              tag="$(latest_release "$1")"
+            fi
+            printf '%s' "$tag"
+          }
+          # Is $2 a published release tag of repo $1?
+          is_release_tag() {
+            gh release view --repo "$1" "$2" >/dev/null 2>&1
+          }
+
+          gh_aw_ref="${INPUT_GH_AW_REF:-}"
+          if [ -z "$gh_aw_ref" ]; then
+            gh_aw_ref="$(newest_release github/gh-aw)"
+          fi
+
+          detector_ref="${INPUT_DETECTOR_REF:-}"
+          detector_source="workflow_dispatch input"
+          if [ -z "$detector_ref" ] && [ "$EVENT" = "workflow_run" ] && [ -n "${RELEASE_TAG:-}" ]; then
+            detector_ref="$RELEASE_TAG"
+            detector_source="triggering Release run"
+          fi
+          if [ -z "$detector_ref" ]; then
+            detector_ref="$(newest_release github/gh-aw-threat-detection)"
+            detector_source="newest detector (pre)release"
+          fi
+
+          if [ -z "$gh_aw_ref" ] || [ "$gh_aw_ref" = "null" ]; then
+            echo "::error::Could not resolve a github/gh-aw ref."
+            exit 1
+          fi
+          if [ -z "$detector_ref" ] || [ "$detector_ref" = "null" ]; then
+            echo "::error::Could not resolve a github/gh-aw-threat-detection ref."
+            exit 1
+          fi
+
+          # gh-aw-actions (the setup action) is version-locked to gh-aw *release
+          # tags*, so --action-tag must be a real gh-aw release tag. Reuse the
+          # compiler ref when it is a release tag; otherwise (branch/SHA) fall
+          # back to the newest gh-aw release so the locks still SHA-pin a runnable
+          # github/gh-aw-actions.
+          if is_release_tag github/gh-aw "$gh_aw_ref"; then
+            action_tag="$gh_aw_ref"
+          else
+            action_tag="$(newest_release github/gh-aw)"
+            echo "::warning::gh-aw ref '$gh_aw_ref' is not a release tag; pinning github/gh-aw-actions to '$action_tag'."
+          fi
+          if [ -z "$action_tag" ] || [ "$action_tag" = "null" ]; then
+            echo "::error::Could not resolve a github/gh-aw release tag for --action-tag."
+            exit 1
+          fi
+
+          echo "gh_aw_ref=$gh_aw_ref" >> "$GITHUB_OUTPUT"
+          echo "action_tag=$action_tag" >> "$GITHUB_OUTPUT"
+          echo "detector_ref=$detector_ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved gh-aw ref '$gh_aw_ref' (action tag '$action_tag'), detector ref '$detector_ref' ($detector_source)"
+          {
+            echo "### Versions under test"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| gh-aw compiler ref | \`$gh_aw_ref\` |"
+            echo "| gh-aw-actions tag | \`$action_tag\` |"
+            echo "| Detector tag | \`$detector_ref\` (source: $detector_source) |"
+            echo "| Trigger | ${{ github.event_name }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clone and patch gh-aw
+        env:
+          GH_AW_REF: ${{ steps.refs.outputs.gh_aw_ref }}
+          DETECTOR_REF: ${{ steps.refs.outputs.detector_ref }}
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/gh-aw-src"
+          # Fetch the exact ref rather than `clone --branch`, so tags, branches,
+          # and raw commit SHAs all work. --action-tag is resolved separately to a
+          # real gh-aw release tag.
+          mkdir -p "${RUNNER_TEMP}/gh-aw-src"
+          git -C "${RUNNER_TEMP}/gh-aw-src" init -q
+          git -C "${RUNNER_TEMP}/gh-aw-src" remote add origin https://github.com/github/gh-aw
+          git -C "${RUNNER_TEMP}/gh-aw-src" fetch --depth 1 origin "$GH_AW_REF"
+          git -C "${RUNNER_TEMP}/gh-aw-src" checkout -q FETCH_HEAD
+          constFile="${RUNNER_TEMP}/gh-aw-src/pkg/constants/version_constants.go"
+          if ! grep -q 'DefaultThreatDetectVersion Version =' "$constFile"; then
+            echo "::error::DefaultThreatDetectVersion not found in $constFile (gh-aw layout changed?)"
+            exit 1
+          fi
+          sed -i -E 's/(DefaultThreatDetectVersion Version = )"[^"]*"/\1"'"$DETECTOR_REF"'"/' "$constFile"
+          echo "Patched detector version constant:"
+          grep -n 'DefaultThreatDetectVersion Version =' "$constFile"
+
+      - name: Setup Go
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: ${{ runner.temp }}/gh-aw-src/go.mod
+          cache: false
+
+      - name: Build patched gh-aw compiler
+        env:
+          GH_AW_REF: ${{ steps.refs.outputs.gh_aw_ref }}
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/gh-aw-src"
+          go build -ldflags "-s -w -X main.version=${GH_AW_REF}" -o "${RUNNER_TEMP}/gh-aw-bin" ./cmd/gh-aw
+          "${RUNNER_TEMP}/gh-aw-bin" version || true
+
+      - name: Recompile latest smoke locks
+        env:
+          ACTION_TAG: ${{ steps.refs.outputs.action_tag }}
+          GITHUB_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          for engine in $ENGINES; do
+            md=".github/workflows/smoke-${engine}-standalone-latest.md"
+            echo "Compiling $md ..."
+            # Action mode + a real gh-aw release tag so the setup action
+            # (github/gh-aw-actions) is SHA-pinned exactly as in production.
+            "${RUNNER_TEMP}/gh-aw-bin" compile \
+              --action-mode action \
+              --action-tag "$ACTION_TAG" \
+              --no-check-update \
+              "$md"
+          done
+          echo "Recompiled detector pins:"
+          grep -n "install_threat_detect_binary.sh" .github/workflows/smoke-*-standalone-latest.lock.yml || true
+
+      - name: Open or update pull request
+        env:
+          GH_AW_REF: ${{ steps.refs.outputs.gh_aw_ref }}
+          ACTION_TAG: ${{ steps.refs.outputs.action_tag }}
+          DETECTOR_REF: ${{ steps.refs.outputs.detector_ref }}
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- .github/workflows/smoke-*-standalone-latest.lock.yml; then
+            echo "Latest smoke locks already match gh-aw '$GH_AW_REF' + detector '$DETECTOR_REF'; nothing to do."
+            echo "No lock changes; PR not needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          branch="refresh-latest-smokes/update"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add .github/workflows/smoke-*-standalone-latest.lock.yml
+          git commit -m "ci: refresh latest smoke locks (gh-aw ${GH_AW_REF}, detector ${DETECTOR_REF})"
+          git push --force origin "$branch"
+
+          title="ci: refresh latest smoke locks (detector ${DETECTOR_REF})"
+          body="$(cat <<EOF
+          Regenerated the \`smoke-<engine>-standalone-latest.lock.yml\` files against the newest builds.
+
+          | Field | Value |
+          |-------|-------|
+          | gh-aw compiler ref | \`${GH_AW_REF}\` |
+          | gh-aw-actions tag | \`${ACTION_TAG}\` |
+          | Detector tag | \`${DETECTOR_REF}\` |
+
+          Merging this PR updates the locks on \`main\`; the \`push\` trigger then runs the
+          per-engine \`smoke-<engine>-standalone-latest\` workflows under AWF against the new
+          detector. They can also be dispatched manually.
+
+          Generated by \`.github/workflows/refresh-latest-smokes.yml\`.
+          EOF
+          )"
+
+          if gh pr view "$branch" --repo "$REPO" >/dev/null 2>&1; then
+            gh pr edit "$branch" --repo "$REPO" --title "$title" --body "$body"
+            echo "Updated existing PR for $branch"
+          else
+            gh pr create --repo "$REPO" --base main --head "$branch" --title "$title" --body "$body"
+            echo "Opened PR for $branch"
+          fi
+          echo "Opened/updated PR from branch \`$branch\`." >> "$GITHUB_STEP_SUMMARY"
