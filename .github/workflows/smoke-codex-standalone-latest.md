@@ -2,11 +2,6 @@
 description: Smoke test workflow that validates Codex engine execution with the released threat-detect binary
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/smoke-codex-standalone-latest.lock.yml
 permissions:
   contents: read
   issues: read
