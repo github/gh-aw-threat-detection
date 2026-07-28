@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -413,8 +414,13 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Tee both stdout and stderr to os.Stderr so that harness lifecycle output
+	// ([copilot-harness], [claude-harness], [codex-harness]) and engine errors
+	// appear in the GitHub Actions job log in real-time, mirroring the agent
+	// job's "2>&1 | tee" pattern. The buffers are still populated for error
+	// reporting and sink-result checking.
+	cmd.Stdout = io.MultiWriter(&stdout, os.Stderr)
+	cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
 
 	if err := cmd.Run(); err != nil {
 		if sinkPath != "" {
