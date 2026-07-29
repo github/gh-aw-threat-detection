@@ -82,6 +82,11 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: true
+          # Persist a token with `workflows` permission so the git push can
+          # create/update the smoke `.lock.yml` files under .github/workflows/.
+          # The built-in GITHUB_TOKEN (github-actions[bot]) is refused for
+          # workflow-file changes.
+          token: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
 
       - name: Resolve gh-aw and detector refs
         id: refs
