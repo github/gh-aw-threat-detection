@@ -476,6 +476,11 @@ func tailTruncate(s string, max int) string {
 	return "...(truncated)... " + s[len(s)-max:]
 }
 
+// engineInvokeStderr is the destination for the human-readable engine-invoke
+// line. It is a package variable so tests can capture the emitted output; in
+// production it is os.Stderr, matching the GitHub Actions job log.
+var engineInvokeStderr io.Writer = os.Stderr
+
 // logEngineInvoke logs the engine subprocess invocation details to both the
 // structured run log and stderr. It is called immediately before the engine
 // process starts so that silent engine failures (exit with no output) leave
@@ -494,14 +499,6 @@ func logEngineInvoke(logger *runlog.Logger, engineID, name string, args []string
 		resolvedPath = ""
 	}
 
-	// Describe the model on stderr so the job log makes clear which model each
-	// engine was asked for. An empty model means no override was passed and the
-	// engine CLI selects its own default.
-	modelDesc := model
-	if modelDesc == "" {
-		modelDesc = "(engine default)"
-	}
-
 	// Note when the actual process differs from the engine (harness wrapper),
 	// so "node" in the command does not obscure which engine is running.
 	command := name
@@ -511,9 +508,21 @@ func logEngineInvoke(logger *runlog.Logger, engineID, name string, args []string
 		command = fmt.Sprintf("%s (binary not found in PATH)", name)
 	}
 
+	// Describe the model on stderr so the job log makes clear which model each
+	// engine was asked for. An empty model means no override was passed and the
+	// engine CLI selects its own default. The model can originate from --model or
+	// an environment variable, so it is quoted with %q: a value containing
+	// newlines or terminal control sequences would otherwise split or forge the
+	// diagnostic line, and quoting keeps any control characters escaped on one
+	// physical line.
+	modelDesc := "(engine default)"
+	if model != "" {
+		modelDesc = fmt.Sprintf("%q", model)
+	}
+
 	// Emit to stderr so the message appears in the GitHub Actions job log even
 	// when the engine subprocess produces no output of its own.
-	fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: engine=%s model=%s command=%s args=%d\n", engineID, modelDesc, command, len(args))
+	fmt.Fprintf(engineInvokeStderr, "[threat-detect] engine invoke: engine=%s model=%s command=%s args=%d\n", engineID, modelDesc, command, len(args))
 
 	fields := map[string]any{
 		"engine":     engineID,
