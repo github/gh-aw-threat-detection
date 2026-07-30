@@ -72,8 +72,8 @@ func TestLogEngineInvoke_EmptyModelFallback(t *testing.T) {
 	if !strings.Contains(stderr, "engine=claude") {
 		t.Errorf("stderr %q missing engine=claude", stderr)
 	}
-	if !strings.Contains(stderr, "model=(engine default)") {
-		t.Errorf("stderr %q missing model=(engine default)", stderr)
+	if !strings.Contains(stderr, "model=(none; using engine default)") {
+		t.Errorf("stderr %q missing model=(none; using engine default)", stderr)
 	}
 
 	// An empty model must not be emitted as a structured field.

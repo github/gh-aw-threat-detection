@@ -515,7 +515,7 @@ func logEngineInvoke(logger *runlog.Logger, engineID, name string, args []string
 	// newlines or terminal control sequences would otherwise split or forge the
 	// diagnostic line, and quoting keeps any control characters escaped on one
 	// physical line.
-	modelDesc := "(engine default)"
+	modelDesc := "(none; using engine default)"
 	if model != "" {
 		modelDesc = fmt.Sprintf("%q", model)
 	}
