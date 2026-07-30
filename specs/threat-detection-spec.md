@@ -232,6 +232,8 @@ treats a missing verdict as a recoverable `parse_error` and proceeds.
 
 This keeps the standalone detector consistent with the model `gh-aw` configures for the harness-driven detection path. Codex has no native model environment variable and relies solely on the detection variable.
 
+**TD-22b**: When the Copilot engine runs via the `gh-aw` Copilot harness and the resolved model is a `gh-aw` model alias (e.g. `auto`), the detector MUST make the AWF configuration (which carries the api-proxy model alias map) discoverable by the harness so the alias is resolved to a concrete model before the Copilot CLI is invoked. When `GH_AW_AWF_CONFIG_PATH` is unset and the harness default location (`/tmp/gh-aw/awf-config.json`) is absent, the detector MUST point the harness at the AWF config mounted at `$RUNNER_TEMP/gh-aw/awf-config.json` when that file exists. Without this, the harness forwards the literal alias to the Copilot CLI, which rejects it (`400 The requested model is not supported`).
+
 **TD-23**: AI engine authentication variables MUST be treated as runtime-only configuration. They MUST NOT be required for parser, prompt building, unit test, or binary smoke test execution.
 
 The implementation MAY pass through engine-specific authentication variables required by the selected CLI, including:
