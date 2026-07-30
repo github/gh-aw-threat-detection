@@ -8,8 +8,8 @@ on:
           Which smokes to dispatch: the reproducible pinned smokes only
           (standard), both the pinned and the latest-detector smokes
           (standard+latest), or only the latest-detector smokes (latest). The
-          latest smokes test the newest detector build as last refreshed by
-          refresh-latest-smokes.yml.
+          latest smokes test the newest detector build as last regenerated per
+          the update-workflow-versions skill.
         required: false
         default: standard
         type: choice
