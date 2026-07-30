@@ -139,12 +139,12 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 	env = append(env, toolEnv...)
 
 	if harnessPath, ok := copilotHarnessPath(); ok {
-		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs("<prompt-file>")...), e.model)
+		logEngineInvoke(opts.Logger, "copilot", nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs("<prompt-file>")...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
 		}, "", env, opts.ResultSinkPath)
 	}
-	logEngineInvoke(opts.Logger, "copilot", copilotDirectArgs("<prompt-file>"), e.model)
+	logEngineInvoke(opts.Logger, "copilot", "copilot", copilotDirectArgs("<prompt-file>"), e.model)
 	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 		return "copilot", copilotDirectArgs(promptPath)
 	}, prompt, env, opts.ResultSinkPath)
@@ -164,13 +164,13 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 	enableBashTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
-		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableBashTool)...), e.model)
+		logEngineInvoke(opts.Logger, "claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableBashTool)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableBashTool)...)
 		}, "", toolEnv, opts.ResultSinkPath)
 	}
 	args := claudeArgs(e.model, enableBashTool)
-	logEngineInvoke(opts.Logger, "claude", args, e.model)
+	logEngineInvoke(opts.Logger, "claude", "claude", args, e.model)
 	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
 }
 
@@ -188,14 +188,14 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 	provider := codexForcedProvider(codexConfigPath())
 
 	if harnessPath, ok := codexHarnessPath(); ok {
-		logEngineInvoke(opts.Logger, nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
+		logEngineInvoke(opts.Logger, "codex", nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs(promptPath, e.model, provider)...)
 		}, "", toolEnv, opts.ResultSinkPath)
 	}
 	// Codex embeds the prompt as a positional argument; pass a placeholder here
 	// so the logged args do not expose the detection prompt.
-	logEngineInvoke(opts.Logger, "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
+	logEngineInvoke(opts.Logger, "codex", "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
 	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
 }
 
@@ -483,21 +483,40 @@ func tailTruncate(s string, max int) string {
 //
 // args must not contain sensitive data (prompt text, API keys). For engines
 // that embed the prompt in argv (Codex), callers pass a safe placeholder.
-func logEngineInvoke(logger *runlog.Logger, name string, args []string, model string) {
+//
+// engineID is the canonical engine selected by the user (copilot/claude/codex),
+// while name is the process actually spawned — which is often "node" when the
+// gh-aw harness wrapper is used. Logging both makes the job log unambiguous
+// about which engine and model were requested.
+func logEngineInvoke(logger *runlog.Logger, engineID, name string, args []string, model string) {
 	resolvedPath, err := exec.LookPath(name)
 	if err != nil {
 		resolvedPath = ""
 	}
 
-	// Emit to stderr so the message appears in the GitHub Actions job log even
-	// when the engine subprocess produces no output of its own.
-	if resolvedPath != "" {
-		fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: %s (%s), args: %d\n", name, resolvedPath, len(args))
-	} else {
-		fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: %s (binary not found in PATH), args: %d\n", name, len(args))
+	// Describe the model on stderr so the job log makes clear which model each
+	// engine was asked for. An empty model means no override was passed and the
+	// engine CLI selects its own default.
+	modelDesc := model
+	if modelDesc == "" {
+		modelDesc = "(engine default)"
 	}
 
+	// Note when the actual process differs from the engine (harness wrapper),
+	// so "node" in the command does not obscure which engine is running.
+	command := name
+	if resolvedPath != "" {
+		command = fmt.Sprintf("%s (%s)", name, resolvedPath)
+	} else {
+		command = fmt.Sprintf("%s (binary not found in PATH)", name)
+	}
+
+	// Emit to stderr so the message appears in the GitHub Actions job log even
+	// when the engine subprocess produces no output of its own.
+	fmt.Fprintf(os.Stderr, "[threat-detect] engine invoke: engine=%s model=%s command=%s args=%d\n", engineID, modelDesc, command, len(args))
+
 	fields := map[string]any{
+		"engine":     engineID,
 		"name":       name,
 		"args":       args,
 		"args_count": len(args),
