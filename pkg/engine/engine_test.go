@@ -183,6 +183,40 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("copilot harness awf config env points at mounted config", func(t *testing.T) {
+		t.Setenv("GH_AW_AWF_CONFIG_PATH", "")
+		runnerTemp := t.TempDir()
+		t.Setenv("RUNNER_TEMP", runnerTemp)
+		configPath := filepath.Join(runnerTemp, "gh-aw", "awf-config.json")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(configPath, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		got := copilotHarnessAwfConfigEnv()
+		want := []string{"GH_AW_AWF_CONFIG_PATH=" + configPath}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("copilotHarnessAwfConfigEnv() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("copilot harness awf config env respects existing override", func(t *testing.T) {
+		t.Setenv("GH_AW_AWF_CONFIG_PATH", "/custom/awf-config.json")
+		t.Setenv("RUNNER_TEMP", t.TempDir())
+		if got := copilotHarnessAwfConfigEnv(); got != nil {
+			t.Fatalf("copilotHarnessAwfConfigEnv() = %#v, want nil", got)
+		}
+	})
+
+	t.Run("copilot harness awf config env nil when no config mounted", func(t *testing.T) {
+		t.Setenv("GH_AW_AWF_CONFIG_PATH", "")
+		t.Setenv("RUNNER_TEMP", t.TempDir())
+		if got := copilotHarnessAwfConfigEnv(); got != nil {
+			t.Fatalf("copilotHarnessAwfConfigEnv() = %#v, want nil", got)
+		}
+	})
+
 	t.Run("claude", func(t *testing.T) {
 		got := claudeArgs("claude-sonnet-4.6", false)
 		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "-"}

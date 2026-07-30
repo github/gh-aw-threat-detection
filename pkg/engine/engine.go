@@ -131,6 +131,7 @@ type copilotEngine struct {
 
 func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error) {
 	env := copilotEnv(e.model)
+	env = append(env, copilotHarnessAwfConfigEnv()...)
 	toolEnv, cleanup, err := maybeProvisionResultTool(opts.ResultSinkPath)
 	if err != nil {
 		return "", err
@@ -280,6 +281,45 @@ func copilotEnv(model string) []string {
 		return nil
 	}
 	return []string{"COPILOT_MODEL=" + model}
+}
+
+// copilotHarnessDefaultAwfConfigPath is where the gh-aw copilot harness looks
+// for the AWF config (which carries the model alias map) when
+// GH_AW_AWF_CONFIG_PATH is unset.
+const copilotHarnessDefaultAwfConfigPath = "/tmp/gh-aw/awf-config.json"
+
+// copilotHarnessAwfConfigEnv points the gh-aw copilot harness at the AWF config
+// file so it can resolve model aliases (e.g. "auto") against the api-proxy
+// model map before spawning the Copilot CLI.
+//
+// Under AWF, the gh-aw agent job copies awf-config.json to the harness's default
+// location (/tmp/gh-aw/awf-config.json), but the standalone detection job does
+// not — it only mounts the config at $RUNNER_TEMP/gh-aw/awf-config.json. Without
+// the alias map the harness passes the literal alias (e.g. COPILOT_MODEL=auto)
+// straight to the Copilot CLI, which rejects it with
+// "400 The requested model is not supported". Exporting GH_AW_AWF_CONFIG_PATH so
+// the harness finds the mounted config restores the same alias resolution the
+// agent job performs.
+//
+// It returns nil when GH_AW_AWF_CONFIG_PATH is already set, when the harness
+// default path exists (the harness will find it there), or when no mounted
+// config can be located.
+func copilotHarnessAwfConfigEnv() []string {
+	if strings.TrimSpace(os.Getenv("GH_AW_AWF_CONFIG_PATH")) != "" {
+		return nil
+	}
+	if _, err := os.Stat(copilotHarnessDefaultAwfConfigPath); err == nil {
+		return nil
+	}
+	runnerTemp := strings.TrimSpace(os.Getenv("RUNNER_TEMP"))
+	if runnerTemp == "" {
+		return nil
+	}
+	candidate := filepath.Join(runnerTemp, "gh-aw", "awf-config.json")
+	if _, err := os.Stat(candidate); err != nil {
+		return nil
+	}
+	return []string{"GH_AW_AWF_CONFIG_PATH=" + candidate}
 }
 
 func claudeArgs(model string, allowBash bool) []string {
