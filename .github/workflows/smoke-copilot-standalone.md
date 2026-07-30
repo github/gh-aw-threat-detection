@@ -34,6 +34,7 @@ safe-outputs:
   allowed-domains: [default-safe-outputs]
   threat-detection:
     continue-on-error: false
+    model: claude-sonnet-5
   create-issue:
     expires: 2h
     close-older-issues: true
