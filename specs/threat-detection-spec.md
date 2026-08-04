@@ -160,7 +160,7 @@ threat-detection:
 ├── agent_output.json             # Agent structured output
 ├── aw_info.json                  # Activation metadata (optional)
 ├── aw-*.patch                    # Git format-patch files (optional)
-├── aw-*.bundle                   # Git bundle files (optional)
+├── aw-*.bundle                    # Git bundle files (optional)
 ├── experiments/                  # Experiment state (optional, inventoried only)
 └── comment-memory/               # Agent comment memory (optional, inventoried only)
     └── *.md
@@ -188,6 +188,13 @@ secret leakage. When the `comment-memory` directory is absent or contains no
 markdown files, the detector MUST proceed and record that no comment-memory
 files were found. When the directory is present but cannot be inspected, the
 detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+
+**TD-18b**: If `aw-prompts/prompt-template.txt` or
+`aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
+detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
+MUST emit an `ERR_VALIDATION` warning to the job log. When structured run
+logging is enabled, it MUST also emit a warning-level
+`prompt_analysis_degraded` event identifying the unavailable artifacts.
 
 ### 8.2 Output Contract
 

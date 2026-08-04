@@ -90,6 +90,7 @@ build:
 
 smoke: build
 	# Smoke test the freshly built binary without any container tooling.
+	go test ./cmd/threat-detect -run '^TestRunPassesPromptAnalysisToEngine$$'
 	./bin/$(BINARY_NAME) --version
 
 test:

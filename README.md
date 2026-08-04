@@ -258,8 +258,8 @@ removing quarantine.
 <artifacts-dir>/
 ├── aw-prompts/
 │   ├── prompt.txt          # Expanded workflow prompt file
-│   ├── prompt-template.txt # Pre-expansion prompt template (optional)
-│   └── prompt-import-tree.json # Runtime-import provenance (optional)
+│   ├── prompt-template.txt # Pre-expansion prompt template
+│   └── prompt-import-tree.json # Runtime-import provenance
 ├── agent_output.json       # Agent structured output
 ├── aw_info.json            # Bounded activation context (optional, consumed as untrusted)
 ├── aw-*.patch              # Git format-patch files (optional)
@@ -268,6 +268,11 @@ removing quarantine.
 └── comment-memory/         # Agent comment memory (optional, inventoried only)
     └── *.md
 ```
+
+Integrated hosts must stage all three files under `aw-prompts/`. Direct callers
+may omit the template or import tree, but the detector emits an
+`ERR_VALIDATION` warning because trusted-vs-untrusted prompt analysis is then
+degraded. Empty or unreadable analysis files produce the same warning.
 
 Every file below the artifacts directory is recorded with its size and consumed
 status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is
