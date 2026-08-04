@@ -351,6 +351,40 @@ func TestDetectionFailureReasonUsesLastStatusLine(t *testing.T) {
 	}
 }
 
+// TestDetectionFailureReasonTerminalLineWithoutReasonResetsCandidate verifies
+// that a terminal THREAT_DETECTION_STATUS: line lacking a reason= token (e.g.
+// truncated or malformed) does not let an earlier line's reason leak through
+// as a stale candidate; per TD-20b an absent/unrecognized reason on the
+// terminal line falls back to agent_failure.
+func TestDetectionFailureReasonTerminalLineWithoutReasonResetsCandidate(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "detection.log")
+	content := "THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2\n" +
+		"THREAT_DETECTION_STATUS: exit=2\n" // terminal line has no reason= token
+	if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: outPath,
+		githubEnv:    envPath,
+		detectionLog: logPath,
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "agent_failure" {
+		t.Errorf("reason output = %q, want %q (stale reason from earlier line must not leak through)", got, "agent_failure")
+	}
+}
+
 // TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure verifies that a
 // missing or absent detection log preserves the pre-existing agent_failure
 // default rather than erroring.

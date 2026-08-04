@@ -204,11 +204,16 @@ func lastDetectionStatusReason(path string) string {
 		if idx < 0 {
 			continue
 		}
+		// Reset per status line so a malformed/truncated terminal line (no
+		// reason= token) clears any reason parsed from an earlier line,
+		// rather than leaving it stale.
+		lineReason := ""
 		for _, tok := range strings.Fields(line[idx+len(statusPrefix):]) {
 			if r, ok := strings.CutPrefix(tok, "reason="); ok {
-				reason = r
+				lineReason = r
 			}
 		}
+		reason = lineReason
 	}
 	return reason
 }
