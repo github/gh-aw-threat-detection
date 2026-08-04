@@ -54,8 +54,10 @@ here as `TD-XX`.
 Release asset from `github/gh-aw-threat-detection`. The host MUST NOT build the
 detector from source as part of a production detection job.
 
-**U-02**: The host MUST select the release asset matching the runner
-architecture: `threat-detect-linux-amd64` or `threat-detect-linux-arm64`.
+**U-02**: The host MUST select the release asset matching the runner operating
+system and architecture: `threat-detect-linux-amd64`,
+`threat-detect-linux-arm64`, `threat-detect-darwin-x64`, or
+`threat-detect-darwin-arm64`.
 
 **U-03**: The host MUST verify the downloaded asset against the `sha256` value
 recorded for that asset (via `checksums.txt` published alongside the assets, or
@@ -73,15 +75,25 @@ repository is approved (per TD-27).
 Example acquisition (informative):
 
 ```bash
-case "$(uname -m)" in
-  x86_64|amd64) asset=threat-detect-linux-amd64 ;;
-  aarch64|arm64) asset=threat-detect-linux-arm64 ;;
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64|Linux/amd64)  asset=threat-detect-linux-amd64 ;;
+  Linux/aarch64|Linux/arm64) asset=threat-detect-linux-arm64 ;;
+  Darwin/x86_64)             asset=threat-detect-darwin-x64 ;;
+  Darwin/arm64)              asset=threat-detect-darwin-arm64 ;;
+  *) echo "unsupported platform" >&2; exit 1 ;;
 esac
 gh release download v0.0.2 --repo github/gh-aw-threat-detection \
   --pattern "$asset" --pattern checksums.txt
-sha256sum --check --ignore-missing checksums.txt
+awk -v asset="$asset" '$2 == asset' checksums.txt |
+  if command -v sha256sum >/dev/null; then sha256sum --check; else shasum -a 256 --check; fi
 install -m 0755 "$asset" ./threat-detect
 ```
+
+The macOS assets are not code-signed or notarized. Downloads performed by the
+`gh-aw` installer are intended for CI runners and are checksum-verified before
+execution. A browser download may receive a quarantine attribute and be blocked
+by Gatekeeper; users should prefer the installer, or verify the checksum before
+removing quarantine.
 
 ---
 
