@@ -171,6 +171,34 @@ host-side reason:
 | `config_error` | `agent_failure` |
 | absent / unrecognized / log unreadable | `agent_failure` ("Detection result file not found at: <path>") |
 
+`conclude` writes a verbose, self-contained diagnostic section to the job log:
+banners framing the section, the environment inputs and resolved paths, and the
+per-field verdict breakdown (`prompt_injection`/`secret_leak`/`malicious_patch`)
+with an indexed reasons list. When the result file is missing or unusable it also
+prints a recursive listing of the result directory plus detection-log statistics
+and every line carrying a `THREAT_DETECTION_STATUS:`/`THREAT_DETECTION_RESULT:`
+marker, so a failed run can be diagnosed without downloading artifacts.
+
+Additional flags:
+
+- `--detection-log <path>` — the detection run's captured log (see the reason
+  table above); it is also the source of the diagnostic log statistics and marker
+  lines. It is consulted for the terminal status reason but never parsed for a
+  verdict.
+- `--log-file <path>` — mirror the conclusion into a JSONL run log (env:
+  `THREAT_DETECTION_LOG_FILE`), emitting `conclude_start`, `conclude_verdict`,
+  `conclude_directory_listing`, `conclude_detection_log`, and `conclude_outcome`
+  events. It must not resolve to the same file as `--result-file` or the
+  detection log — the log is opened truncating, so a collision would destroy the
+  input it is meant to describe. Collisions and unopenable log paths are
+  configuration errors that fail the step.
+
+Diagnostic output is bounded so a pathological run cannot flood the job log, and
+truncation is always labelled rather than passed off as a complete reading.
+Untrusted values (model-authored reasons, artifact filenames, detection-log
+lines) have control characters escaped so each stays on one line and cannot
+inject a workflow command into the host job log.
+
 ### AI Credits and Token Usage
 
 The threat-detection pass is a **separate agentic engine invocation** from the main

@@ -245,6 +245,27 @@ surface as warnings without failing the job, except that `agent_failure` and
 artifact inventory defined by TD-17b as a Markdown table. Failure to write the
 configured summary MUST be treated as a configuration error.
 
+**TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
+section to standard output that is sufficient, on its own, to explain the
+conclusion. It MUST report the environment inputs it consumed (`RUN_DETECTION`,
+`GH_AW_DETECTION_CONTINUE_ON_ERROR`, `DETECTION_AGENTIC_EXECUTION_OUTCOME`) and
+the resolved result-file and detection-log paths, and — on both the safe and the
+threat path — the per-field verdict (`prompt_injection`, `secret_leak`,
+`malicious_patch`) together with an indexed list of reasons. When the result file
+is missing or unusable it MUST additionally emit a recursive listing of the
+result directory and, when a detection log is present, its line and byte counts
+plus every line containing a `THREAT_DETECTION_STATUS:` or
+`THREAT_DETECTION_RESULT:` marker. The detection log MUST NOT be used to derive
+the verdict itself — its only non-diagnostic use is the status-line reason
+mapping of TD-20b. Diagnostic output MAY be bounded to keep job logs readable,
+but when it is bounded the output MUST indicate that it was truncated and MUST
+NOT report a bounded prefix as though it were the whole input. Untrusted values
+echoed into the diagnostics (model-authored reasons, artifact filenames, and
+detection-log lines) MUST be escaped so that each is confined to a single
+physical output line and cannot emit a host workflow command. When `--log-file`
+is set, `conclude` MUST mirror these diagnostics and the final conclusion into
+the JSONL run log (TD-20a).
+
 ### 8.3 Exit Codes
 
 **TD-21**: The detector MUST use the following exit codes:
