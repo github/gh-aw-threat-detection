@@ -153,6 +153,66 @@ func TestConcludeContract(t *testing.T) {
 			wantSuccess:     "false",
 			wantReason:      "parse_error",
 		},
+		// --- Remaining matrix combinations from
+		// {RUN_DETECTION} x {result file present/absent/malformed} x {warn/strict} x
+		// {execution outcome} (gh-aw-threat-detection#694). The cases above cover the
+		// primary decision paths; these fill in the combinations that exercise
+		// mustFail's scope (agent_failure/parse_error only, never threat_detected) and
+		// confirm executionFailed is inert on the success path.
+		{
+			name:           "success on safe verdict is unaffected by warn mode",
+			runDetection:   "true",
+			warnMode:       true,
+			resultContent:  safeVerdict,
+			wantExit:       concludeExitProceed,
+			wantConclusion: "success",
+			wantSuccess:    "true",
+			wantReason:     "",
+		},
+		{
+			name:            "success on safe verdict is unaffected by executionFailed",
+			runDetection:    "true",
+			warnMode:        false,
+			executionFailed: true,
+			resultContent:   safeVerdict,
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "success",
+			wantSuccess:     "true",
+			wantReason:      "",
+		},
+		{
+			name:            "threat_detected warns even when execution failed (mustFail excludes threat_detected)",
+			runDetection:    "true",
+			warnMode:        true,
+			executionFailed: true,
+			resultContent:   threatVerdict,
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
+			wantSuccess:     "false",
+			wantReason:      "threat_detected",
+		},
+		{
+			name:            "malformed file warns when execution succeeded",
+			runDetection:    "true",
+			warnMode:        true,
+			executionFailed: false,
+			resultContent:   "{not json",
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
+			wantSuccess:     "false",
+			wantReason:      "parse_error",
+		},
+		{
+			name:            "missing file fails closed in strict mode regardless of execution outcome",
+			runDetection:    "true",
+			warnMode:        false,
+			executionFailed: true,
+			resultMissing:   true,
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+			wantSuccess:     "false",
+			wantReason:      "agent_failure",
+		},
 	}
 
 	for _, tt := range tests {
@@ -209,29 +269,73 @@ func TestConcludeContract(t *testing.T) {
 // TestConcludeUnreadableFileIsAgentFailure verifies that an IO error reading the
 // result file (here, the path is a directory) is classified as agent_failure
 // (ERR_SYSTEM), not parse_error — unreadable files are a system-side failure,
-// while parse_error is reserved for readable-but-malformed content.
+// while parse_error is reserved for readable-but-malformed content. It also
+// completes the {warn/strict} x {execution outcome} matrix for the unreadable-file
+// path (gh-aw-threat-detection#694).
 func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
-	dir := t.TempDir()
-	// A directory at the result path yields a non-ErrNotExist *fs.PathError from
-	// os.ReadFile, deterministically across platforms and regardless of euid.
-	resultFile := filepath.Join(dir, "detection_result.json")
-	if err := os.Mkdir(resultFile, 0o755); err != nil {
-		t.Fatalf("Mkdir error = %v", err)
+	tests := []struct {
+		name            string
+		warnMode        bool
+		executionFailed bool
+		wantExit        int
+		wantConclusion  string
+	}{
+		{
+			name:           "strict mode fails closed",
+			warnMode:       false,
+			wantExit:       concludeExitFail,
+			wantConclusion: "failure",
+		},
+		{
+			name:           "warn mode warns when execution succeeded",
+			warnMode:       true,
+			wantExit:       concludeExitProceed,
+			wantConclusion: "warning",
+		},
+		{
+			name:            "warn mode fails closed when execution failed (mustFail)",
+			warnMode:        true,
+			executionFailed: true,
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+		},
 	}
 
-	var stdout bytes.Buffer
-	c := &concluder{
-		runDetection: "true",
-		warnMode:     false,
-		githubOutput: filepath.Join(dir, "out"),
-		githubEnv:    filepath.Join(dir, "env"),
-		stdout:       &stdout,
-	}
-	if code := c.run(resultFile); code != concludeExitFail {
-		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
-	}
-	if got := parseKV(t, filepath.Join(dir, "out"))["reason"]; got != "agent_failure" {
-		t.Errorf("reason output = %q, want %q", got, "agent_failure")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// A directory at the result path yields a non-ErrNotExist *fs.PathError
+			// from os.ReadFile, deterministically across platforms and regardless of
+			// euid.
+			resultFile := filepath.Join(dir, "detection_result.json")
+			if err := os.Mkdir(resultFile, 0o755); err != nil {
+				t.Fatalf("Mkdir error = %v", err)
+			}
+
+			var stdout bytes.Buffer
+			c := &concluder{
+				runDetection:    "true",
+				warnMode:        tt.warnMode,
+				executionFailed: tt.executionFailed,
+				githubOutput:    filepath.Join(dir, "out"),
+				githubEnv:       filepath.Join(dir, "env"),
+				stdout:          &stdout,
+			}
+			if code := c.run(resultFile); code != tt.wantExit {
+				t.Fatalf("exit code = %d, want %d (stdout: %s)", code, tt.wantExit, stdout.String())
+			}
+			outputs := parseKV(t, filepath.Join(dir, "out"))
+			if got := outputs["reason"]; got != "agent_failure" {
+				t.Errorf("reason output = %q, want %q", got, "agent_failure")
+			}
+			if got := outputs["conclusion"]; got != tt.wantConclusion {
+				t.Errorf("conclusion output = %q, want %q", got, tt.wantConclusion)
+			}
+			env := parseKV(t, filepath.Join(dir, "env"))
+			if got := env["GH_AW_DETECTION_REASON"]; got != "agent_failure" {
+				t.Errorf("GH_AW_DETECTION_REASON = %q, want %q", got, "agent_failure")
+			}
+		})
 	}
 }
 
