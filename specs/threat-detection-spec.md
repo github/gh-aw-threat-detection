@@ -164,6 +164,14 @@ threat-detection:
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
+**TD-18a**: The detector MUST discover comment-memory markdown files
+(`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
+as untrusted, attacker-influenced input to be analyzed for prompt injection and
+secret leakage. When the `comment-memory` directory is absent or contains no
+markdown files, the detector MUST proceed and record that no comment-memory
+files were found. When the directory is present but cannot be inspected, the
+detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+
 ### 8.2 Output Contract
 
 **TD-19**: The detector MUST output the structured JSON result (per TD-08) to stdout.

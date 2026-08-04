@@ -200,6 +200,10 @@ func run() (code int) {
 		return exitError
 	}
 	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
+	for _, w := range arts.Warnings {
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w))
+		logger.Info("artifacts_warning", map[string]any{"warning": w})
+	}
 
 	// Resolve workflow-context overrides. Provenance is tracked from whether a
 	// flag was explicitly provided (FlagSet.Visit) rather than from the value's
