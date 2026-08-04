@@ -178,6 +178,36 @@ func TestRunWarnsWhenPromptAnalysisArtifactIsEmpty(t *testing.T) {
 	}
 }
 
+func TestRunDefaultsLogBesideOutput(t *testing.T) {
+	artifactsDir := t.TempDir()
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "result.json")
+	logPath := filepath.Join(outputDir, "detection-runlog.jsonl")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                      fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"THREAT_DETECTION_LOG_FILE": "",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	records := readJSONLRecords(t, logPath)
+	if findRecord(records, "run_start") == nil {
+		t.Fatalf("expected default log file to receive records: %#v", records)
+	}
+	if status := findRecord(records, "status"); status == nil || status["reason"] != reasonResultRecorded {
+		t.Fatalf("expected result_recorded status, got %#v", status)
+	}
+}
+
 func TestRunUsesLogFileEnvVar(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")
@@ -231,6 +261,62 @@ func TestRunRejectsLogFileCollidingWithOutput(t *testing.T) {
 	// Neither file should have been created by the aborted run.
 	if _, err := os.Stat(shared); !os.IsNotExist(err) {
 		t.Fatalf("expected no file to be written, stat err = %v", err)
+	}
+}
+
+func TestRunRejectsDefaultLogCollidingThroughDanglingOutputSymlink(t *testing.T) {
+	artifactsDir := t.TempDir()
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "result.json")
+	logPath := filepath.Join(outputDir, "detection-runlog.jsonl")
+	if err := os.Symlink(filepath.Base(logPath), outputPath); err != nil {
+		t.Fatalf("creating dangling output symlink: %v", err)
+	}
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{"THREAT_DETECTION_LOG_FILE": ""})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "must not point to the same file") {
+		t.Fatalf("stderr missing collision error, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no log file to be written, stat err = %v", err)
+	}
+}
+
+func TestRunRejectsCollisionWithParentTraversalAfterSymlink(t *testing.T) {
+	artifactsDir := t.TempDir()
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	childDir := filepath.Join(targetDir, "child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatalf("creating symlink target: %v", err)
+	}
+	linkPath := filepath.Join(root, "link")
+	if err := os.Symlink(childDir, linkPath); err != nil {
+		t.Fatalf("creating directory symlink: %v", err)
+	}
+	outputPath := linkPath + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "result.json"
+	logPath := filepath.Join(targetDir, "result.json")
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-log-file", logPath,
+		artifactsDir,
+	}, nil)
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "must not point to the same file") {
+		t.Fatalf("stderr missing collision error, got:\n%s", stderr)
 	}
 }
 

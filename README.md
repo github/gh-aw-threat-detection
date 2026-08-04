@@ -62,7 +62,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt` — Additional detection instructions appended to the prompt. Overrides `CUSTOM_PROMPT`
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
-- `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`
+- `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -115,10 +115,12 @@ engine/config failures surface as a step failure. See spec TD-21a.
 
 #### JSONL run logs (`--log-file`)
 
-Pass `--log-file <path>` (or set `THREAT_DETECTION_LOG_FILE`) to record a
-structured trace of the run as [JSON Lines](https://jsonlines.org/): one JSON
-object per line, created fresh (truncating any existing file) with `0600`
-permissions. Every record starts with `time` (RFC 3339), `level`
+Pass `--log-file <path>` (or set `THREAT_DETECTION_LOG_FILE`) to choose where to
+record a structured trace of the run. When `--output` is set without an explicit
+log path, the detector writes `detection-runlog.jsonl` in the output file's
+directory. The log uses [JSON Lines](https://jsonlines.org/): one JSON object per
+line, created fresh (truncating any existing file) with `0600` permissions. Every
+record starts with `time` (RFC 3339), `level`
 (`info`/`error`), and `event`, followed by event-specific fields. Emitted
 events include `run_start`, `artifacts_loaded`, `prompt_built`,
 `attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
@@ -153,10 +155,21 @@ and `GH_AW_DETECTION_REASON` to `GITHUB_ENV`. It reads these environment inputs:
 - `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` is warn mode
 - `DETECTION_AGENTIC_EXECUTION_OUTCOME` — `"failure"` makes `agent_failure`/`parse_error` hard-fail
 
-A missing result file reports `agent_failure` ("Detection result file not found
-at: <path>"), a malformed file reports `parse_error`, and detected threats report
-`threat_detected`. There is no log-scraping fallback: if the file is absent, the
-step fails loudly.
+A malformed (readable but unparseable) result file always reports `parse_error`,
+and detected threats report `threat_detected`. When the result file is missing,
+`conclude` consults the detection run's captured log (`--detection-log <path>`,
+default `<result-file-dir>/detection.log`) for the terminal
+`THREAT_DETECTION_STATUS: reason=<reason> exit=<code>` line and maps it onto the
+host-side reason:
+
+| status reason | host-side `reason` |
+|---|---|
+| `invalid_report_exhausted` | `parse_error` |
+| `output_write_error` | `parse_error` |
+| `engine_error` | `agent_failure` |
+| `cancelled` | `agent_failure` |
+| `config_error` | `agent_failure` |
+| absent / unrecognized / log unreadable | `agent_failure` ("Detection result file not found at: <path>") |
 
 ### AI Credits and Token Usage
 
@@ -182,20 +195,23 @@ log artifact) together with `gh-aw`'s `logs` tooling.
 
 ### Released binary
 
-The `threat-detect` binary is published as GitHub Release assets
-(`threat-detect-linux-amd64` and `threat-detect-linux-arm64`) alongside a
-shared `checksums.txt`. Download the asset matching your runner architecture and
-run it directly:
+The `threat-detect` binary is published as GitHub Release assets for Linux and
+macOS on amd64 and arm64 alongside a shared `checksums.txt`. Download the asset
+matching your runner platform and run it directly:
 
 ```bash
-# Pick the asset for your architecture (amd64 or arm64).
-case "$(uname -m)" in
-  x86_64|amd64) asset=threat-detect-linux-amd64 ;;
-  aarch64|arm64) asset=threat-detect-linux-arm64 ;;
+# Pick the asset for your operating system and architecture.
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64|Linux/amd64)  asset=threat-detect-linux-amd64 ;;
+  Linux/aarch64|Linux/arm64) asset=threat-detect-linux-arm64 ;;
+  Darwin/x86_64)             asset=threat-detect-darwin-x64 ;;
+  Darwin/arm64)              asset=threat-detect-darwin-arm64 ;;
+  *) echo "unsupported platform" >&2; exit 1 ;;
 esac
 gh release download --repo github/gh-aw-threat-detection \
   --pattern "$asset" --pattern checksums.txt
-sha256sum --check --ignore-missing checksums.txt
+awk -v asset="$asset" '$2 == asset' checksums.txt |
+  if command -v sha256sum >/dev/null; then sha256sum --check; else shasum -a 256 --check; fi
 install -m 0755 "$asset" ./threat-detect
 ./threat-detect /path/to/artifacts
 ```
@@ -203,6 +219,11 @@ install -m 0755 "$asset" ./threat-detect
 Omitting a tag downloads the latest stable (promoted) release. Production
 AI-backed detection requires the selected engine CLI and its authentication to
 be available on the runner where the binary runs.
+
+The macOS binaries are not code-signed or notarized. The `gh-aw` installer
+checksum-verifies CI downloads before execution. Browser downloads may be
+quarantined by Gatekeeper; prefer the installer, or verify the checksum before
+removing quarantine.
 
 ### Input (Artifacts Directory)
 
@@ -239,7 +260,7 @@ degraded. Empty or unreadable analysis files produce the same warning.
 
 ### Replay workflow
 
-Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, free-form replay log, replay result, and original-result comparison. Detectors that support structured logging also produce `detection-runlog.jsonl`; when available, the source run's structured log is retained separately as `original-detection-runlog.jsonl`.
 
 Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
 
@@ -277,10 +298,12 @@ Decisions for the unresolved extraction questions:
 ## Release Asset Setup
 
 The repository can remain private while publishing release assets. The release
-workflow builds `threat-detect-linux-amd64` and `threat-detect-linux-arm64`,
-records each asset's sha256 in the release notes, and attaches them (plus a
-shared `checksums.txt`) to a GitHub **prerelease** using the automatic
-`GITHUB_TOKEN` with `contents: write`.
+workflow builds Linux and macOS binaries for amd64 and arm64, records each
+asset's sha256 in the release notes, and attaches them (plus a shared
+`checksums.txt`) to a GitHub **prerelease** using the automatic `GITHUB_TOKEN`
+with `contents: write`. `release-targets.txt` is the canonical build matrix for
+both tagged and rolling releases. The scheduled Release Platform Parity workflow
+compares its asset names with the platforms supported by `gh-aw`'s installer.
 
 Maintainers need to configure the following before the binary is consumed by `gh-aw`:
 
@@ -314,7 +337,7 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-claude-standalone.md`
 - `.github/workflows/smoke-codex-standalone.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
 
 ### Detection-only Workflow
 
@@ -416,7 +439,9 @@ const DefaultThreatDetectionRepo    = "github/gh-aw-threat-detection"
 const DefaultThreatDetectionVersion = "v0.0.2"
 ```
 
-The detection job in compiled workflows downloads the pinned `threat-detect` release asset matching the runner architecture (`threat-detect-linux-amd64` or `threat-detect-linux-arm64`) and runs it instead of inline AI engine invocation.
+The detection job in compiled workflows downloads the pinned `threat-detect`
+release asset matching the runner operating system and architecture and runs it
+instead of inline AI engine invocation.
 
 ## Specification
 
