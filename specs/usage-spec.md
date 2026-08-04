@@ -132,13 +132,14 @@ recursively; `experiments/` and `comment-memory/` are currently inventory-only
 inputs (per TD-17b).
 
 **U-06b**: A host MAY declare that the guarded agent job produced a patch by
-setting `HAS_PATCH=true`, and MAY select strict artifact validation by setting
-`GH_AW_DETECTION_CONTINUE_ON_ERROR=false`. When `agent_output.json`,
-`aw-prompts/prompt.txt`, or an expected patch/bundle is absent, the detector
-warns and continues in the default warn mode, and terminates with `config_error`
-(exit `2`) before invoking the engine in strict mode (per TD-18c). A host that
-already validates these artifacts in its own setup step SHOULD pass the same
-`GH_AW_DETECTION_CONTINUE_ON_ERROR` value to the detector so both stages agree.
+setting `HAS_PATCH=true`, and MAY select strict input validation by setting
+`GH_AW_DETECTION_CONTINUE_ON_ERROR=false`. When `aw-prompts/prompt.txt` or
+`agent_output.json` is missing, empty, or unusable, or an expected patch/bundle
+is absent, the detector warns and continues in the default warn mode, and
+terminates with `config_error` (exit `2`) before invoking the engine in strict
+mode (per TD-18c). A host that already validates these artifacts in its own
+setup step SHOULD pass the same `GH_AW_DETECTION_CONTINUE_ON_ERROR` value to the
+detector so both stages agree.
 
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
@@ -255,7 +256,7 @@ environment inputs consumed by `conclude`:
 | Variable | Effect |
 |----------|--------|
 | `RUN_DETECTION` | When not `"true"`, the verdict is `skipped`/`success` |
-| `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Anything other than `"false"` selects warn mode |
+| `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Anything other than `"false"` (compared case-insensitively) selects warn mode |
 | `DETECTION_AGENTIC_EXECUTION_OUTCOME` | `"failure"` makes `agent_failure`/`parse_error` hard-fail |
 
 A host MAY also pass `--detection-log <path>` (default `<result-file-dir>/detection.log`)

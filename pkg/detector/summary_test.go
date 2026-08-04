@@ -125,3 +125,55 @@ func TestAppendStepSummary_EmptyPathIsNoop(t *testing.T) {
 		t.Fatalf("AppendStepSummary(\"\") error = %v, want nil", err)
 	}
 }
+
+func TestFormatVerdictSummary_ThreatMarkerAndHeadline(t *testing.T) {
+	result := &Result{PromptInjection: true, Reasons: []string{"jailbreak attempt"}}
+	out := FormatVerdictSummary(result, "failure", ReasonThreatDetected)
+
+	if !strings.Contains(out, ThreatDetectedMarker) {
+		t.Errorf("FormatVerdictSummary() missing threat marker; got:\n%s", out)
+	}
+	if strings.Contains(out, ThreatEngineErrorMarker) {
+		t.Errorf("FormatVerdictSummary() must not emit the engine-error marker for a real threat; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Agentic threat detected") {
+		t.Errorf("FormatVerdictSummary() missing threat headline; got:\n%s", out)
+	}
+}
+
+func TestFormatVerdictSummary_ToolingFailureUsesEngineErrorMarker(t *testing.T) {
+	for _, reason := range []string{ReasonAgentFailure, ReasonParseError} {
+		out := FormatVerdictSummary(nil, "warning", reason)
+
+		if !strings.Contains(out, ThreatEngineErrorMarker) {
+			t.Errorf("FormatVerdictSummary(%q) missing engine-error marker; got:\n%s", reason, out)
+		}
+		if strings.Contains(out, ThreatDetectedMarker) {
+			t.Errorf("FormatVerdictSummary(%q) must not emit the threat marker for a tooling failure; got:\n%s", reason, out)
+		}
+		if !strings.Contains(out, "<summary>Threat Detection Engine Failure</summary>") {
+			t.Errorf("FormatVerdictSummary(%q) missing engine-failure title; got:\n%s", reason, out)
+		}
+		if !strings.Contains(out, "This is a tooling failure, not a security finding.") {
+			t.Errorf("FormatVerdictSummary(%q) missing tooling-failure disclaimer; got:\n%s", reason, out)
+		}
+	}
+}
+
+func TestFormatVerdictSummary_CleanOutcomesCarryNoMarker(t *testing.T) {
+	for _, tc := range []struct {
+		conclusion string
+		reason     string
+	}{
+		{"success", ""},
+		{"skipped", ""},
+	} {
+		out := FormatVerdictSummary(nil, tc.conclusion, tc.reason)
+		if strings.Contains(out, "gh-aw-threat") {
+			t.Errorf("FormatVerdictSummary(%q) should carry no threat marker; got:\n%s", tc.conclusion, out)
+		}
+		if !strings.Contains(out, "<summary>Threat Detection Verdict</summary>") {
+			t.Errorf("FormatVerdictSummary(%q) missing default title; got:\n%s", tc.conclusion, out)
+		}
+	}
+}

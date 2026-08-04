@@ -181,18 +181,23 @@ inventory-only inputs; their contents MUST NOT be added to the detection prompt.
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
-**TD-18c**: The detector MUST report the expected-but-absent host-staged
-artifacts — `agent_output.json`, `aw-prompts/prompt.txt`, and, when the host
-declares `HAS_PATCH=true`, at least one `aw-*.patch` or `aw-*.bundle` file — and
-MUST follow the host's continue-on-error policy for them. In warn mode
-(`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`, the default) it MUST emit a
-warning for each and continue detection with the artifacts that were staged. In
-strict mode (`GH_AW_DETECTION_CONTINUE_ON_ERROR == "false"`) it MUST emit an
-error for each and terminate as a configuration error (`config_error`, exit `2`)
-before invoking the engine. The missing agent output MUST be reported with the
-`ERR_SYSTEM` code and the missing prompt and patch/bundle with `ERR_VALIDATION`.
-When structured run logging is enabled, the detector MUST record an
-`artifacts_missing_required` event listing the entries and the resolved mode.
+**TD-18c**: The detector MUST record an `ERR_VALIDATION` finding for each
+degraded required input — a missing or empty `aw-prompts/prompt.txt`, a missing,
+empty, or unparseable `agent_output.json`, and, when the host declares
+`HAS_PATCH=true`, the absence of any readable non-empty `aw-*.patch` or
+`aw-*.bundle` file — and MUST follow the host's continue-on-error policy for
+them. In warn mode — the default, selected whenever
+`GH_AW_DETECTION_CONTINUE_ON_ERROR` is unset or is not case-insensitively equal
+to `"false"` — the detector MUST emit each finding as a warning and continue
+detection with the inputs that were staged. In strict mode
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR` case-insensitively equal to `"false"`) it
+MUST emit each finding as an error and terminate as a configuration error
+(`config_error`, exit `2`) before invoking the engine. Findings about other
+artifacts (for example an unreadable `comment-memory` directory, per TD-18a)
+remain advisory warnings in both modes. When structured run logging is enabled,
+each finding MUST be recorded with the artifact it concerns and whether it is a
+required input. The detector MUST apply this same mode selection everywhere it
+consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
 
 **TD-18a**: The detector MUST discover comment-memory markdown files
 (`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
@@ -250,7 +255,8 @@ or contains no status line:
 
 A malformed (readable but unparseable) result file MUST unconditionally report
 `parse_error`; detected threats MUST report `threat_detected`. In warn mode
-(`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`) non-mandatory failures MUST
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR` not case-insensitively equal to `"false"`,
+per TD-18c) non-mandatory failures MUST
 surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
@@ -297,6 +303,23 @@ block MUST be written for every terminal outcome, including `skipped` (RUN_DETEC
 != "true"), so the UI always shows what conclusion was reached even absent a
 verdict. A failure to write the step summary MUST NOT change the subcommand's exit
 code.
+
+**TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
+actual security finding, so automated scanners and reviewers do not treat a
+detection outage as a threat. A reason of `agent_failure` or `parse_error` is a
+tooling failure; `threat_detected` is a security finding. The verdict step-summary
+block (TD-20h) MUST carry the marker matching the reason and MUST be titled and
+introduced accordingly, and the job-log diagnostics (TD-20d) MUST state the same
+distinction:
+
+| host-side `reason` | marker | headline |
+|---|---|---|
+| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Agentic threat detected — Manual review is REQUIRED before any follow-up automation. |
+| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure — The analysis engine could not complete. This is a tooling failure, not a security finding. |
+| absent (`success`, `skipped`) | none | none |
+
+The markers mirror gh-aw's `getThreatDetectedMarker` / `getThreatEngineErrorMarker`
+so both the inline and standalone paths emit identical machine-readable output.
 
 ### 8.3 Exit Codes
 

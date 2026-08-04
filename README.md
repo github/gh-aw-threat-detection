@@ -55,7 +55,7 @@ threat-detect [flags] <artifacts-dir>
 
 **Flags:**
 - `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
-- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`)
+- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`). The value is forwarded to the engine CLI verbatim and may be a model alias (`gh-aw` defaults the detection model to the `detection` alias when none is configured); aliases are resolved by the AWF API proxy, not by the detector
 - `--prompt-template` — Path to custom prompt template
 - `--workflow-name` — Workflow name for the prompt. Overrides `WORKFLOW_NAME`
 - `--workflow-description` — Workflow description for the prompt. Overrides `WORKFLOW_DESCRIPTION`
@@ -123,7 +123,7 @@ directory. The log uses [JSON Lines](https://jsonlines.org/): one JSON object pe
 line, created fresh (truncating any existing file) with `0600` permissions. Every
 record starts with `time` (RFC 3339), `level`
 (`info`/`error`), and `event`, followed by event-specific fields. Emitted
-events include `run_start`, `artifacts_loaded`, `artifacts_missing_required`,
+events include `run_start`, `artifacts_loaded`, `artifact_degraded`,
 `prompt_built`,
 `attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
 `detection_failed`, and a terminal `status` record carrying the same `reason`
@@ -154,7 +154,7 @@ threat-detect conclude --result-file /tmp/gh-aw/threat-detection/detection_resul
 and `GH_AW_DETECTION_REASON` to `GITHUB_ENV`. It reads these environment inputs:
 
 - `RUN_DETECTION` — when not `"true"`, the verdict is `skipped`/`success`
-- `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` is warn mode
+- `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` (compared case-insensitively) is warn mode
 - `DETECTION_AGENTIC_EXECUTION_OUTCOME` — `"failure"` makes `agent_failure`/`parse_error` hard-fail
 
 A malformed (readable but unparseable) result file always reports `parse_error`,
@@ -178,6 +178,19 @@ host-side reason:
 summary: per-field booleans (`prompt_injection`, `secret_leak`,
 `malicious_patch`), the reasons list, the resolved `conclusion`
 (`success`/`warning`/`failure`/`skipped`), and the reason code.
+
+Tooling failures are rendered distinctly from real security findings, matching
+`gh-aw`'s own output so automated scanners can tell them apart:
+
+| host-side `reason` | marker | block title |
+|---|---|---|
+| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Threat Detection Verdict |
+| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure |
+| absent (`success`, `skipped`) | none | Threat Detection Verdict |
+
+An engine failure block states plainly that the analysis engine could not
+complete and that this is a tooling failure, not a security finding; the same
+line is echoed into the job log.
 
 `conclude` writes a verbose, self-contained diagnostic section to the job log:
 banners framing the section, the environment inputs and resolved paths, and the
@@ -310,12 +323,14 @@ may omit the template or import tree, but the detector emits an
 `ERR_VALIDATION` warning because trusted-vs-untrusted prompt analysis is then
 degraded. Empty or unreadable analysis files produce the same warning.
 
-`agent_output.json` and `aw-prompts/prompt.txt` are the artifacts a host is
-expected to stage, as is at least one `aw-*.patch` / `aw-*.bundle` when the host
-sets `HAS_PATCH=true`. When one is missing the detector follows the host's
-continue-on-error policy: by default it warns and analyzes whatever was staged,
-and with `GH_AW_DETECTION_CONTINUE_ON_ERROR=false` it reports an error and exits
-`2` (`config_error`) before the engine runs.
+`aw-prompts/prompt.txt` and `agent_output.json` are the required detection
+inputs, as is at least one `aw-*.patch` / `aw-*.bundle` when the host sets
+`HAS_PATCH=true`. When one of them is missing, empty, or unusable the detector
+follows the host's continue-on-error policy: by default it warns and analyzes
+whatever was staged, and with `GH_AW_DETECTION_CONTINUE_ON_ERROR=false` it
+reports each finding as an error and exits `2` (`config_error`) before the
+engine runs. Findings about other artifacts stay advisory warnings in both
+modes.
 
 Every file below the artifacts directory is recorded with its size and consumed
 status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is
@@ -398,8 +413,8 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_NAME` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-name`. |
 | `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-description`. |
 | `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. Overridable with `--custom-prompt` / `--custom-prompt-file`. |
-| `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Optional, host-integrated runs | Anything other than `"false"` is warn mode. `"false"` makes missing required artifacts a `config_error` (exit `2`), and is also honored by `conclude`. |
-| `HAS_PATCH` | Optional, host-integrated runs | `"true"` declares that the agent job produced a patch, so a missing `aw-*.patch` / `aw-*.bundle` is reported. |
+| `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Optional, host-integrated runs | Anything other than `"false"` is warn mode; the value is compared case-insensitively, so `"False"` also selects strict mode. Strict mode makes a degraded required input a `config_error` (exit `2`), and is also honored by `conclude`. |
+| `HAS_PATCH` | Optional, host-integrated runs | `"true"` declares that the agent job produced a patch, so a missing `aw-*.patch` / `aw-*.bundle` is reported as a degraded required input. |
 
 ## Development
 
