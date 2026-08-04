@@ -235,6 +235,67 @@ func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
 	}
 }
 
+func TestConcludeWritesVerdictStepSummary(t *testing.T) {
+	dir := t.TempDir()
+	stepSummaryPath := filepath.Join(dir, "step_summary.md")
+	resultFile := writeResultFixture(t, threatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stepSummary:  stepSummaryPath,
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	summary := string(data)
+	for _, want := range []string{
+		"<summary>Threat Detection Verdict</summary>",
+		"| Prompt Injection | true |",
+		"| Conclusion | failure |",
+		"| Reason Code | threat_detected |",
+		"jailbreak attempt",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("step summary missing %q; got:\n%s", want, summary)
+		}
+	}
+}
+
+func TestConcludeSkippedWritesVerdictStepSummary(t *testing.T) {
+	dir := t.TempDir()
+	stepSummaryPath := filepath.Join(dir, "step_summary.md")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "false",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stepSummary:  stepSummaryPath,
+		stdout:       &stdout,
+	}
+	if code := c.run(filepath.Join(dir, "detection_result.json")); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitProceed, stdout.String())
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	if !strings.Contains(string(data), "| Conclusion | skipped |") {
+		t.Errorf("step summary missing skipped conclusion; got:\n%s", string(data))
+	}
+}
+
 func TestConcludeThreatMessageEscaped(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := writeResultFixture(t, threatVerdict)

@@ -99,13 +99,14 @@ func run() (code int) {
 	}()
 
 	var (
-		engineID   string
-		model      string
-		promptFile string
-		outputJSON string
-		logFile    string
-		version    bool
-		retries    int
+		engineID    string
+		model       string
+		promptFile  string
+		outputJSON  string
+		logFile     string
+		stepSummary string
+		version     bool
+		retries     int
 	)
 
 	// Parse flags with ContinueOnError so usage/flag errors return through the
@@ -118,6 +119,7 @@ func run() (code int) {
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
+	flag.StringVar(&stepSummary, "step-summary", os.Getenv("GITHUB_STEP_SUMMARY"), "Path to append the rendered prompt to the job step summary (defaults to env GITHUB_STEP_SUMMARY)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
@@ -213,6 +215,16 @@ func run() (code int) {
 		return exitError
 	}
 	logger.Info("prompt_built", map[string]any{"prompt_bytes": len(prompt)})
+
+	// Surface the prompt actually rendered by threat-detect (including the
+	// resolved prompt-analysis section and engine/model/retries) to the job
+	// step summary. gh-aw's own prompt-rendering step summary reflects a
+	// template threat-detect never receives, so this is the only summary that
+	// reflects what was actually sent to the engine.
+	if err := detector.AppendStepSummary(stepSummary, detector.FormatPromptSummary(engine.Canonical(engineID), model, retries, prompt)); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write prompt step summary: %v\n", err)
+		logger.Error("step_summary_write_failed", map[string]any{"stage": "prompt", "error": err.Error()})
+	}
 
 	// Create engine
 	eng, err := engine.New(engineID, model)
