@@ -9,6 +9,15 @@ import (
 	"strings"
 )
 
+// Default workflow-context values used when neither the corresponding flag nor
+// environment variable supplies one. They are exported so callers (e.g. the CLI)
+// can detect when a value was defaulted rather than provided, which is useful
+// for diagnosing dropped workflow-context plumbing.
+const (
+	DefaultWorkflowName        = "Unnamed Workflow"
+	DefaultWorkflowDescription = "No description provided"
+)
+
 // Artifacts holds the loaded artifact information for threat detection.
 type Artifacts struct {
 	// Dir is the base artifacts directory path.
@@ -56,8 +65,8 @@ func Load(dir string) (*Artifacts, error) {
 
 	arts := &Artifacts{
 		Dir:                 dir,
-		WorkflowName:        envOrDefault("WORKFLOW_NAME", "Unnamed Workflow"),
-		WorkflowDescription: envOrDefault("WORKFLOW_DESCRIPTION", "No description provided"),
+		WorkflowName:        envOrDefault("WORKFLOW_NAME", DefaultWorkflowName),
+		WorkflowDescription: envOrDefault("WORKFLOW_DESCRIPTION", DefaultWorkflowDescription),
 		CustomPrompt:        os.Getenv("CUSTOM_PROMPT"),
 	}
 

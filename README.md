@@ -57,6 +57,10 @@ threat-detect [flags] <artifacts-dir>
 - `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
 - `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`)
 - `--prompt-template` — Path to custom prompt template
+- `--workflow-name` — Workflow name for the prompt. Overrides `WORKFLOW_NAME`
+- `--workflow-description` — Workflow description for the prompt. Overrides `WORKFLOW_DESCRIPTION`
+- `--custom-prompt` — Additional detection instructions appended to the prompt. Overrides `CUSTOM_PROMPT`
+- `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
@@ -287,9 +291,9 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `COPILOT_GITHUB_TOKEN` | Running `--engine copilot` in an environment that needs explicit token-based Copilot authentication | Use a fine-grained PAT owned by a user account with **Account permissions → Copilot Requests: Read**. `GITHUB_TOKEN` is not sufficient for Copilot inference. |
 | `ANTHROPIC_API_KEY` | Running `--engine claude` with the Claude CLI | Not used by unit tests. |
 | `OPENAI_API_KEY` | Running `--engine codex` with the Codex CLI | Not used by unit tests. |
-| `WORKFLOW_NAME` | Optional local runs | Included in the generated prompt. |
-| `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. |
-| `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. |
+| `WORKFLOW_NAME` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-name`. |
+| `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-description`. |
+| `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. Overridable with `--custom-prompt` / `--custom-prompt-file`. |
 
 ## Development
 
