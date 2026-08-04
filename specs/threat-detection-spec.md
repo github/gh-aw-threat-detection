@@ -266,6 +266,25 @@ physical output line and cannot emit a host workflow command. When `--log-file`
 is set, `conclude` MUST mirror these diagnostics and the final conclusion into
 the JSONL run log (TD-20a).
 
+**TD-20g**: The detector MUST support appending the prompt it actually rendered
+(after template placeholder substitution and prompt-analysis embedding) to the job
+step summary via the `--step-summary` flag, defaulting to the `GITHUB_STEP_SUMMARY`
+environment variable. The appended block MUST be collapsible (rendered inside a
+`<details>` element, collapsed by default), MUST include the resolved engine,
+model, and retries configuration for the run, and MUST be bounded in size so a
+single run cannot exhaust the step summary's shared per-job budget. A failure to
+write the step summary MUST NOT fail the run; it is a best-effort diagnostic aid.
+
+**TD-20h**: The `conclude` subcommand MUST support appending a verdict block to the
+job step summary via its own `--step-summary` flag, defaulting to
+`GITHUB_STEP_SUMMARY`. The block MUST be collapsible and MUST include the
+per-category booleans (`prompt_injection`, `secret_leak`, `malicious_patch`), the
+`reasons` list, the resolved `conclusion`, and the reason code (when present). This
+block MUST be written for every terminal outcome, including `skipped` (RUN_DETECTION
+!= "true"), so the UI always shows what conclusion was reached even absent a
+verdict. A failure to write the step summary MUST NOT change the subcommand's exit
+code.
+
 ### 8.3 Exit Codes
 
 **TD-21**: The detector MUST use the following exit codes:

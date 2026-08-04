@@ -107,6 +107,7 @@ func run() (code int) {
 		promptFile          string
 		outputJSON          string
 		logFile             string
+		stepSummary         string
 		workflowName        string
 		workflowDescription string
 		customPrompt        string
@@ -125,6 +126,7 @@ func run() (code int) {
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
+	flag.StringVar(&stepSummary, "step-summary", os.Getenv("GITHUB_STEP_SUMMARY"), "Path to append the rendered prompt to the job step summary (defaults to env GITHUB_STEP_SUMMARY)")
 	flag.StringVar(&workflowName, "workflow-name", "", "Workflow name for the prompt (overrides WORKFLOW_NAME)")
 	flag.StringVar(&workflowDescription, "workflow-description", "", "Workflow description for the prompt (overrides WORKFLOW_DESCRIPTION)")
 	flag.StringVar(&customPrompt, "custom-prompt", "", "Additional detection instructions appended to the prompt (overrides CUSTOM_PROMPT)")
@@ -158,19 +160,17 @@ func run() (code int) {
 		logFile = dir + "detection-runlog.jsonl"
 	}
 
-	// Reject a --log-file that collides with --output: they are opened and
-	// truncated independently, so sharing an inode would interleave the JSONL
-	// trace and the result JSON and corrupt both while still reporting success.
-	if logFile != "" && outputJSON != "" {
-		if same, err := samePath(logFile, outputJSON); err != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving output paths: %v\n", err)
-			reason = reasonConfigError
-			return exitError
-		} else if same {
-			fmt.Fprintf(os.Stderr, "Error: --log-file and --output must not point to the same file (%q)\n", logFile)
-			reason = reasonConfigError
-			return exitError
-		}
+	// Reject collisions among the run's independently-written destinations
+	// (--log-file, --output, --step-summary): each is opened and written on
+	// its own, so aliasing any two would interleave or clobber their content.
+	if err := rejectPathCollisions(
+		namedPath{"--log-file", logFile},
+		namedPath{"--output", outputJSON},
+		namedPath{"--step-summary", stepSummary},
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		reason = reasonConfigError
+		return exitError
 	}
 
 	// Open the JSONL run log when configured or derived. A failure here is a
@@ -306,6 +306,16 @@ func run() (code int) {
 		"custom_prompt_source":           customPromptSource,
 		"custom_prompt_bytes":            len(arts.CustomPrompt),
 	})
+
+	// Surface the prompt actually rendered by threat-detect (including the
+	// resolved prompt-analysis section and engine/model/retries) to the job
+	// step summary. gh-aw's own prompt-rendering step summary reflects a
+	// template threat-detect never receives, so this is the only summary that
+	// reflects what was actually sent to the engine.
+	if err := detector.AppendStepSummary(stepSummary, detector.FormatPromptSummary(engine.Canonical(engineID), model, retries, prompt)); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write prompt step summary: %v\n", err)
+		logger.Error("step_summary_write_failed", map[string]any{"stage": "prompt", "error": err.Error()})
+	}
 
 	// Create engine
 	eng, err := engine.New(engineID, model)

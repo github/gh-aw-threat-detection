@@ -366,6 +366,67 @@ func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
 	}
 }
 
+func TestConcludeWritesVerdictStepSummary(t *testing.T) {
+	dir := t.TempDir()
+	stepSummaryPath := filepath.Join(dir, "step_summary.md")
+	resultFile := writeResultFixture(t, threatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stepSummary:  stepSummaryPath,
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	summary := string(data)
+	for _, want := range []string{
+		"<summary>Threat Detection Verdict</summary>",
+		"| Prompt Injection | true |",
+		"| Conclusion | failure |",
+		"| Reason Code | threat_detected |",
+		"jailbreak attempt",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("step summary missing %q; got:\n%s", want, summary)
+		}
+	}
+}
+
+func TestConcludeSkippedWritesVerdictStepSummary(t *testing.T) {
+	dir := t.TempDir()
+	stepSummaryPath := filepath.Join(dir, "step_summary.md")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "false",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stepSummary:  stepSummaryPath,
+		stdout:       &stdout,
+	}
+	if code := c.run(filepath.Join(dir, "detection_result.json")); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitProceed, stdout.String())
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	if !strings.Contains(string(data), "| Conclusion | skipped |") {
+		t.Errorf("step summary missing skipped conclusion; got:\n%s", string(data))
+	}
+}
+
 func TestConcludeThreatMessageEscaped(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := writeResultFixture(t, threatVerdict)
@@ -1040,5 +1101,43 @@ func TestConcludeUnopenableLogFileIsConfigError(t *testing.T) {
 
 	if code := runConclude([]string{"--result-file", resultFile, "--log-file", logPath}); code != concludeExitFail {
 		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+	}
+}
+
+func TestRunConcludeRejectsStepSummaryCollidingWithResultFile(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, safeVerdict)
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	code := runConclude([]string{"--result-file", resultFile, "--step-summary", resultFile})
+	if code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
+	}
+	// The result file must survive untouched — a collision must be rejected
+	// before anything is written, so the structured verdict is never clobbered.
+	data, err := os.ReadFile(resultFile)
+	if err != nil {
+		t.Fatalf("ReadFile(resultFile) error = %v", err)
+	}
+	if string(data) != safeVerdict {
+		t.Fatalf("result file was modified: got %q, want %q", string(data), safeVerdict)
+	}
+}
+
+func TestRunConcludeRejectsStepSummaryCollidingWithGithubOutput(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, safeVerdict)
+	shared := filepath.Join(dir, "shared")
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GITHUB_OUTPUT", shared)
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	code := runConclude([]string{"--result-file", resultFile, "--step-summary", shared})
+	if code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
 	}
 }

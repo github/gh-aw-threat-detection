@@ -87,10 +87,12 @@ func runConclude(args []string) int {
 	fs.SetOutput(os.Stderr)
 	var (
 		resultFile   string
+		stepSummary  string
 		detectionLog string
 		logFile      string
 	)
 	fs.StringVar(&resultFile, "result-file", defaultConcludeResultFile, "Path to the structured detection_result.json verdict file")
+	fs.StringVar(&stepSummary, "step-summary", os.Getenv("GITHUB_STEP_SUMMARY"), "Path to append the verdict to the job step summary (defaults to env GITHUB_STEP_SUMMARY)")
 	fs.StringVar(&detectionLog, "detection-log", "", "Path to the detection run's captured log, consulted to refine agent_failure/parse_error and to render diagnostics when the result file is missing (default: <result-file dir>/detection.log)")
 	fs.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
 	if err := fs.Parse(args); err != nil {
@@ -101,6 +103,23 @@ func runConclude(args []string) int {
 	}
 	if detectionLog == "" {
 		detectionLog = filepath.Join(filepath.Dir(resultFile), defaultDetectionLogName)
+	}
+
+	githubOutput := os.Getenv("GITHUB_OUTPUT")
+	githubEnv := os.Getenv("GITHUB_ENV")
+
+	// Reject collisions among the run's independently-written destinations:
+	// --step-summary must not alias the structured result file (which would be
+	// overwritten with Markdown after being read) or the GitHub Actions command
+	// files (which the runner may reject outright if polluted with Markdown).
+	if err := rejectPathCollisions(
+		namedPath{"--result-file", resultFile},
+		namedPath{"--step-summary", stepSummary},
+		namedPath{"$GITHUB_OUTPUT", githubOutput},
+		namedPath{"$GITHUB_ENV", githubEnv},
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return concludeExitFail
 	}
 
 	// The JSONL log is opened with O_TRUNC, so it must not alias an input this
@@ -153,8 +172,9 @@ func runConclude(args []string) int {
 		warnMode:         os.Getenv("GH_AW_DETECTION_CONTINUE_ON_ERROR") != "false",
 		executionFailed:  os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
 		executionOutcome: os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
-		githubOutput:     os.Getenv("GITHUB_OUTPUT"),
-		githubEnv:        os.Getenv("GITHUB_ENV"),
+		githubOutput:     githubOutput,
+		githubEnv:        githubEnv,
+		stepSummary:      stepSummary,
 		detectionLog:     detectionLog,
 		logger:           logger,
 		stdout:           os.Stdout,
@@ -173,6 +193,7 @@ type concluder struct {
 
 	githubOutput string // path of $GITHUB_OUTPUT (may be empty)
 	githubEnv    string // path of $GITHUB_ENV (may be empty)
+	stepSummary  string // path of $GITHUB_STEP_SUMMARY (may be empty)
 	detectionLog string // detection run log path; empty derives the sibling default
 	logger       *runlog.Logger
 	stdout       io.Writer
@@ -221,6 +242,7 @@ func (c *concluder) conclude(resultFile string) int {
 		c.setOutput("success", "true")
 		c.setOutput("reason", "")
 		c.exportVariable("GH_AW_DETECTION_REASON", "")
+		c.writeVerdictSummary(nil, "skipped", "")
 		c.info("✅ Detection skipped — no threats to evaluate.")
 		c.logger.Info("conclude_outcome", map[string]any{
 			"conclusion": "skipped",
@@ -251,16 +273,16 @@ func (c *concluder) conclude(resultFile string) int {
 
 		if errors.Is(err, fs.ErrNotExist) {
 			reason, code := c.detectionFailureReason()
-			return c.fail(reason, fmt.Sprintf("%s: ❌ Detection result file not found at: %s", code, resultFile))
+			return c.fail(nil, reason, fmt.Sprintf("%s: ❌ Detection result file not found at: %s", code, resultFile))
 		}
 		var pathErr *fs.PathError
 		if errors.As(err, &pathErr) {
 			reason, code := c.detectionFailureReason()
-			return c.fail(reason, fmt.Sprintf("%s: ❌ Detection result file unreadable at %s: %v", code, resultFile, err))
+			return c.fail(nil, reason, fmt.Sprintf("%s: ❌ Detection result file unreadable at %s: %v", code, resultFile, err))
 		}
 		c.info("💡 This usually means the AI engine did not record a verdict in the expected format.")
 		c.info(`   Expected content: {"prompt_injection":bool,"secret_leak":bool,"malicious_patch":bool,"reasons":[...]}`)
-		return c.fail("parse_error", fmt.Sprintf("%s: ❌ Failed to parse detection result file %s: %v", errCodeParse, resultFile, err))
+		return c.fail(nil, "parse_error", fmt.Sprintf("%s: ❌ Failed to parse detection result file %s: %v", errCodeParse, resultFile, err))
 	}
 
 	c.info("✔️  Structured result file found and parsed successfully.")
@@ -282,7 +304,7 @@ func (c *concluder) conclude(resultFile string) int {
 		if len(result.Reasons) > 0 {
 			message += "\nReasons: " + strings.Join(result.Reasons, "; ")
 		}
-		return c.fail("threat_detected", message)
+		return c.fail(result, "threat_detected", message)
 	}
 
 	c.info("✅ No security threats detected. Safe outputs may proceed.")
@@ -291,6 +313,7 @@ func (c *concluder) conclude(resultFile string) int {
 	c.setOutput("success", "true")
 	c.setOutput("reason", "")
 	c.exportVariable("GH_AW_DETECTION_REASON", "")
+	c.writeVerdictSummary(result, "success", "")
 	c.logger.Info("conclude_outcome", map[string]any{
 		"conclusion": "success",
 		"reason":     "",
@@ -599,7 +622,7 @@ func lastDetectionStatusReason(path string) string {
 //   - In warn mode and not mustFail, emit a warning, set conclusion=warning, and
 //     let the job proceed (exit 0).
 //   - Otherwise set conclusion=failure, emit an error, and fail closed (exit 1).
-func (c *concluder) fail(reason, message string) int {
+func (c *concluder) fail(result *detector.Result, reason, message string) int {
 	mustFail := c.executionFailed && (reason == "agent_failure" || reason == "parse_error")
 	c.setOutput("reason", reason)
 	c.exportVariable("GH_AW_DETECTION_REASON", reason)
@@ -608,6 +631,7 @@ func (c *concluder) fail(reason, message string) int {
 		c.setOutput("conclusion", "warning")
 		c.exportVariable("GH_AW_DETECTION_CONCLUSION", "warning")
 		c.setOutput("success", "false")
+		c.writeVerdictSummary(result, "warning", reason)
 		c.logger.Error("conclude_outcome", map[string]any{
 			"conclusion": "warning",
 			"reason":     reason,
@@ -621,6 +645,7 @@ func (c *concluder) fail(reason, message string) int {
 	c.setOutput("conclusion", "failure")
 	c.exportVariable("GH_AW_DETECTION_CONCLUSION", "failure")
 	c.setOutput("success", "false")
+	c.writeVerdictSummary(result, "failure", reason)
 	c.logger.Error("conclude_outcome", map[string]any{
 		"conclusion": "failure",
 		"reason":     reason,
@@ -629,6 +654,15 @@ func (c *concluder) fail(reason, message string) int {
 		"message":    message,
 	})
 	return concludeExitFail
+}
+
+// writeVerdictSummary appends the verdict block to the job step summary,
+// logging (but not failing on) any write error since the summary is a
+// best-effort diagnostic aid, not part of the conclude contract.
+func (c *concluder) writeVerdictSummary(result *detector.Result, conclusion, reasonCode string) {
+	if err := detector.AppendStepSummary(c.stepSummary, detector.FormatVerdictSummary(result, conclusion, reasonCode)); err != nil {
+		fmt.Fprintf(os.Stderr, "conclude: failed to write step summary: %v\n", err)
+	}
 }
 
 // setOutput appends a step output to $GITHUB_OUTPUT. Values are single-line

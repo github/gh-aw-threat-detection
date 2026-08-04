@@ -296,6 +296,50 @@ func TestRunRejectsLogFileCollidingWithOutput(t *testing.T) {
 	}
 }
 
+func TestRunRejectsStepSummaryCollidingWithOutput(t *testing.T) {
+	artifactsDir := t.TempDir()
+	shared := filepath.Join(t.TempDir(), "same.json")
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", shared,
+		"-step-summary", shared,
+		artifactsDir,
+	}, nil)
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "--step-summary") || !strings.Contains(stderr, "must not point to the same file") {
+		t.Fatalf("stderr missing collision error, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(shared); !os.IsNotExist(err) {
+		t.Fatalf("expected no file to be written, stat err = %v", err)
+	}
+}
+
+func TestRunRejectsStepSummaryCollidingWithLogFile(t *testing.T) {
+	artifactsDir := t.TempDir()
+	shared := filepath.Join(t.TempDir(), "same.jsonl")
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-log-file", shared,
+		"-step-summary", shared,
+		artifactsDir,
+	}, nil)
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "--step-summary") || !strings.Contains(stderr, "--log-file") {
+		t.Fatalf("stderr missing collision error mentioning both flags, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(shared); !os.IsNotExist(err) {
+		t.Fatalf("expected no file to be written, stat err = %v", err)
+	}
+}
+
 func TestRunRejectsDefaultLogCollidingThroughDanglingOutputSymlink(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputDir := t.TempDir()

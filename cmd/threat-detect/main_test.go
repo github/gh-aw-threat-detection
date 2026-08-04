@@ -246,6 +246,69 @@ func TestRunEmitsEngineErrorStatusOnFailClosed(t *testing.T) {
 	}
 }
 
+func TestRunWritesPromptStepSummary(t *testing.T) {
+	artifactsDir := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	stepSummaryPath := filepath.Join(t.TempDir(), "step_summary.md")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-step-summary", stepSummaryPath,
+		"-retries", "3",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	summary := string(data)
+	for _, want := range []string{
+		"<summary>Threat Detection Prompt</summary>",
+		"**Engine**: copilot",
+		"**Retries**: 3",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("step summary missing %q; got:\n%s", want, summary)
+		}
+	}
+}
+
+func TestRunStepSummaryDefaultsToEnv(t *testing.T) {
+	artifactsDir := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	stepSummaryPath := filepath.Join(t.TempDir(), "step_summary.md")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GITHUB_STEP_SUMMARY": stepSummaryPath,
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	if _, err := os.Stat(stepSummaryPath); err != nil {
+		t.Fatalf("expected GITHUB_STEP_SUMMARY env default to be used: %v", err)
+	}
+}
+
 func runWithTestArgs(t *testing.T, args []string, env map[string]string) int {
 	t.Helper()
 	code, _ := runWithTestArgsCapture(t, args, env)

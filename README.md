@@ -63,6 +63,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
+- `--step-summary` — Path to append the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section) as a collapsible block in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -170,6 +171,12 @@ host-side reason:
 | `cancelled` | `agent_failure` |
 | `config_error` | `agent_failure` |
 | absent / unrecognized / log unreadable | `agent_failure` ("Detection result file not found at: <path>") |
+
+`conclude` also accepts `--step-summary <path>` (defaulting to
+`GITHUB_STEP_SUMMARY`) to append a collapsible verdict block to the job step
+summary: per-field booleans (`prompt_injection`, `secret_leak`,
+`malicious_patch`), the reasons list, the resolved `conclusion`
+(`success`/`warning`/`failure`/`skipped`), and the reason code.
 
 `conclude` writes a verbose, self-contained diagnostic section to the job log:
 banners framing the section, the environment inputs and resolved paths, and the
