@@ -14,6 +14,7 @@ import (
 
 func TestRunInvokesAgenticEngine(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`
@@ -98,6 +99,7 @@ func TestRunPassesPromptAnalysisToEngine(t *testing.T) {
 
 func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["from sink"]}`
@@ -134,6 +136,7 @@ func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
 
 func TestRunEngineFailsWithoutSinkResult(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	// The engine emits a legacy-looking safe verdict on stdout but exits
@@ -164,6 +167,7 @@ func TestRunEngineFailsWithoutSinkResult(t *testing.T) {
 
 func TestRunEarlyTerminationOnSink(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
@@ -195,6 +199,7 @@ func TestRunEarlyTerminationOnSink(t *testing.T) {
 
 func TestRunEmitsResultRecordedStatus(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`
@@ -219,6 +224,7 @@ func TestRunEmitsResultRecordedStatus(t *testing.T) {
 
 func TestRunEmitsEngineErrorStatusOnFailClosed(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	// Engine dies without recording a sink verdict: fail closed with exit 2 and
@@ -363,6 +369,23 @@ func writeFakeCopilotFailing(t *testing.T, markerPath, stdout string, exitCode i
 		t.Fatalf("writing fake copilot: %v", err)
 	}
 	return binDir
+}
+
+// writeMinimalArtifacts populates dir with a non-empty prompt and agent
+// output file so run() proceeds past artifacts loading. Tests that only
+// exercise engine/result-sink behavior use this to avoid tripping the
+// AllPrimaryInputsMissing hard-fail (see pkg/artifacts.Load).
+func writeMinimalArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "aw-prompts"), 0o755); err != nil {
+		t.Fatalf("creating aw-prompts dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "aw-prompts", "prompt.txt"), []byte("test workflow prompt"), 0o644); err != nil {
+		t.Fatalf("writing prompt.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`), 0o644); err != nil {
+		t.Fatalf("writing agent_output.json: %v", err)
+	}
 }
 
 func readResultFile(t *testing.T, path string) map[string]any {
