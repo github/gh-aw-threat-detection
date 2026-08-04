@@ -152,7 +152,9 @@ this ordered flow:
 
 1. **Acquire** the pinned detector asset and verify its checksum (Section 2).
 2. **Prepare** the artifacts directory from the guarded agentic run's outputs
-   (per TD-17).
+   (per TD-17). The prepared directory SHOULD include the agent's
+   `comment-memory/` directory when present, so persisted, attacker-influenced
+   comment memory is analyzed alongside the prompt and patch (per TD-18a).
 3. **Run** the detector once, writing its verdict to a structured result file
    (`detection_result.json`).
 4. **Conclude** the run with the `conclude` subcommand (Section 6) to derive the

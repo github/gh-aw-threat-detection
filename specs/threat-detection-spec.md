@@ -166,12 +166,20 @@ threat-detection:
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
-**TD-18a**: If `aw-prompts/prompt-template.txt` or
+**TD-18a**: The detector MUST discover comment-memory markdown files
+(`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
+as untrusted, attacker-influenced input to be analyzed for prompt injection and
+secret leakage. When the `comment-memory` directory is absent or contains no
+markdown files, the detector MUST proceed and record that no comment-memory
+files were found. When the directory is present but cannot be inspected, the
+detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+
+**TD-18b**: If `aw-prompts/prompt-template.txt` or
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
-detector MUST continue with degraded trusted-vs-untrusted prompt analysis and MUST emit an
-`ERR_VALIDATION` warning to the job log. When structured run logging is enabled,
-it MUST also emit a warning-level `prompt_analysis_degraded` event identifying
-the unavailable artifacts.
+detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
+MUST emit an `ERR_VALIDATION` warning to the job log. When structured run
+logging is enabled, it MUST also emit a warning-level
+`prompt_analysis_degraded` event identifying the unavailable artifacts.
 
 ### 8.2 Output Contract
 
@@ -233,6 +241,22 @@ treats a missing verdict as a recoverable `parse_error` and proceeds.
 | `WORKFLOW_NAME` | Name of the workflow being analyzed |
 | `WORKFLOW_DESCRIPTION` | Description of the workflow |
 | `CUSTOM_PROMPT` | Additional detection instructions |
+
+**TD-22-flags**: The detector MUST also accept the workflow context via explicit
+flags so it cannot be silently dropped by environment-variable plumbing:
+`--workflow-name` overrides `WORKFLOW_NAME`, `--workflow-description` overrides
+`WORKFLOW_DESCRIPTION`, and `--custom-prompt` (or `--custom-prompt-file`, which
+reads the instructions from a file) overrides `CUSTOM_PROMPT`. When both a flag
+and its environment variable are set, the flag wins (even when empty, so an
+explicit empty `--custom-prompt` clears an env-supplied prompt);
+`--custom-prompt-file` takes precedence over `--custom-prompt`. A value is
+reported as defaulted only when neither its flag nor its environment variable was
+provided (not merely because it equals the fallback text). The detector MUST
+record the resolved workflow
+name and description, whether each fell back to its built-in default, and the
+source and byte length of any applied custom prompt (`flag`, `file`, `env`, or
+`none`) on the `prompt_built` run-log event and on a single stderr diagnostic
+line, so a dropped custom prompt or missing workflow context is diagnosable.
 
 **TD-22a**: When the model is not set explicitly (via the `--model` flag or engine configuration), the detector MUST resolve the model for the selected engine from environment variables, in the following precedence:
 
