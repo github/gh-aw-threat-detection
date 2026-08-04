@@ -140,6 +140,7 @@ func TestRunWritesJSONLLog(t *testing.T) {
 
 func TestRunWarnsWhenPromptAnalysisArtifactsAreMissing(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
@@ -186,6 +187,7 @@ func TestRunWarnsWhenPromptAnalysisArtifactsAreMissing(t *testing.T) {
 
 func TestRunWarnsWhenPromptAnalysisArtifactIsEmpty(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
 	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
 		t.Fatalf("creating prompts directory: %v", err)
