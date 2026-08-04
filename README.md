@@ -163,9 +163,20 @@ agentic run it guards. It builds its own prompt and runs the selected engine
 The cost is billed to the same engine account/credentials used for detection
 (`COPILOT_GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`).
 
-**Is there a separate token cap for the detection job?** There is no token-budget
-cap enforced by this component. Two mechanisms bound the detection pass's cost:
+**Is there a separate token cap for the detection job?** `threat-detect` itself
+enforces no credit budget — it has no notion of AI credits and does not read or
+count tokens. On the path `gh-aw` actually ships, the cap is enforced **around**
+the detector, not inside it:
 
+- **AWF API-proxy `maxAiCredits`** — when `threat-detect` runs under the
+  Agentic Workflow Firewall with the API proxy and token steering enabled
+  (`apiProxy.enabled` + `enableTokenSteering`), the compiled detection step sets
+  `apiProxy.maxAiCredits` from `max-ai-credits` (default 400, or
+  `vars.GH_AW_DEFAULT_DETECTION_MAX_AI_CREDITS`). The proxy enforces this as a
+  **cumulative** per-run credit counter, so it bounds the whole pass —
+  **including `--retries`**, not just the first attempt. This is the enforcement
+  mechanism for the external detector path; there is no `threat-detect`-side
+  budget flag to plumb.
 - **Early termination** — as soon as the model records a verdict through the
   `threat_detection_result` tool, the detector cancels the engine subprocess, so
   the pass stops at the first valid verdict instead of running to the engine's
@@ -173,8 +184,21 @@ cap enforced by this component. Two mechanisms bound the detection pass's cost:
 - **`max-turns`** — `gh-aw`'s `threat-detection.engine` configuration accepts a
   `max-turns` value that bounds the agentic loop (see the [spec](specs/threat-detection-spec.md), TD-14).
 
-For authoritative billing, use the engine's own logs (uploaded as the detection
-log artifact) together with `gh-aw`'s `logs` tooling.
+A plain, non-AWF `./bin/threat-detect` invocation (no API proxy) has **no**
+credit cap and produces no proxy token log — only early termination and
+`max-turns` bound its cost.
+
+**Where does the `aic` (AI credits) figure come from?** Not from `threat-detect`.
+On the AWF path the proxy records every steered model request to
+`token-usage.jsonl` under `…/sandbox/firewall/**/api-proxy-logs/`, and `gh-aw`'s
+`parse_token_usage.cjs` aggregates those records into the detection job's `aic`
+output and `agent_usage.json`. That figure is therefore **independent of**
+`threat-detect`'s engine flags and of any diagnostics it interleaves into
+`detection.log`; the detector's stdout is not the source of truth for credits.
+
+For authoritative billing, use the AWF proxy token log / `agent_usage.json` (or
+the engine's own logs, uploaded as the detection log artifact) together with
+`gh-aw`'s `logs` tooling.
 
 ### Released binary
 
