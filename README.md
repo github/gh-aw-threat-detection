@@ -169,7 +169,16 @@ Additional flags:
 - `--log-file <path>` — mirror the conclusion into a JSONL run log (env:
   `THREAT_DETECTION_LOG_FILE`), emitting `conclude_start`, `conclude_verdict`,
   `conclude_directory_listing`, `conclude_detection_log`, and `conclude_outcome`
-  events
+  events. It must not resolve to the same file as `--result-file` or the
+  detection log — the log is opened truncating, so a collision would destroy the
+  input it is meant to describe. Collisions and unopenable log paths are
+  configuration errors that fail the step.
+
+Diagnostic output is bounded so a pathological run cannot flood the job log, and
+truncation is always labelled rather than passed off as a complete reading.
+Untrusted values (model-authored reasons, artifact filenames, detection-log
+lines) have control characters escaped so each stays on one line and cannot
+inject a workflow command into the host job log.
 
 ### AI Credits and Token Usage
 

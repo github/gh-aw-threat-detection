@@ -204,7 +204,12 @@ result directory and, when a detection log is present, its line and byte counts
 plus every line containing a `THREAT_DETECTION_STATUS:` or
 `THREAT_DETECTION_RESULT:` marker. The detection log MUST NOT be used to derive a
 verdict; it is diagnostic input only. Diagnostic output MAY be bounded to keep
-job logs readable. When `--log-file` is set, `conclude` MUST mirror these
+job logs readable, but when it is bounded the output MUST indicate that it was
+truncated and MUST NOT report a bounded prefix as though it were the whole
+input. Untrusted values echoed into the diagnostics (model-authored reasons,
+artifact filenames, and detection-log lines) MUST be escaped so that each is
+confined to a single physical output line and cannot emit a host workflow
+command. When `--log-file` is set, `conclude` MUST mirror these
 diagnostics and the final conclusion into the JSONL run log (TD-20a).
 
 ### 8.3 Exit Codes

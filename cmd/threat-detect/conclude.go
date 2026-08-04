@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/runlog"
@@ -82,21 +83,49 @@ func runConclude(args []string) int {
 		return concludeExitFail
 	}
 
-	// The JSONL log is an additive observability sink: failing to open it must
-	// not change the conclusion, so it degrades to a warning on stderr.
+	// The JSONL log is opened with O_TRUNC, so it must not alias an input this
+	// command reads. Aliasing --result-file would erase the verdict (yielding a
+	// bogus parse_error) and aliasing the detection log would erase the failure
+	// diagnostics; both are configuration errors, checked before anything is
+	// opened. The detection-log path is resolved first so the default sibling
+	// path participates in the check.
+	resolvedDetectionLog := detectionLog
+	if resolvedDetectionLog == "" {
+		resolvedDetectionLog = filepath.Join(filepath.Dir(resultFile), defaultDetectionLogName)
+	}
+	if logFile != "" {
+		for _, other := range []struct{ path, flag string }{
+			{resultFile, "--result-file"},
+			{resolvedDetectionLog, "--detection-log"},
+		} {
+			same, err := samePath(logFile, other.path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "conclude: error resolving log paths: %v\n", err)
+				return concludeExitFail
+			}
+			if same {
+				fmt.Fprintf(os.Stderr, "conclude: --log-file and %s must not point to the same file (%q)\n", other.flag, logFile)
+				return concludeExitFail
+			}
+		}
+	}
+
+	// A failure to open the requested JSONL log is a configuration error
+	// (TD-20a): the caller explicitly asked for logs, and concluding without
+	// them would report success while the required mirroring is absent.
 	var logger *runlog.Logger
 	if logFile != "" {
 		opened, err := runlog.Open(logFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "conclude: failed to open log file: %v\n", err)
-		} else {
-			logger = opened
-			defer func() {
-				if err := logger.Close(); err != nil {
-					fmt.Fprintf(os.Stderr, "conclude: failed to close log file: %v\n", err)
-				}
-			}()
+			fmt.Fprintf(os.Stderr, "conclude: error opening log file: %v\n", err)
+			return concludeExitFail
 		}
+		logger = opened
+		defer func() {
+			if err := logger.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "conclude: failed to close log file: %v\n", err)
+			}
+		}()
 	}
 
 	c := &concluder{
@@ -263,7 +292,7 @@ func (c *concluder) reportVerdict(result *detector.Result) {
 	if len(result.Reasons) > 0 {
 		c.info(fmt.Sprintf("   reasons (%d):", len(result.Reasons)))
 		for i, reason := range result.Reasons {
-			c.info(fmt.Sprintf("     [%d] %s", i+1, reason))
+			c.info(fmt.Sprintf("     [%d] %s", i+1, sanitizeLogValue(reason)))
 		}
 	} else {
 		c.info("   reasons          : (none)")
@@ -299,7 +328,7 @@ func (c *concluder) listDirectory(dir string) {
 	}
 	c.info(fmt.Sprintf("   Found %d file(s):", len(files)))
 	for _, file := range shown {
-		c.info("     - " + file)
+		c.info("     - " + sanitizeLogValue(file))
 	}
 	if len(shown) < len(files) {
 		c.info(fmt.Sprintf("     ... %d more file(s) omitted", len(files)-len(shown)))
@@ -313,9 +342,11 @@ func (c *concluder) listDirectory(dir string) {
 
 // reportDetectionLog prints size statistics for the detection log plus every
 // line carrying a THREAT_DETECTION_* marker. The log is never used to derive a
-// verdict — this is diagnostics only.
+// verdict — this is diagnostics only. Only a bounded prefix of the file is read,
+// so the output distinguishes the true file size from the scanned prefix rather
+// than reporting the prefix as if it were the whole log.
 func (c *concluder) reportDetectionLog(path string) {
-	data, err := readBounded(path, diagnosticLogMaxSize)
+	data, totalBytes, err := readBounded(path, diagnosticLogMaxSize)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			c.info(fmt.Sprintf("📄 No detection log found at: %s", path))
@@ -326,24 +357,35 @@ func (c *concluder) reportDetectionLog(path string) {
 		return
 	}
 
+	truncated := totalBytes > int64(len(data))
 	lines := strings.Split(string(data), "\n")
-	c.info(fmt.Sprintf("📊 Detection log stats: %d lines, %d bytes", len(lines), len(data)))
+	if truncated {
+		c.info(fmt.Sprintf("📊 Detection log stats: %d bytes total; scanned first %d bytes (%d lines) — log truncated for diagnostics",
+			totalBytes, len(data), len(lines)))
+	} else {
+		c.info(fmt.Sprintf("📊 Detection log stats: %d lines, %d bytes", len(lines), len(data)))
+	}
+
+	scope := "lines"
+	if truncated {
+		scope = "scanned lines"
+	}
 
 	matches := make([]string, 0, 8)
 	for i, line := range lines {
 		if !containsMarker(line) {
 			continue
 		}
-		matches = append(matches, fmt.Sprintf("[%d] %s", i+1, truncateRunes(strings.TrimRight(line, "\r"), maxEchoedLineRunes)))
+		matches = append(matches, fmt.Sprintf("[%d] %s", i+1, sanitizeLogValue(truncateRunes(strings.TrimRight(line, "\r"), maxEchoedLineRunes))))
 	}
 	if len(matches) == 0 {
-		c.info(fmt.Sprintf("📄 No lines containing THREAT_DETECTION markers found in %d lines", len(lines)))
+		c.info(fmt.Sprintf("📄 No lines containing THREAT_DETECTION markers found in %d %s", len(lines), scope))
 	} else {
 		shown := matches
 		if len(shown) > maxEchoedLogLines {
 			shown = shown[:maxEchoedLogLines]
 		}
-		c.info(fmt.Sprintf("📄 Lines containing THREAT_DETECTION markers (%d of %d):", len(matches), len(lines)))
+		c.info(fmt.Sprintf("📄 Lines containing THREAT_DETECTION markers (%d of %d %s):", len(matches), len(lines), scope))
 		for _, m := range shown {
 			c.info("   " + m)
 		}
@@ -353,11 +395,13 @@ func (c *concluder) reportDetectionLog(path string) {
 		matches = shown
 	}
 	c.logger.Info("conclude_detection_log", map[string]any{
-		"path":         path,
-		"lines":        len(lines),
-		"bytes":        len(data),
-		"marker_lines": matches,
-		"marker_count": len(matches),
+		"path":          path,
+		"bytes_total":   totalBytes,
+		"bytes_scanned": len(data),
+		"lines_scanned": len(lines),
+		"truncated":     truncated,
+		"marker_lines":  matches,
+		"marker_count":  len(matches),
 	})
 }
 
@@ -402,15 +446,57 @@ func listFilesRecursively(dir string) ([]string, error) {
 	return files, nil
 }
 
-// readBounded reads at most limit bytes from path. Detection logs can be very
-// large; the diagnostics only need the beginning to be useful.
-func readBounded(path string, limit int64) ([]byte, error) {
+// readBounded reads at most limit bytes from path and also reports the file's
+// total size, so callers can tell how much of the file they actually scanned.
+func readBounded(path string, limit int64) ([]byte, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, limit))
+	var totalBytes int64
+	if info, err := f.Stat(); err == nil {
+		totalBytes = info.Size()
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit))
+	if err != nil {
+		return nil, 0, err
+	}
+	// A growing or non-regular file can report a size smaller than what was
+	// read; never claim a total below the bytes actually scanned.
+	if totalBytes < int64(len(data)) {
+		totalBytes = int64(len(data))
+	}
+	return data, totalBytes, nil
+}
+
+// sanitizeLogValue renders an untrusted string (a model-authored reason, an
+// artifact filename, or a detection-log line) so it cannot break out of its
+// single physical log line. Embedded newlines would otherwise let the value
+// emit a line of its own beginning with "::", which the Actions runner would
+// interpret as a workflow command. Control characters are escaped rather than
+// dropped so the original content stays visible and diagnosable.
+func sanitizeLogValue(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case unicode.IsControl(r):
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // truncateRunes shortens s to at most max runes, appending an ellipsis marker

@@ -438,7 +438,7 @@ func TestConcludeMissingResultDiagnostics(t *testing.T) {
 		"     - " + filepath.Join("nested", "stray.txt"),
 		"     - " + defaultDetectionLogName,
 		fmt.Sprintf("📊 Detection log stats: 4 lines, %d bytes", len(logBody)),
-		"📄 Lines containing THREAT_DETECTION markers (1 of 4):",
+		"📄 Lines containing THREAT_DETECTION markers (1 of 4 lines):",
 		"   [2] THREAT_DETECTION_STATUS: reason=engine_error exit=2",
 	} {
 		if !strings.Contains(got, want) {
@@ -533,5 +533,211 @@ func TestConcludeRunLog(t *testing.T) {
 	}
 	if outcome["conclusion"] != "failure" || outcome["reason"] != "threat_detected" || outcome["level"] != "error" {
 		t.Errorf("conclude_outcome fields = %v", outcome)
+	}
+}
+
+// TestSanitizeLogValue verifies untrusted values cannot break out of their log
+// line. An embedded newline would otherwise let a model-authored reason or an
+// artifact filename emit a line of its own beginning with "::", which the
+// Actions runner interprets as a workflow command.
+func TestSanitizeLogValue(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text is unchanged", "jailbreak attempt", "jailbreak attempt"},
+		{"unicode is preserved", "emoji 🚨 and accents é", "emoji 🚨 and accents é"},
+		{"newline is escaped", "text\n::add-mask::secret", `text\n::add-mask::secret`},
+		{"carriage return is escaped", "text\r::error::boom", `text\r::error::boom`},
+		{"tab is escaped", "a\tb", `a\tb`},
+		{"other control chars are escaped", "a\x00b\x1bc", `a\x00b\x1bc`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeLogValue(tt.in); got != tt.want {
+				t.Errorf("sanitizeLogValue(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestConcludeReasonCannotInjectWorkflowCommand verifies a malicious reason in
+// the verdict cannot emit an unprefixed workflow command into the job log.
+func TestConcludeReasonCannotInjectWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json")
+	verdict := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,` +
+		`"reasons":["benign looking\n::add-mask::injected"]}`
+	if err := os.WriteFile(resultFile, []byte(verdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     true,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		trimmed := strings.TrimSpace(line)
+		// The only workflow command this run may emit is the threat warning.
+		if strings.HasPrefix(trimmed, "::") && !strings.HasPrefix(trimmed, "::warning::") {
+			t.Errorf("unexpected workflow command emitted: %q", line)
+		}
+	}
+	if !strings.Contains(stdout.String(), `[1] benign looking\n::add-mask::injected`) {
+		t.Errorf("escaped reason not rendered on a single line:\n%s", stdout.String())
+	}
+}
+
+// TestConcludeFilenameCannotInjectWorkflowCommand verifies the directory
+// listing escapes newlines in artifact filenames, which are untrusted.
+func TestConcludeFilenameCannotInjectWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	// Linux permits newlines in filenames; a crafted artifact name must not be
+	// able to start a new log line.
+	evil := filepath.Join(dir, "evil\n::add-mask::injected.txt")
+	if err := os.WriteFile(evil, []byte("x"), 0o600); err != nil {
+		t.Skipf("filesystem rejects newline in filename: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     true,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	c.run(filepath.Join(dir, "detection_result.json"))
+
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "::") && !strings.HasPrefix(trimmed, "::warning::") {
+			t.Errorf("unexpected workflow command emitted: %q", line)
+		}
+	}
+	if !strings.Contains(stdout.String(), `- evil\n::add-mask::injected.txt`) {
+		t.Errorf("escaped filename not rendered on a single line:\n%s", stdout.String())
+	}
+}
+
+// TestConcludeTruncatedDetectionLogStats verifies that when only a prefix of a
+// large detection log is scanned, the reported stats say so instead of passing
+// the prefix off as the whole file.
+func TestConcludeTruncatedDetectionLogStats(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, defaultDetectionLogName)
+	// Comfortably larger than the read bound so truncation is guaranteed.
+	body := strings.Repeat("padding line to fill the detection log\n", 300000)
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if int64(len(body)) <= diagnosticLogMaxSize {
+		t.Fatalf("fixture too small: %d bytes, want > %d", len(body), diagnosticLogMaxSize)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     true,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	c.run(filepath.Join(dir, "detection_result.json"))
+
+	got := stdout.String()
+	if !strings.Contains(got, fmt.Sprintf("%d bytes total", len(body))) {
+		t.Errorf("stats must report the true file size (%d bytes):\n%s", len(body), got)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("scanned first %d bytes", diagnosticLogMaxSize),
+		"log truncated for diagnostics",
+		"scanned lines",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestConcludeRejectsLogFileCollisions verifies --log-file (opened O_TRUNC) is
+// refused when it aliases an input this command reads: truncating the result
+// file would erase the verdict, and truncating the detection log would erase
+// the failure diagnostics.
+func TestConcludeRejectsLogFileCollisions(t *testing.T) {
+	t.Run("collides with result file", func(t *testing.T) {
+		dir := t.TempDir()
+		resultFile := filepath.Join(dir, "detection_result.json")
+		if err := os.WriteFile(resultFile, []byte(safeVerdict), 0o600); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+		t.Setenv("RUN_DETECTION", "true")
+		t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+		t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+		if code := runConclude([]string{"--result-file", resultFile, "--log-file", resultFile}); code != concludeExitFail {
+			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+		}
+		// The verdict must survive: rejection happens before the log is opened.
+		data, err := os.ReadFile(resultFile)
+		if err != nil {
+			t.Fatalf("ReadFile error = %v", err)
+		}
+		if string(data) != safeVerdict {
+			t.Errorf("result file was modified: %q", string(data))
+		}
+	})
+
+	t.Run("collides with detection log", func(t *testing.T) {
+		dir := t.TempDir()
+		resultFile := filepath.Join(dir, "detection_result.json")
+		logPath := filepath.Join(dir, defaultDetectionLogName)
+		if err := os.WriteFile(logPath, []byte("THREAT_DETECTION_STATUS: reason=engine_error exit=2\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+		t.Setenv("RUN_DETECTION", "true")
+		t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+		t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+		// The default detection-log path must participate in the check even
+		// though --detection-log was not passed explicitly.
+		if code := runConclude([]string{"--result-file", resultFile, "--log-file", logPath}); code != concludeExitFail {
+			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+		}
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("ReadFile error = %v", err)
+		}
+		if len(data) == 0 {
+			t.Error("detection log was truncated")
+		}
+	})
+}
+
+// TestConcludeUnopenableLogFileIsConfigError verifies that failing to open an
+// explicitly requested --log-file fails the step (TD-20a) rather than silently
+// concluding without the required JSONL mirroring.
+func TestConcludeUnopenableLogFileIsConfigError(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, safeVerdict)
+	// A directory cannot be opened for writing.
+	logPath := filepath.Join(dir, "logdir")
+	if err := os.Mkdir(logPath, 0o755); err != nil {
+		t.Fatalf("Mkdir error = %v", err)
+	}
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	if code := runConclude([]string{"--result-file", resultFile, "--log-file", logPath}); code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
 	}
 }
