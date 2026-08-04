@@ -102,4 +102,7 @@ func TestDefaultPromptTemplate(t *testing.T) {
 	if !strings.Contains(tmpl, "THREAT_DETECTION_RESULT") {
 		t.Error("expected template to contain THREAT_DETECTION_RESULT")
 	}
+	if !strings.Contains(tmpl, "Lockfile Version Recency") {
+		t.Error("expected template to contain npm lockfile false-positive suppression guidance (Lockfile Version Recency)")
+	}
 }

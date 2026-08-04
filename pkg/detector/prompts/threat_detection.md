@@ -89,6 +89,7 @@ Analyze the above content for the following security threats, using the workflow
    - **Backdoor Installation**: Hidden remote access mechanisms, unauthorized authentication bypass, or persistent access methods
    - **Encoded Strings**: Base64, hex, or other encoded strings that appear to hide secrets, commands, or malicious payloads without legitimate purpose
    - **Suspicious Dependencies**: Addition of unknown packages, dependencies from untrusted sources, or libraries with known vulnerabilities
+     - **Lockfile Version Recency**: For lockfile changes (e.g. `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `go.sum`, `Gemfile.lock`, `poetry.lock`), do not flag a dependency as malicious solely because its version looks newer than your training data — the registry may have published it after your training cutoff, and network access to verify is not available in this environment. Treat a bumped version number, by itself, as insufficient evidence of malice. Only flag a lockfile change as suspicious when there is a concrete indicator, such as: a `resolved`/source URL whose host changed from the package's prior, established registry to an unexpected or known-untrusted host, a malformed or truncated `integrity`/checksum field, a package name that is a typosquat of a well-known package, or install/postinstall scripts added alongside the change
 
 ## Response Format
 
