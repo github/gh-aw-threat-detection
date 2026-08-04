@@ -106,8 +106,10 @@ engine CLI.
 verdict payload and MUST read it from the location it configured (stdout, or the
 `--output` path, or the `detection_result.json` sink used by `conclude`).
 
-**U-09**: The host SHOULD enable the structured JSONL run log via `--log-file`
-(or `THREAT_DETECTION_LOG_FILE`) for observability (per TD-20a), and MUST NOT
+**U-09**: The host SHOULD retain the structured JSONL run log for observability
+(per TD-20a). The host MAY configure its path via `--log-file` (or
+`THREAT_DETECTION_LOG_FILE`); otherwise, when `--output` is set, the detector
+writes `detection-runlog.jsonl` in the result file's directory. The host MUST NOT
 point `--log-file` and `--output` at the same path.
 
 ### 3.1 Flags
@@ -122,7 +124,7 @@ versions.
 | `--model <name>` | Override the engine model (see U-13) |
 | `--prompt-template <path>` | Override the embedded default prompt |
 | `--output <path>` | Write the JSON result to a file instead of stdout |
-| `--log-file <path>` | Write structured JSONL run logs |
+| `--log-file <path>` | Write structured JSONL run logs (defaults beside `--output` to `detection-runlog.jsonl`) |
 | `--retries <n>` | Retries for malformed detection outputs (default `1`) |
 | `--version` | Print version and exit |
 
@@ -252,7 +254,9 @@ require the newest stable release MUST re-pin explicitly.
 **U-27**: A host MAY re-run detection against artifacts from a prior run for
 diagnostics. When it does, it MUST normalize the downloaded artifacts into the
 input contract of Section 3 before invoking the detector, and SHOULD retain the
-detector's JSONL run log (per TD-20a) and structured result for comparison.
+detector's `detection-runlog.jsonl` run log (per TD-20a) and structured result
+for comparison. When the source detection artifact contains a run log, the replay
+host SHOULD retain it separately from the replay run log.
 
 **U-28**: Replay MUST NOT require credentials beyond those already needed to read
 the source run's artifacts and to authenticate the selected engine.

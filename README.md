@@ -58,7 +58,7 @@ threat-detect [flags] <artifacts-dir>
 - `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`)
 - `--prompt-template` — Path to custom prompt template
 - `--output` — Path to write JSON result (defaults to stdout)
-- `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`
+- `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -111,10 +111,12 @@ engine/config failures surface as a step failure. See spec TD-21a.
 
 #### JSONL run logs (`--log-file`)
 
-Pass `--log-file <path>` (or set `THREAT_DETECTION_LOG_FILE`) to record a
-structured trace of the run as [JSON Lines](https://jsonlines.org/): one JSON
-object per line, created fresh (truncating any existing file) with `0600`
-permissions. Every record starts with `time` (RFC 3339), `level`
+Pass `--log-file <path>` (or set `THREAT_DETECTION_LOG_FILE`) to choose where to
+record a structured trace of the run. When `--output` is set without an explicit
+log path, the detector writes `detection-runlog.jsonl` in the output file's
+directory. The log uses [JSON Lines](https://jsonlines.org/): one JSON object per
+line, created fresh (truncating any existing file) with `0600` permissions. Every
+record starts with `time` (RFC 3339), `level`
 (`info`/`error`), and `event`, followed by event-specific fields. Emitted
 events include `run_start`, `artifacts_loaded`, `prompt_built`,
 `attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
@@ -230,7 +232,7 @@ be available on the runner where the binary runs.
 
 ### Replay workflow
 
-Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, logs, replay result, and original-result comparison when available.
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, free-form replay log, replay result, and original-result comparison. Detectors that support structured logging also produce `detection-runlog.jsonl`; when available, the source run's structured log is retained separately as `original-detection-runlog.jsonl`.
 
 Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
 
