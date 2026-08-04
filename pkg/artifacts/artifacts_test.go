@@ -3,6 +3,7 @@ package artifacts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,9 @@ func TestLoad_EmptyDirectory(t *testing.T) {
 	if arts.PatchFileInfo != "No patch or bundle file found" {
 		t.Errorf("expected no patch info, got %q", arts.PatchFileInfo)
 	}
+	if arts.CommentMemoryFileInfo != "No comment-memory files found" {
+		t.Errorf("expected no comment-memory info, got %q", arts.CommentMemoryFileInfo)
+	}
 }
 
 func TestLoad_NonExistentDirectory(t *testing.T) {
@@ -108,5 +112,73 @@ func TestLoad_WorkflowNameFromEnv(t *testing.T) {
 	}
 	if arts.WorkflowName != "My Custom Workflow" {
 		t.Errorf("WorkflowName = %q, want %q", arts.WorkflowName, "My Custom Workflow")
+	}
+}
+
+func TestLoad_CommentMemoryFiles(t *testing.T) {
+	dir := t.TempDir()
+	cmDir := filepath.Join(dir, "comment-memory")
+	if err := os.MkdirAll(cmDir, 0o755); err != nil {
+		t.Fatalf("creating comment-memory dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(cmDir, "note-a.md"), []byte("memory a"))
+	writeTestFile(t, filepath.Join(cmDir, "note-b.md"), []byte("memory b"))
+	// Non-markdown files and subdirectories must be ignored.
+	writeTestFile(t, filepath.Join(cmDir, "ignore.txt"), []byte("not md"))
+	if err := os.MkdirAll(filepath.Join(cmDir, "sub"), 0o755); err != nil {
+		t.Fatalf("creating sub dir: %v", err)
+	}
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(arts.CommentMemoryFiles) != 2 {
+		t.Fatalf("expected 2 comment-memory files, got %d (%v)", len(arts.CommentMemoryFiles), arts.CommentMemoryFiles)
+	}
+	for _, want := range []string{"note-a.md", "note-b.md"} {
+		if !strings.Contains(arts.CommentMemoryFileInfo, want) {
+			t.Errorf("CommentMemoryFileInfo missing %q: %q", want, arts.CommentMemoryFileInfo)
+		}
+	}
+	if len(arts.Warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", arts.Warnings)
+	}
+}
+
+func TestLoad_CommentMemoryEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "comment-memory"), 0o755); err != nil {
+		t.Fatalf("creating comment-memory dir: %v", err)
+	}
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if arts.CommentMemoryFileInfo != "No comment-memory files found" {
+		t.Errorf("expected no comment-memory info, got %q", arts.CommentMemoryFileInfo)
+	}
+	if len(arts.Warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", arts.Warnings)
+	}
+}
+
+func TestLoad_CommentMemoryNotADirectory(t *testing.T) {
+	dir := t.TempDir()
+	// A regular file named comment-memory should not be treated as the dir and
+	// must not warn (parity: only inspection failures warn).
+	writeTestFile(t, filepath.Join(dir, "comment-memory"), []byte("not a dir"))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if arts.CommentMemoryFileInfo != "No comment-memory files found" {
+		t.Errorf("expected no comment-memory info, got %q", arts.CommentMemoryFileInfo)
+	}
+	if len(arts.Warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", arts.Warnings)
 	}
 }

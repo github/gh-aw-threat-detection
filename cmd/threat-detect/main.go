@@ -192,6 +192,10 @@ func run() (code int) {
 		return exitError
 	}
 	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
+	for _, w := range arts.Warnings {
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", w)
+		logger.Info("artifacts_warning", map[string]any{"warning": w})
+	}
 
 	// Build the prompt
 	promptTemplate := ""

@@ -42,6 +42,18 @@ type Artifacts struct {
 
 	// CustomPrompt contains additional detection instructions if provided.
 	CustomPrompt string
+
+	// CommentMemoryFiles contains paths to any comment-memory markdown files.
+	CommentMemoryFiles []string
+
+	// CommentMemoryFileInfo is a human-readable description of comment-memory
+	// files for template replacement.
+	CommentMemoryFileInfo string
+
+	// Warnings holds non-fatal validation warnings collected while loading
+	// artifacts (for example, an unreadable comment-memory directory). Each
+	// entry is prefixed with an error code such as ERR_VALIDATION.
+	Warnings []string
 }
 
 // Load reads and validates artifacts from the given directory.
@@ -124,7 +136,61 @@ func Load(dir string) (*Artifacts, error) {
 		arts.PatchFileInfo = "No patch or bundle file found"
 	}
 
+	// Discover comment-memory markdown files (an attacker-influenced, persisted
+	// channel written by the agent). The directory is optional; when present but
+	// unreadable we record a non-fatal ERR_VALIDATION warning and continue.
+	arts.loadCommentMemory(dir)
+
 	return arts, nil
+}
+
+func (arts *Artifacts) loadCommentMemory(dir string) {
+	commentMemoryDir := filepath.Join(dir, "comment-memory")
+	info, err := os.Stat(commentMemoryDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			arts.Warnings = append(arts.Warnings, fmt.Sprintf(
+				"ERR_VALIDATION: Unable to inspect comment-memory directory at %s: %v", commentMemoryDir, err))
+		}
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		return
+	}
+	if !info.IsDir() {
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		return
+	}
+
+	entries, err := os.ReadDir(commentMemoryDir)
+	if err != nil {
+		arts.Warnings = append(arts.Warnings, fmt.Sprintf(
+			"ERR_VALIDATION: Unable to read comment-memory directory at %s: %v", commentMemoryDir, err))
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		return
+	}
+
+	var infos []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		p := filepath.Join(commentMemoryDir, name)
+		arts.CommentMemoryFiles = append(arts.CommentMemoryFiles, p)
+		if fi, statErr := os.Stat(p); statErr == nil {
+			infos = append(infos, fmt.Sprintf("%s (%d bytes)", p, fi.Size()))
+		} else {
+			infos = append(infos, p)
+		}
+	}
+
+	if len(infos) > 0 {
+		arts.CommentMemoryFileInfo = strings.Join(infos, "\n")
+	} else {
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+	}
 }
 
 func fileExists(path string) bool {
