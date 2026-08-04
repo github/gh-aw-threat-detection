@@ -54,8 +54,10 @@ here as `TD-XX`.
 Release asset from `github/gh-aw-threat-detection`. The host MUST NOT build the
 detector from source as part of a production detection job.
 
-**U-02**: The host MUST select the release asset matching the runner
-architecture: `threat-detect-linux-amd64` or `threat-detect-linux-arm64`.
+**U-02**: The host MUST select the release asset matching the runner operating
+system and architecture: `threat-detect-linux-amd64`,
+`threat-detect-linux-arm64`, `threat-detect-darwin-x64`, or
+`threat-detect-darwin-arm64`.
 
 **U-03**: The host MUST verify the downloaded asset against the `sha256` value
 recorded for that asset (via `checksums.txt` published alongside the assets, or
@@ -73,15 +75,25 @@ repository is approved (per TD-27).
 Example acquisition (informative):
 
 ```bash
-case "$(uname -m)" in
-  x86_64|amd64) asset=threat-detect-linux-amd64 ;;
-  aarch64|arm64) asset=threat-detect-linux-arm64 ;;
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64|Linux/amd64)  asset=threat-detect-linux-amd64 ;;
+  Linux/aarch64|Linux/arm64) asset=threat-detect-linux-arm64 ;;
+  Darwin/x86_64)             asset=threat-detect-darwin-x64 ;;
+  Darwin/arm64)              asset=threat-detect-darwin-arm64 ;;
+  *) echo "unsupported platform" >&2; exit 1 ;;
 esac
 gh release download v0.0.2 --repo github/gh-aw-threat-detection \
   --pattern "$asset" --pattern checksums.txt
-sha256sum --check --ignore-missing checksums.txt
+awk -v asset="$asset" '$2 == asset' checksums.txt |
+  if command -v sha256sum >/dev/null; then sha256sum --check; else shasum -a 256 --check; fi
 install -m 0755 "$asset" ./threat-detect
 ```
+
+The macOS assets are not code-signed or notarized. Downloads performed by the
+`gh-aw` installer are intended for CI runners and are checksum-verified before
+execution. A browser download may receive a quarantine attribute and be blocked
+by Gatekeeper; users should prefer the installer, or verify the checksum before
+removing quarantine.
 
 ---
 
@@ -97,6 +109,11 @@ where `<artifacts-dir>` conforms to the artifacts directory shape (per TD-17)
 and the host MUST NOT require all optional artifact files to be present (per
 TD-18).
 
+The detector consumes the prompt artifacts, agent output, activation metadata,
+and root `aw-*.patch` / `aw-*.bundle` files. It inventories all other files
+recursively; `experiments/` and `comment-memory/` are currently inventory-only
+inputs (per TD-17b).
+
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
 where the detector executes. The detector MUST NOT be expected to bundle the
@@ -106,9 +123,13 @@ engine CLI.
 verdict payload and MUST read it from the location it configured (stdout, or the
 `--output` path, or the `detection_result.json` sink used by `conclude`).
 
-**U-09**: The host SHOULD enable the structured JSONL run log via `--log-file`
-(or `THREAT_DETECTION_LOG_FILE`) for observability (per TD-20a), and MUST NOT
-point `--log-file` and `--output` at the same path.
+**U-09**: The host SHOULD retain the structured JSONL run log for observability
+(per TD-20a). The host MAY configure its path via `--log-file` (or
+`THREAT_DETECTION_LOG_FILE`); otherwise, when `--output` is set, the detector
+writes `detection-runlog.jsonl` in the result file's directory. The host MUST NOT
+point `--log-file` and `--output` at the same path. In GitHub Actions, the host
+SHOULD provide `GITHUB_STEP_SUMMARY` so the recursive artifact inventory is
+visible in the run summary (per TD-20c).
 
 ### 3.1 Flags
 
@@ -122,7 +143,7 @@ versions.
 | `--model <name>` | Override the engine model (see U-13) |
 | `--prompt-template <path>` | Override the embedded default prompt |
 | `--output <path>` | Write the JSON result to a file instead of stdout |
-| `--log-file <path>` | Write structured JSONL run logs |
+| `--log-file <path>` | Write structured JSONL run logs (defaults beside `--output` to `detection-runlog.jsonl`) |
 | `--retries <n>` | Retries for malformed detection outputs (default `1`) |
 | `--version` | Print version and exit |
 
@@ -259,7 +280,9 @@ require the newest stable release MUST re-pin explicitly.
 **U-27**: A host MAY re-run detection against artifacts from a prior run for
 diagnostics. When it does, it MUST normalize the downloaded artifacts into the
 input contract of Section 3 before invoking the detector, and SHOULD retain the
-detector's JSONL run log (per TD-20a) and structured result for comparison.
+detector's `detection-runlog.jsonl` run log (per TD-20a) and structured result
+for comparison. When the source detection artifact contains a run log, the replay
+host SHOULD retain it separately from the replay run log.
 
 **U-28**: Replay MUST NOT require credentials beyond those already needed to read
 the source run's artifacts and to authenticate the selected engine.

@@ -154,13 +154,30 @@ threat-detection:
 ```
 <artifacts-dir>/
 ├── aw-prompts/
-│   └── prompt.txt          # Workflow prompt file
-├── agent_output.json       # Agent structured output
-├── aw-*.patch              # Git format-patch files (optional)
-├── aw-*.bundle             # Git bundle files (optional)
-└── comment-memory/         # Agent comment memory (optional)
+│   ├── prompt.txt                # Expanded workflow prompt file
+│   ├── prompt-template.txt       # Pre-expansion template (optional)
+│   └── prompt-import-tree.json   # Runtime-import provenance (optional)
+├── agent_output.json             # Agent structured output
+├── aw_info.json                  # Activation metadata (optional)
+├── aw-*.patch                    # Git format-patch files (optional)
+├── aw-*.bundle                   # Git bundle files (optional)
+├── experiments/                  # Experiment state (optional, inventoried only)
+└── comment-memory/               # Agent comment memory (optional, inventoried only)
     └── *.md
 ```
+
+**TD-17a**: When `aw_info.json` is present, the detector MUST expose only a
+bounded, allowlisted subset of activation metadata to the detection model. This
+subset MAY include trigger event, actor, engine and model, workflow and repository
+identity, ref and commit, run identifiers, and bounded caller-workflow context.
+The detector MUST treat every exposed activation value as untrusted runtime data.
+Unknown fields and fields outside the allowlist MUST NOT be included in the
+detection prompt.
+
+**TD-17b**: The detector MUST recursively inventory every non-directory entry in
+the artifacts directory with its relative path, size, entry kind, and whether the
+detector consumes it. `experiments/` and `comment-memory/` are supported as
+inventory-only inputs; their contents MUST NOT be added to the detection prompt.
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
@@ -180,13 +197,16 @@ detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
 
 **TD-20a**: The detector MUST support writing a structured run log in JSON Lines
 (JSONL) format to a file via the `--log-file` flag (also configurable through the
-`THREAT_DETECTION_LOG_FILE` environment variable). When enabled, the detector MUST
-write one JSON object per line, each containing at least the `time`, `level`, and
-`event` keys, and MUST record a terminal `status` event whose `reason` and `exit`
-fields carry the same reason string and exit code as the stderr status line. The
-run log is an additive observability
-sink: it MUST NOT alter the result JSON contract (TD-08) or the exit codes (TD-21).
-A failure to open the log file MUST be treated as a configuration error.
+`THREAT_DETECTION_LOG_FILE` environment variable). When `--output` is set and no
+log path is explicitly configured, the detector MUST write the run log as
+`detection-runlog.jsonl` in the result file's directory. When enabled, the
+detector MUST write one JSON object per line, each containing at least the `time`,
+`level`, and `event` keys, and MUST record a terminal `status` event whose
+`reason` and `exit` fields carry the same reason string and exit code as the
+stderr status line. The `artifacts_loaded` event MUST include the artifact
+inventory defined by TD-17b. The run log is an additive observability sink: it
+MUST NOT alter the result JSON contract (TD-08) or the exit codes (TD-21). A
+failure to open the log file MUST be treated as a configuration error.
 
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
@@ -214,7 +234,11 @@ A malformed (readable but unparseable) result file MUST unconditionally report
 surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
-**TD-20c**: The detector MUST support appending the prompt it actually rendered
+**TD-20c**: When `GITHUB_STEP_SUMMARY` is set, the detector MUST append the
+artifact inventory defined by TD-17b as a Markdown table. Failure to write the
+configured summary MUST be treated as a configuration error.
+
+**TD-20e**: The detector MUST support appending the prompt it actually rendered
 (after template placeholder substitution and prompt-analysis embedding) to the job
 step summary via the `--step-summary` flag, defaulting to the `GITHUB_STEP_SUMMARY`
 environment variable. The appended block MUST be collapsible (rendered inside a
@@ -223,7 +247,7 @@ model, and retries configuration for the run, and MUST be bounded in size so a
 single run cannot exhaust the step summary's shared per-job budget. A failure to
 write the step summary MUST NOT fail the run; it is a best-effort diagnostic aid.
 
-**TD-20d**: The `conclude` subcommand MUST support appending a verdict block to the
+**TD-20f**: The `conclude` subcommand MUST support appending a verdict block to the
 job step summary via its own `--step-summary` flag, defaulting to
 `GITHUB_STEP_SUMMARY`. The block MUST be collapsible and MUST include the
 per-category booleans (`prompt_injection`, `secret_leak`, `malicious_patch`), the

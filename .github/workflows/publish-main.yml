@@ -26,12 +26,13 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:7}"
           VERSION="main-${SHORT_SHA}"
           mkdir -p dist
-          for GOARCH in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH="${GOARCH}" go build \
+          while read -r goos goarch asset; do
+            [[ -z "$goos" || "$goos" == \#* ]] && continue
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
               -ldflags="-s -w -X github.com/github/gh-aw-threat-detection/pkg/detector.Version=${VERSION}" \
-              -o "dist/threat-detect-linux-${GOARCH}" ./cmd/threat-detect
-          done
-          ( cd dist && sha256sum threat-detect-linux-amd64 threat-detect-linux-arm64 > checksums.txt )
+              -o "dist/${asset}" ./cmd/threat-detect
+          done < release-targets.txt
+          ( cd dist && sha256sum threat-detect-* > checksums.txt )
           {
             echo "short_sha=${SHORT_SHA}"
             echo "version=${VERSION}"
@@ -46,11 +47,14 @@ jobs:
           # Record every release-asset SHA-256 in the release body, mirroring the
           # tagged release workflow so downstream verification is consistent.
           notes_file="$(mktemp)"
+          mapfile -t assets < <(awk '!/^[[:space:]]*(#|$)/ { print $3 }' release-targets.txt)
+          release_files=()
           {
             echo "Unverified branch build from ${GITHUB_SHA}."
-            for asset in threat-detect-linux-amd64 threat-detect-linux-arm64; do
+            for asset in "${assets[@]}"; do
               asset_sha256="$(sha256sum "dist/${asset}" | awk '{print $1}')"
               echo "Binary asset sha256 (${asset}): sha256:${asset_sha256}"
+              release_files+=("dist/${asset}#${asset}")
             done
             echo "The Latest release continues to track the most recently promoted version."
           } > "$notes_file"
@@ -60,8 +64,7 @@ jobs:
           # promoted version) is untouched.
           gh release delete main --yes --cleanup-tag 2>/dev/null || true
           gh release create main \
-            dist/threat-detect-linux-amd64#threat-detect-linux-amd64 \
-            dist/threat-detect-linux-arm64#threat-detect-linux-arm64 \
+            "${release_files[@]}" \
             dist/checksums.txt#checksums.txt \
             --title "main (edge build ${SHORT_SHA})" \
             --notes-file "$notes_file" \
@@ -76,7 +79,7 @@ jobs:
             echo "## Published main binary"
             echo
             echo "- Rolling pre-release \`main\` updated to edge build \`${SHORT_SHA}\`"
-            echo "- Assets: \`threat-detect-linux-amd64\`, \`threat-detect-linux-arm64\` (+ \`checksums.txt\`)"
+            echo "- Assets: Linux and macOS binaries for amd64 and arm64 (+ \`checksums.txt\`)"
             echo
             echo "These are unverified branch builds. The Latest release is unaffected and continues to track the most recently promoted release."
           } >> "$GITHUB_STEP_SUMMARY"

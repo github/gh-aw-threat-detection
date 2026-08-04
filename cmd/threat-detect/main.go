@@ -24,11 +24,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
 	"github.com/github/gh-aw-threat-detection/pkg/runlog"
+	"github.com/github/gh-aw-threat-detection/pkg/stepsummary"
 )
 
 const (
@@ -150,6 +152,13 @@ func run() (code int) {
 	// standalone detector honors the model gh-aw configured for detection.
 	model = engine.ResolveModel(engineID, model)
 
+	// File-based integrations expect diagnostics to survive beside the result.
+	// An explicit flag or environment variable still takes precedence.
+	if logFile == "" && outputJSON != "" {
+		dir, _ := filepath.Split(outputJSON)
+		logFile = dir + "detection-runlog.jsonl"
+	}
+
 	// Reject collisions among the run's independently-written destinations
 	// (--log-file, --output, --step-summary): each is opened and written on
 	// its own, so aliasing any two would interleave or clobber their content.
@@ -163,8 +172,8 @@ func run() (code int) {
 		return exitError
 	}
 
-	// Open the JSONL run log if requested. A failure here is a config error:
-	// the caller explicitly asked for logs and should learn they were not written.
+	// Open the JSONL run log when configured or derived. A failure here is a
+	// config error because file-based integrations require the diagnostic sink.
 	if logFile != "" {
 		l, err := runlog.Open(logFile)
 		if err != nil {
@@ -199,7 +208,16 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
+	logger.Info("artifacts_loaded", map[string]any{
+		"artifacts_dir": artifactsDir,
+		"inventory":     arts.Inventory,
+	})
+	if err := stepsummary.WriteArtifactInventory(os.Getenv("GITHUB_STEP_SUMMARY"), arts.Inventory); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing artifact inventory summary: %v\n", err)
+		logger.Error("artifact_inventory_summary_failed", map[string]any{"error": err.Error()})
+		reason = reasonConfigError
+		return exitError
+	}
 	for _, w := range arts.Warnings {
 		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w))
 		logger.Info("artifacts_warning", map[string]any{"warning": w})
@@ -440,21 +458,58 @@ func samePath(a, b string) (bool, error) {
 	return false, nil
 }
 
-// resolvePath returns an absolute, symlink-resolved path. When the target does
-// not yet exist, it resolves the deepest existing ancestor directory and rejoins
-// the remaining components so not-yet-created siblings still compare correctly.
+// resolvePath returns an absolute, symlink-resolved path. Components are
+// processed in filesystem order so ".." after a symlink applies to the symlink
+// target, matching how the operating system resolves the path.
 func resolvePath(p string) (string, error) {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return "", err
+	if !filepath.IsAbs(p) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		p = wd + string(os.PathSeparator) + p
 	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved, nil
+	volume := filepath.VolumeName(p)
+	resolved := volume + string(os.PathSeparator)
+	pending := splitPathComponents(strings.TrimPrefix(p, volume))
+	symlinks := 0
+
+	for len(pending) > 0 {
+		component := pending[0]
+		pending = pending[1:]
+		switch component {
+		case ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			continue
+		}
+
+		candidate := filepath.Join(resolved, component)
+		if info, err := os.Lstat(candidate); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			symlinks++
+			if symlinks > 255 {
+				return "", fmt.Errorf("resolving %q: too many symlinks", p)
+			}
+			target, err := os.Readlink(candidate)
+			if err != nil {
+				return "", fmt.Errorf("reading symlink %q: %w", candidate, err)
+			}
+			if filepath.IsAbs(target) {
+				volume = filepath.VolumeName(target)
+				resolved = volume + string(os.PathSeparator)
+				target = strings.TrimPrefix(target, volume)
+			}
+			pending = append(splitPathComponents(target), pending...)
+			continue
+		}
+		resolved = candidate
 	}
-	dir, base := filepath.Split(abs)
-	dir = filepath.Clean(dir)
-	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
-		return filepath.Join(resolvedDir, base), nil
-	}
-	return filepath.Clean(abs), nil
+	return filepath.Clean(resolved), nil
+}
+
+func splitPathComponents(p string) []string {
+	return strings.FieldsFunc(p, func(r rune) bool {
+		return r <= 255 && os.IsPathSeparator(uint8(r))
+	})
 }
