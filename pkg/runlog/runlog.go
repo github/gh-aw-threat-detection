@@ -23,8 +23,9 @@ import (
 
 // Log levels emitted in the "level" field.
 const (
-	LevelInfo  = "info"
-	LevelError = "error"
+	LevelInfo    = "info"
+	LevelWarning = "warning"
+	LevelError   = "error"
 )
 
 // Logger writes newline-delimited JSON log records to an underlying writer.
@@ -65,6 +66,11 @@ func Open(path string) (*Logger, error) {
 // Info appends an info-level record for event with the given fields.
 func (l *Logger) Info(event string, fields map[string]any) {
 	l.emit(LevelInfo, event, fields)
+}
+
+// Warning appends a warning-level record for event with the given fields.
+func (l *Logger) Warning(event string, fields map[string]any) {
+	l.emit(LevelWarning, event, fields)
 }
 
 // Error appends an error-level record for event with the given fields.

@@ -96,6 +96,88 @@ func TestRunWritesJSONLLog(t *testing.T) {
 	}
 }
 
+func TestRunWarnsWhenPromptAnalysisArtifactsAreMissing(t *testing.T) {
+	artifactsDir := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	logPath := filepath.Join(t.TempDir(), "run.jsonl")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-log-file", logPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	for _, want := range []string{
+		"::warning::ERR_VALIDATION:",
+		"aw-prompts/prompt-template.txt",
+		"aw-prompts/prompt-import-tree.json",
+		"Trusted-vs-untrusted prompt analysis is degraded",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+
+	record := findRecord(readJSONLRecords(t, logPath), "prompt_analysis_degraded")
+	if record == nil {
+		t.Fatal("missing prompt_analysis_degraded runlog event")
+	}
+	if record["level"] != "warning" {
+		t.Errorf("warning level = %v, want warning", record["level"])
+	}
+	if record["error_code"] != "ERR_VALIDATION" {
+		t.Errorf("error_code = %v, want ERR_VALIDATION", record["error_code"])
+	}
+	unavailable, ok := record["unavailable_artifacts"].([]any)
+	if !ok || len(unavailable) != 2 {
+		t.Errorf("unavailable_artifacts = %#v, want two entries", record["unavailable_artifacts"])
+	}
+}
+
+func TestRunWarnsWhenPromptAnalysisArtifactIsEmpty(t *testing.T) {
+	artifactsDir := t.TempDir()
+	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("creating prompts directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "prompt-template.txt"), nil, 0o600); err != nil {
+		t.Fatalf("writing empty prompt template: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "prompt-import-tree.json"), []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatalf("writing import tree: %v", err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	if !strings.Contains(stderr, "Missing or unusable prompt analysis artifacts: aw-prompts/prompt-template.txt.") {
+		t.Fatalf("stderr missing empty-artifact warning:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "prompt-import-tree.json.") {
+		t.Fatalf("stderr incorrectly reported usable import tree:\n%s", stderr)
+	}
+}
+
 func TestRunUsesLogFileEnvVar(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")

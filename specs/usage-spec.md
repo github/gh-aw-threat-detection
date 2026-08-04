@@ -97,6 +97,23 @@ where `<artifacts-dir>` conforms to the artifacts directory shape (per TD-17)
 and the host MUST NOT require all optional artifact files to be present (per
 TD-18).
 
+**U-06a**: An integrated host preparing the detector's staged artifacts directory
+MUST copy all three prompt artifacts emitted by the guarded agent job:
+
+```
+<artifacts-dir>/aw-prompts/
+├── prompt.txt
+├── prompt-template.txt
+└── prompt-import-tree.json
+```
+
+`prompt-template.txt` is the trusted pre-interpolation template, and
+`prompt-import-tree.json` records runtime-import provenance. The detector uses
+both to distinguish trusted instructions from untrusted runtime content. If
+either analysis artifact is absent, unreadable, or empty, the detector MUST
+continue with degraded analysis and MUST emit an `ERR_VALIDATION` warning to the job log and a
+`prompt_analysis_degraded` warning event to the structured run log when enabled.
+
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
 where the detector executes. The detector MUST NOT be expected to bundle the

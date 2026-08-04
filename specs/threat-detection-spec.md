@@ -154,7 +154,9 @@ threat-detection:
 ```
 <artifacts-dir>/
 ├── aw-prompts/
-│   └── prompt.txt          # Workflow prompt file
+│   ├── prompt.txt                # Rendered workflow prompt
+│   ├── prompt-template.txt       # Pre-interpolation template
+│   └── prompt-import-tree.json   # Runtime-import provenance
 ├── agent_output.json       # Agent structured output
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
@@ -163,6 +165,13 @@ threat-detection:
 ```
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
+
+**TD-18a**: If `aw-prompts/prompt-template.txt` or
+`aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
+detector MUST continue with degraded trusted-vs-untrusted prompt analysis and MUST emit an
+`ERR_VALIDATION` warning to the job log. When structured run logging is enabled,
+it MUST also emit a warning-level `prompt_analysis_degraded` event identifying
+the unavailable artifacts.
 
 ### 8.2 Output Contract
 

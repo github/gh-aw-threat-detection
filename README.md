@@ -206,8 +206,8 @@ be available on the runner where the binary runs.
 <artifacts-dir>/
 ├── aw-prompts/
 │   ├── prompt.txt          # Expanded workflow prompt file
-│   ├── prompt-template.txt # Pre-expansion prompt template (optional)
-│   └── prompt-import-tree.json # Runtime-import provenance (optional)
+│   ├── prompt-template.txt # Pre-expansion prompt template
+│   └── prompt-import-tree.json # Runtime-import provenance
 ├── agent_output.json       # Agent structured output
 ├── aw_info.json            # Activation metadata (optional)
 ├── aw-*.patch              # Git format-patch files (optional)
@@ -216,6 +216,11 @@ be available on the runner where the binary runs.
 └── comment-memory/         # Agent comment memory (optional)
     └── *.md
 ```
+
+Integrated hosts must stage all three files under `aw-prompts/`. Direct callers
+may omit the template or import tree, but the detector emits an
+`ERR_VALIDATION` warning because trusted-vs-untrusted prompt analysis is then
+degraded. Empty or unreadable analysis files produce the same warning.
 
 ### Output (JSON)
 

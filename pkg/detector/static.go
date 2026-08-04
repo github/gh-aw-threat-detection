@@ -45,7 +45,7 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 	// Load prompt template if available.
 	if arts.PromptTemplatePath != "" {
 		data, err := os.ReadFile(arts.PromptTemplatePath)
-		if err == nil {
+		if err == nil && strings.TrimSpace(string(data)) != "" {
 			analysis.PromptTemplate = string(data)
 		}
 	}
@@ -53,7 +53,7 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 	// Load import tree if available.
 	if arts.PromptImportTreePath != "" {
 		data, err := os.ReadFile(arts.PromptImportTreePath)
-		if err == nil {
+		if err == nil && strings.TrimSpace(string(data)) != "" {
 			analysis.ImportTree = string(data)
 		}
 	}

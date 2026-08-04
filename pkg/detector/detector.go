@@ -29,11 +29,18 @@ func DefaultPromptTemplate() (string, error) {
 // If promptTemplate is empty, the built-in default template is used.
 // The prompt analysis (untrusted input breakdown) is included when available.
 func BuildPrompt(arts *artifacts.Artifacts, promptTemplate string) (string, error) {
+	prompt, _, err := BuildPromptWithAnalysis(arts, promptTemplate)
+	return prompt, err
+}
+
+// BuildPromptWithAnalysis constructs the detection prompt and returns the exact
+// static analysis used to render it.
+func BuildPromptWithAnalysis(arts *artifacts.Artifacts, promptTemplate string) (string, *PromptAnalysis, error) {
 	if promptTemplate == "" {
 		var err error
 		promptTemplate, err = DefaultPromptTemplate()
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 
@@ -58,5 +65,5 @@ func BuildPrompt(arts *artifacts.Artifacts, promptTemplate string) (string, erro
 		prompt += "\n\n## Additional Instructions\n\n" + arts.CustomPrompt
 	}
 
-	return prompt, nil
+	return prompt, analysis, nil
 }

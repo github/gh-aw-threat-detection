@@ -18,11 +18,12 @@ func TestLoggerWritesJSONLRecords(t *testing.T) {
 	l.now = func() time.Time { return fixed }
 
 	l.Info("run_start", map[string]any{"engine": "copilot", "retries": 1})
+	l.Warning("prompt_analysis_degraded", map[string]any{"error_code": "ERR_VALIDATION"})
 	l.Error("detection_failed", map[string]any{"reason": "engine_error"})
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d: %q", len(lines), buf.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d: %q", len(lines), buf.String())
 	}
 
 	var first map[string]any
@@ -42,12 +43,20 @@ func TestLoggerWritesJSONLRecords(t *testing.T) {
 		t.Errorf("engine = %v, want copilot", first["engine"])
 	}
 
-	var second map[string]any
-	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+	var warning map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &warning); err != nil {
 		t.Fatalf("line 1 is not valid JSON: %v", err)
 	}
-	if second["level"] != LevelError {
-		t.Errorf("level = %v, want %s", second["level"], LevelError)
+	if warning["level"] != LevelWarning {
+		t.Errorf("level = %v, want %s", warning["level"], LevelWarning)
+	}
+
+	var third map[string]any
+	if err := json.Unmarshal([]byte(lines[2]), &third); err != nil {
+		t.Fatalf("line 2 is not valid JSON: %v", err)
+	}
+	if third["level"] != LevelError {
+		t.Errorf("level = %v, want %s", third["level"], LevelError)
 	}
 }
 
@@ -98,6 +107,7 @@ func TestNilLoggerIsNoOp(t *testing.T) {
 	var l *Logger
 	// None of these must panic.
 	l.Info("evt", map[string]any{"a": 1})
+	l.Warning("evt", nil)
 	l.Error("evt", nil)
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close() on nil logger error = %v", err)

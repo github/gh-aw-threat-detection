@@ -39,6 +39,63 @@ func TestRunInvokesAgenticEngine(t *testing.T) {
 	}
 }
 
+func TestRunPassesPromptAnalysisToEngine(t *testing.T) {
+	artifactsDir := t.TempDir()
+	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("creating prompts directory: %v", err)
+	}
+	files := map[string]string{
+		"prompt-template.txt":     "Trusted instructions.\nRequest: {{user_input}}\nEnd.",
+		"prompt.txt":              "Trusted instructions.\nRequest: inspect this issue\nEnd.",
+		"prompt-import-tree.json": `{"version":1,"children":[]}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("writing agent output: %v", err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	promptCapture := filepath.Join(t.TempDir(), "engine-prompt.txt")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotCapturingPrompt(t, copilotMarker, promptCapture, sinkJSON)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	if strings.Contains(stderr, "prompt analysis artifacts") {
+		t.Fatalf("unexpected degraded-analysis warning:\n%s", stderr)
+	}
+
+	prompt, err := os.ReadFile(promptCapture)
+	if err != nil {
+		t.Fatalf("reading captured engine prompt: %v", err)
+	}
+	for _, want := range []string{
+		"## Prompt Analysis (Trusted vs Untrusted Content)",
+		"### Prompt Template (pre-interpolation)",
+		"### Import Tree (runtime-import provenance)",
+		"### Extracted Untrusted Inputs",
+		"inspect this issue",
+	} {
+		if !strings.Contains(string(prompt), want) {
+			t.Errorf("engine prompt missing %q", want)
+		}
+	}
+}
+
 func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputPath := filepath.Join(t.TempDir(), "result.json")
@@ -263,6 +320,24 @@ func writeFakeCopilotWithSinkAndStdout(t *testing.T, markerPath, sinkJSON, stdou
 	}
 	lines = append(lines, "")
 	if err := os.WriteFile(scriptPath, []byte(strings.Join(lines, "\n")), 0o700); err != nil {
+		t.Fatalf("writing fake copilot: %v", err)
+	}
+	return binDir
+}
+
+func writeFakeCopilotCapturingPrompt(t *testing.T, markerPath, promptPath, sinkJSON string) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "copilot")
+	script := strings.Join([]string{
+		"#!/bin/sh",
+		"cat > " + shellQuote(promptPath),
+		"printf called > " + shellQuote(markerPath),
+		"printf '%s' " + shellQuote(sinkJSON) + " > \"$THREAT_DETECTION_RESULT_FILE\"",
+		"",
+	}, "\n")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
 		t.Fatalf("writing fake copilot: %v", err)
 	}
 	return binDir
