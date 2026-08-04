@@ -339,6 +339,33 @@ func TestLoad_HasPatchEnvWithPatchFileNoWarning(t *testing.T) {
 	}
 }
 
+func TestLoad_HasPatchEnvWithZeroLengthPatchEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	// A zero-length patch file is present on disk but provides no actual patch
+	// context, so it must not be treated as satisfying HAS_PATCH.
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte(""))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "patch")
+	if w == nil {
+		t.Fatalf("expected a patch warning for a zero-length patch file, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "HAS_PATCH=true") {
+		t.Errorf("unexpected patch warning message: %q", w.Message)
+	}
+}
+
 func TestLoad_AllPrimaryInputsMissingIsFlagged(t *testing.T) {
 	dir := t.TempDir()
 
@@ -352,6 +379,22 @@ func TestLoad_AllPrimaryInputsMissingIsFlagged(t *testing.T) {
 	}
 	if len(arts.Warnings) < 2 {
 		t.Errorf("expected at least prompt and agent_output warnings, got: %#v", arts.Warnings)
+	}
+}
+
+func TestLoad_AllPrimaryInputsMissingIgnoresZeroLengthPatch(t *testing.T) {
+	dir := t.TempDir()
+	// A zero-length patch file must not count as "present" for the
+	// all-primary-inputs-missing check either.
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte(""))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !arts.AllPrimaryInputsMissing {
+		t.Errorf("AllPrimaryInputsMissing = false, want true when only a zero-length patch is present")
 	}
 }
 

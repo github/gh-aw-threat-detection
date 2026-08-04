@@ -252,6 +252,91 @@ func TestRunEmitsEngineErrorStatusOnFailClosed(t *testing.T) {
 	}
 }
 
+func TestRunFailsClosedOnEmptyArtifactsDirectory(t *testing.T) {
+	artifactsDir := t.TempDir() // deliberately empty: no prompt, no agent output, no patch.
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (fail closed on all-primary-inputs-missing)", code, exitError)
+	}
+	if _, err := os.Stat(copilotMarker); !os.IsNotExist(err) {
+		t.Fatalf("expected the engine to never run, but copilot marker exists (stat err = %v)", err)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no result file to be written, stat err = %v", err)
+	}
+	want := "THREAT_DETECTION_STATUS: reason=config_error exit=2"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr missing status line %q, got:\n%s", want, stderr)
+	}
+	if !strings.Contains(stderr, "ERR_VALIDATION") {
+		t.Fatalf("stderr missing ERR_VALIDATION warning annotations, got:\n%s", stderr)
+	}
+}
+
+func TestRunFailsClosedOnEmptyArtifactsDirectoryWithLogFile(t *testing.T) {
+	artifactsDir := t.TempDir() // deliberately empty.
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	logPath := filepath.Join(t.TempDir(), "run.jsonl")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-log-file", logPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (fail closed)", code, exitError)
+	}
+	if _, err := os.Stat(copilotMarker); !os.IsNotExist(err) {
+		t.Fatalf("expected the engine to never run, but copilot marker exists (stat err = %v)", err)
+	}
+
+	records := readJSONLRecords(t, logPath)
+
+	degraded := 0
+	for _, rec := range records {
+		if rec["event"] == "artifact_degraded" {
+			degraded++
+		}
+	}
+	if degraded < 2 {
+		t.Fatalf("expected at least 2 artifact_degraded records (prompt + agent_output), got %d: %#v", degraded, records)
+	}
+
+	if findRecord(records, "artifacts_all_primary_inputs_missing") == nil {
+		t.Fatalf("missing artifacts_all_primary_inputs_missing record: %#v", records)
+	}
+
+	status := findRecord(records, "status")
+	if status == nil {
+		t.Fatalf("missing status record: %#v", records)
+	}
+	if status["reason"] != reasonConfigError {
+		t.Errorf("status reason = %v, want %s", status["reason"], reasonConfigError)
+	}
+	if exit, ok := status["exit"].(float64); !ok || int(exit) != exitError {
+		t.Errorf("status exit = %v, want %d", status["exit"], exitError)
+	}
+}
+
 func runWithTestArgs(t *testing.T, args []string, env map[string]string) int {
 	t.Helper()
 	code, _ := runWithTestArgsCapture(t, args, env)
