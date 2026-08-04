@@ -178,20 +178,23 @@ log artifact) together with `gh-aw`'s `logs` tooling.
 
 ### Released binary
 
-The `threat-detect` binary is published as GitHub Release assets
-(`threat-detect-linux-amd64` and `threat-detect-linux-arm64`) alongside a
-shared `checksums.txt`. Download the asset matching your runner architecture and
-run it directly:
+The `threat-detect` binary is published as GitHub Release assets for Linux and
+macOS on amd64 and arm64 alongside a shared `checksums.txt`. Download the asset
+matching your runner platform and run it directly:
 
 ```bash
-# Pick the asset for your architecture (amd64 or arm64).
-case "$(uname -m)" in
-  x86_64|amd64) asset=threat-detect-linux-amd64 ;;
-  aarch64|arm64) asset=threat-detect-linux-arm64 ;;
+# Pick the asset for your operating system and architecture.
+case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64|Linux/amd64)  asset=threat-detect-linux-amd64 ;;
+  Linux/aarch64|Linux/arm64) asset=threat-detect-linux-arm64 ;;
+  Darwin/x86_64)             asset=threat-detect-darwin-x64 ;;
+  Darwin/arm64)              asset=threat-detect-darwin-arm64 ;;
+  *) echo "unsupported platform" >&2; exit 1 ;;
 esac
 gh release download --repo github/gh-aw-threat-detection \
   --pattern "$asset" --pattern checksums.txt
-sha256sum --check --ignore-missing checksums.txt
+awk -v asset="$asset" '$2 == asset' checksums.txt |
+  if command -v sha256sum >/dev/null; then sha256sum --check; else shasum -a 256 --check; fi
 install -m 0755 "$asset" ./threat-detect
 ./threat-detect /path/to/artifacts
 ```
@@ -199,6 +202,11 @@ install -m 0755 "$asset" ./threat-detect
 Omitting a tag downloads the latest stable (promoted) release. Production
 AI-backed detection requires the selected engine CLI and its authentication to
 be available on the runner where the binary runs.
+
+The macOS binaries are not code-signed or notarized. The `gh-aw` installer
+checksum-verifies CI downloads before execution. Browser downloads may be
+quarantined by Gatekeeper; prefer the installer, or verify the checksum before
+removing quarantine.
 
 ### Input (Artifacts Directory)
 
@@ -268,10 +276,12 @@ Decisions for the unresolved extraction questions:
 ## Release Asset Setup
 
 The repository can remain private while publishing release assets. The release
-workflow builds `threat-detect-linux-amd64` and `threat-detect-linux-arm64`,
-records each asset's sha256 in the release notes, and attaches them (plus a
-shared `checksums.txt`) to a GitHub **prerelease** using the automatic
-`GITHUB_TOKEN` with `contents: write`.
+workflow builds Linux and macOS binaries for amd64 and arm64, records each
+asset's sha256 in the release notes, and attaches them (plus a shared
+`checksums.txt`) to a GitHub **prerelease** using the automatic `GITHUB_TOKEN`
+with `contents: write`. `release-targets.txt` is the canonical build matrix for
+both tagged and rolling releases. The scheduled Release Platform Parity workflow
+compares its asset names with the platforms supported by `gh-aw`'s installer.
 
 Maintainers need to configure the following before the binary is consumed by `gh-aw`:
 
@@ -305,7 +315,7 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-claude-standalone.md`
 - `.github/workflows/smoke-codex-standalone.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect-linux-amd64` binary (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
 
 ### Detection-only Workflow
 
@@ -407,7 +417,9 @@ const DefaultThreatDetectionRepo    = "github/gh-aw-threat-detection"
 const DefaultThreatDetectionVersion = "v0.0.2"
 ```
 
-The detection job in compiled workflows downloads the pinned `threat-detect` release asset matching the runner architecture (`threat-detect-linux-amd64` or `threat-detect-linux-arm64`) and runs it instead of inline AI engine invocation.
+The detection job in compiled workflows downloads the pinned `threat-detect`
+release asset matching the runner operating system and architecture and runs it
+instead of inline AI engine invocation.
 
 ## Specification
 
