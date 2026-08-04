@@ -109,6 +109,11 @@ where `<artifacts-dir>` conforms to the artifacts directory shape (per TD-17)
 and the host MUST NOT require all optional artifact files to be present (per
 TD-18).
 
+The detector consumes the prompt artifacts, agent output, activation metadata,
+and root `aw-*.patch` / `aw-*.bundle` files. It inventories all other files
+recursively; `experiments/` and `comment-memory/` are currently inventory-only
+inputs (per TD-17b).
+
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
 where the detector executes. The detector MUST NOT be expected to bundle the
@@ -122,7 +127,9 @@ verdict payload and MUST read it from the location it configured (stdout, or the
 (per TD-20a). The host MAY configure its path via `--log-file` (or
 `THREAT_DETECTION_LOG_FILE`); otherwise, when `--output` is set, the detector
 writes `detection-runlog.jsonl` in the result file's directory. The host MUST NOT
-point `--log-file` and `--output` at the same path.
+point `--log-file` and `--output` at the same path. In GitHub Actions, the host
+SHOULD provide `GITHUB_STEP_SUMMARY` so the recursive artifact inventory is
+visible in the run summary (per TD-20c).
 
 ### 3.1 Flags
 
@@ -207,7 +214,7 @@ threat-detect conclude --result-file <path>/detection_result.json
 `GH_AW_DETECTION_REASON` to `GITHUB_ENV` (per TD-20b).
 
 **U-18a**: `conclude` emits a self-contained diagnostic section on standard
-output (per TD-20c): the environment inputs and resolved paths, the per-field
+output (per TD-20d): the environment inputs and resolved paths, the per-field
 verdict breakdown with indexed reasons, and — when the result file is missing or
 unusable — a recursive listing of the result directory plus detection-log stats
 and any `THREAT_DETECTION_*` marker lines. A conforming host SHOULD surface this

@@ -66,6 +66,13 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 		}
 	}
 
+	if arts.ActivationContext != nil {
+		analysis.UntrustedInputs = append(analysis.UntrustedInputs, UntrustedInput{
+			Placeholder: "aw_info.json activation context",
+			Content:     arts.FormatActivationContext(),
+		})
+	}
+
 	return analysis
 }
 

@@ -89,9 +89,14 @@ The detector operates on an artifacts directory. The current expected shape is d
 
 - `aw-prompts/prompt.txt`
 - `agent_output.json`
+- optional `aw_info.json` (bounded allowlisted fields are consumed as untrusted context)
 - optional `aw-*.patch`
 - optional `aw-*.bundle`
-- optional `comment-memory/*.md`
+- optional `experiments/*` (inventoried only)
+- optional `comment-memory/*.md` (inventoried only)
+
+Every non-directory entry is recursively inventoried with its size and consumed
+status for the run log and GitHub Actions step summary.
 
 When changing artifact handling, review:
 
