@@ -15,6 +15,20 @@ func writeTestFile(t *testing.T, path string, data []byte) {
 	}
 }
 
+// writeMinimalArtifactsForTest populates dir with a non-empty prompt and
+// agent output file so Load does not emit unrelated prompt/agent_output
+// warnings, keeping comment-memory-focused tests focused on comment-memory
+// warnings only.
+func writeMinimalArtifactsForTest(t *testing.T, dir string) {
+	t.Helper()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+}
+
 func TestLoad_ValidDirectory(t *testing.T) {
 	dir := t.TempDir()
 
@@ -152,6 +166,267 @@ func TestLoad_CommentMemorySymlinkedFileSkipped(t *testing.T) {
 	}
 }
 
+// findWarning returns the first warning for the given field, or nil.
+func findWarning(warnings []ArtifactWarning, field string) *ArtifactWarning {
+	for i := range warnings {
+		if warnings[i].Field == field {
+			return &warnings[i]
+		}
+	}
+	return nil
+}
+
+func TestLoad_MissingPromptEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	// Prompt missing, but agent output and a patch present so this is not the
+	// all-primary-inputs-missing case.
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte("diff"))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "prompt")
+	if w == nil {
+		t.Fatalf("expected a prompt warning, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "ERR_VALIDATION") || !strings.Contains(w.Message, "Missing detection context prompt") {
+		t.Errorf("unexpected prompt warning message: %q", w.Message)
+	}
+	if arts.AllPrimaryInputsMissing {
+		t.Errorf("AllPrimaryInputsMissing = true, want false")
+	}
+}
+
+func TestLoad_EmptyPromptEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte(""))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "prompt")
+	if w == nil {
+		t.Fatalf("expected a prompt warning for empty file, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "is empty") {
+		t.Errorf("unexpected prompt warning message: %q", w.Message)
+	}
+	if arts.PromptFileSize != 0 {
+		t.Errorf("PromptFileSize = %d, want 0", arts.PromptFileSize)
+	}
+}
+
+func TestLoad_MissingAgentOutputEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "agent_output")
+	if w == nil {
+		t.Fatalf("expected an agent_output warning, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "ERR_VALIDATION") || !strings.Contains(w.Message, "Missing agent output file") {
+		t.Errorf("unexpected agent_output warning message: %q", w.Message)
+	}
+}
+
+func TestLoad_InvalidJSONAgentOutputEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte("not json{{{"))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "agent_output")
+	if w == nil {
+		t.Fatalf("expected an agent_output warning for invalid JSON, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "not valid JSON") {
+		t.Errorf("unexpected agent_output warning message: %q", w.Message)
+	}
+}
+
+func TestLoad_EmptyAgentOutputEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(""))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "agent_output")
+	if w == nil {
+		t.Fatalf("expected an agent_output warning for empty file, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "is empty") {
+		t.Errorf("unexpected agent_output warning message: %q", w.Message)
+	}
+}
+
+func TestLoad_HasPatchEnvButNoPatchFileEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "patch")
+	if w == nil {
+		t.Fatalf("expected a patch warning, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "HAS_PATCH=true") {
+		t.Errorf("unexpected patch warning message: %q", w.Message)
+	}
+}
+
+func TestLoad_HasPatchEnvWithPatchFileNoWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte("diff"))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if w := findWarning(arts.Warnings, "patch"); w != nil {
+		t.Errorf("unexpected patch warning: %q", w.Message)
+	}
+}
+
+func TestLoad_HasPatchEnvWithZeroLengthPatchEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	// A zero-length patch file is present on disk but provides no actual patch
+	// context, so it must not be treated as satisfying HAS_PATCH.
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte(""))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	w := findWarning(arts.Warnings, "patch")
+	if w == nil {
+		t.Fatalf("expected a patch warning for a zero-length patch file, got: %#v", arts.Warnings)
+	}
+	if !strings.Contains(w.Message, "HAS_PATCH=true") {
+		t.Errorf("unexpected patch warning message: %q", w.Message)
+	}
+}
+
+func TestLoad_AllPrimaryInputsMissingIsFlagged(t *testing.T) {
+	dir := t.TempDir()
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !arts.AllPrimaryInputsMissing {
+		t.Errorf("AllPrimaryInputsMissing = false, want true for a fully empty artifacts dir")
+	}
+	if len(arts.Warnings) < 2 {
+		t.Errorf("expected at least prompt and agent_output warnings, got: %#v", arts.Warnings)
+	}
+}
+
+func TestLoad_AllPrimaryInputsMissingIgnoresZeroLengthPatch(t *testing.T) {
+	dir := t.TempDir()
+	// A zero-length patch file must not count as "present" for the
+	// all-primary-inputs-missing check either.
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte(""))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !arts.AllPrimaryInputsMissing {
+		t.Errorf("AllPrimaryInputsMissing = false, want true when only a zero-length patch is present")
+	}
+}
+
+func TestLoad_ValidDirectoryHasNoWarnings(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte("diff content"))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(arts.Warnings) != 0 {
+		t.Errorf("expected no warnings for a fully populated artifacts dir, got: %#v", arts.Warnings)
+	}
+	if arts.AllPrimaryInputsMissing {
+		t.Errorf("AllPrimaryInputsMissing = true, want false")
+	}
+	if arts.PromptFileSize != int64(len("test prompt")) {
+		t.Errorf("PromptFileSize = %d, want %d", arts.PromptFileSize, len("test prompt"))
+	}
+	if arts.AgentOutputFileSize != int64(len(`{"items":[]}`)) {
+		t.Errorf("AgentOutputFileSize = %d, want %d", arts.AgentOutputFileSize, len(`{"items":[]}`))
+	}
+}
+
 func TestLoad_WorkflowNameFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WORKFLOW_NAME", "My Custom Workflow")
@@ -279,6 +554,7 @@ func TestLoad_InventoryIncludesNestedConsumedAndUnconsumedFiles(t *testing.T) {
 
 func TestLoad_CommentMemoryFiles(t *testing.T) {
 	dir := t.TempDir()
+	writeMinimalArtifactsForTest(t, dir)
 	cmDir := filepath.Join(dir, "comment-memory")
 	if err := os.MkdirAll(cmDir, 0o755); err != nil {
 		t.Fatalf("creating comment-memory dir: %v", err)
@@ -311,6 +587,7 @@ func TestLoad_CommentMemoryFiles(t *testing.T) {
 
 func TestLoad_CommentMemoryEmptyDir(t *testing.T) {
 	dir := t.TempDir()
+	writeMinimalArtifactsForTest(t, dir)
 	if err := os.MkdirAll(filepath.Join(dir, "comment-memory"), 0o755); err != nil {
 		t.Fatalf("creating comment-memory dir: %v", err)
 	}
@@ -329,6 +606,7 @@ func TestLoad_CommentMemoryEmptyDir(t *testing.T) {
 
 func TestLoad_CommentMemoryNotADirectory(t *testing.T) {
 	dir := t.TempDir()
+	writeMinimalArtifactsForTest(t, dir)
 	// A regular file named comment-memory should not be treated as the dir and
 	// must not warn (parity: only inspection failures warn).
 	writeTestFile(t, filepath.Join(dir, "comment-memory"), []byte("not a dir"))

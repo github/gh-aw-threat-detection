@@ -13,6 +13,7 @@ import (
 func runDetectionForPromptContext(t *testing.T, env map[string]string, extraArgs ...string) (map[string]any, string) {
 	t.Helper()
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	marker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
@@ -166,11 +167,13 @@ func TestPromptContextEmptyFlagClearsEnvCustomPrompt(t *testing.T) {
 
 func TestPromptContextRejectsUnreadableCustomPromptFile(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.md")
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 
 	code, stderr := runWithTestArgsCapture(t, []string{
 		"threat-detect",
 		"-custom-prompt-file", missing,
-		t.TempDir(),
+		artifactsDir,
 	}, nil)
 
 	if code != exitError {

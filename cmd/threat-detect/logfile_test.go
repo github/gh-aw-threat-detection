@@ -40,6 +40,7 @@ func findRecord(records []map[string]any, event string) map[string]any {
 
 func TestRunWritesJSONLLog(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	if err := os.MkdirAll(filepath.Join(artifactsDir, "experiments"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -84,15 +85,24 @@ func TestRunWritesJSONLLog(t *testing.T) {
 		t.Fatalf("missing artifacts_loaded record: %#v", records)
 	}
 	inventory, ok := loaded["inventory"].([]any)
-	if !ok || len(inventory) != 1 {
-		t.Fatalf("artifacts_loaded inventory = %#v, want one entry", loaded["inventory"])
-	}
-	entry, ok := inventory[0].(map[string]any)
 	if !ok {
-		t.Fatalf("inventory entry = %#v", inventory[0])
+		t.Fatalf("artifacts_loaded inventory = %#v, want a list", loaded["inventory"])
 	}
-	if entry["path"] != "experiments/assignment.json" || entry["consumed"] != false {
-		t.Errorf("inventory entry = %#v, want unconsumed experiment", entry)
+	var experimentEntry map[string]any
+	for _, raw := range inventory {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("inventory entry = %#v", raw)
+		}
+		if entry["path"] == "experiments/assignment.json" {
+			experimentEntry = entry
+		}
+	}
+	if experimentEntry == nil {
+		t.Fatalf("inventory %#v missing experiments/assignment.json entry", inventory)
+	}
+	if experimentEntry["consumed"] != false {
+		t.Errorf("inventory entry = %#v, want unconsumed experiment", experimentEntry)
 	}
 
 	summary, err := os.ReadFile(summaryPath)
@@ -130,6 +140,7 @@ func TestRunWritesJSONLLog(t *testing.T) {
 
 func TestRunWarnsWhenPromptAnalysisArtifactsAreMissing(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
@@ -176,6 +187,7 @@ func TestRunWarnsWhenPromptAnalysisArtifactsAreMissing(t *testing.T) {
 
 func TestRunWarnsWhenPromptAnalysisArtifactIsEmpty(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
 	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
 		t.Fatalf("creating prompts directory: %v", err)
@@ -212,6 +224,7 @@ func TestRunWarnsWhenPromptAnalysisArtifactIsEmpty(t *testing.T) {
 
 func TestRunDefaultsLogBesideOutput(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputDir := t.TempDir()
 	outputPath := filepath.Join(outputDir, "result.json")
 	logPath := filepath.Join(outputDir, "detection-runlog.jsonl")
@@ -242,6 +255,7 @@ func TestRunDefaultsLogBesideOutput(t *testing.T) {
 
 func TestRunUsesLogFileEnvVar(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")

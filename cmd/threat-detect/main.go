@@ -210,8 +210,12 @@ func run() (code int) {
 		return exitError
 	}
 	logger.Info("artifacts_loaded", map[string]any{
-		"artifacts_dir": artifactsDir,
-		"inventory":     arts.Inventory,
+		"artifacts_dir":              artifactsDir,
+		"inventory":                  arts.Inventory,
+		"prompt_bytes":               arts.PromptFileSize,
+		"agent_output_bytes":         arts.AgentOutputFileSize,
+		"patch_files":                len(arts.PatchFiles),
+		"all_primary_inputs_missing": arts.AllPrimaryInputsMissing,
 	})
 	if err := stepsummary.WriteArtifactInventory(os.Getenv("GITHUB_STEP_SUMMARY"), arts.Inventory); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing artifact inventory summary: %v\n", err)
@@ -219,9 +223,28 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
+
+	// Degraded inputs (missing/empty prompt or agent output, an expected but
+	// absent patch, an unreadable comment-memory directory, ...) are surfaced
+	// as GitHub Actions warning annotations so they are visible even when this
+	// binary runs outside gh-aw's own "Prepare threat detection files" step.
+	// See pkg/artifacts.Load. Messages embed a caller-controlled artifacts
+	// directory path, so they must be escaped per the workflow-command rules
+	// to prevent a path containing "%" or a newline from forging another
+	// workflow command.
 	for _, w := range arts.Warnings {
-		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w))
-		logger.Info("artifacts_warning", map[string]any{"warning": w})
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w.Message))
+		logger.Error("artifact_degraded", map[string]any{"field": w.Field, "message": w.Message})
+	}
+
+	// All primary inputs missing simultaneously means detection would silently
+	// analyze nothing and return a clean verdict — a fail-open failure mode in
+	// a security control. Fail closed instead of proceeding.
+	if arts.AllPrimaryInputsMissing {
+		fmt.Fprintf(os.Stderr, "Error: prompt, agent output, and patch/bundle files are all missing or empty in %s; refusing to run detection on empty input.\n", artifactsDir)
+		logger.Error("artifacts_all_primary_inputs_missing", map[string]any{"artifacts_dir": artifactsDir})
+		reason = reasonConfigError
+		return exitError
 	}
 
 	// Resolve workflow-context overrides. Provenance is tracked from whether a

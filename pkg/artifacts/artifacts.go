@@ -33,6 +33,23 @@ const (
 	DefaultWorkflowDescription = "No description provided"
 )
 
+// errCodeValidation mirrors the ERR_VALIDATION prefix used by gh-aw's
+// error_codes.cjs so degraded-artifact warnings look identical whether they
+// originate from gh-aw's inline detection path or this standalone detector.
+const errCodeValidation = "ERR_VALIDATION"
+
+// ArtifactWarning records a single degraded-input finding: a human-readable
+// message (already prefixed with the ERR_VALIDATION error code) plus the
+// structured fields worth mirroring into the JSONL run log.
+type ArtifactWarning struct {
+	// Message is the full warning text, ready to emit as
+	// "::warning::" + Message in a GitHub Actions annotation.
+	Message string
+	// Field identifies which artifact the warning concerns (e.g. "prompt",
+	// "agent_output", "patch"), for structured logging.
+	Field string
+}
+
 // InventoryEntry describes a file discovered below the artifacts directory.
 type InventoryEntry struct {
 	Path     string `json:"path"`
@@ -119,10 +136,26 @@ type Artifacts struct {
 	// files for template replacement.
 	CommentMemoryFileInfo string
 
+	// PromptFileSize is the size in bytes of the prompt file, or 0 if absent.
+	PromptFileSize int64
+
+	// AgentOutputFileSize is the size in bytes of the agent output file, or 0 if absent.
+	AgentOutputFileSize int64
+
 	// Warnings holds non-fatal validation warnings collected while loading
-	// artifacts (for example, an unreadable comment-memory directory). Each
-	// entry is prefixed with an error code such as ERR_VALIDATION.
-	Warnings []string
+	// artifacts (for example, missing/empty prompt or agent output, an
+	// unreadable comment-memory directory, or an expected-but-absent patch).
+	// Each entry's Message is prefixed with an error code such as
+	// ERR_VALIDATION. Callers are expected to surface each one as a GitHub
+	// Actions ::warning:: annotation and mirror it into the JSONL run log.
+	Warnings []ArtifactWarning
+
+	// AllPrimaryInputsMissing is true when the prompt, agent output, and any
+	// patch/bundle files are all missing or empty simultaneously. This is a
+	// fail-open red flag: the detector would otherwise analyze nothing and
+	// return a clean verdict. Callers should treat this as a hard
+	// configuration error rather than proceeding.
+	AllPrimaryInputsMissing bool
 }
 
 // Load reads and validates artifacts from the given directory.
@@ -153,12 +186,27 @@ func Load(dir string) (*Artifacts, error) {
 	}
 	arts.Inventory = inventory
 
-	// Check for prompt file
+	// Check for prompt file. Missing or zero-length is a degraded input:
+	// detection continues with fallback workflow context (WORKFLOW_NAME/
+	// WORKFLOW_DESCRIPTION), but the operator must be warned.
 	promptPath := filepath.Join(dir, artifactPromptDir, "prompt.txt")
-	if fileExists(promptPath) {
+	promptSize, promptErr := fileSize(promptPath)
+	promptMissing := promptErr != nil
+	promptEmpty := promptErr == nil && promptSize == 0
+	if !promptMissing {
 		arts.PromptFilePath = promptPath
+		arts.PromptFileSize = promptSize
 	} else {
 		arts.PromptFilePath = "No prompt file found"
+	}
+	if promptMissing {
+		arts.addWarning("prompt", fmt.Sprintf(
+			"%s: Missing detection context prompt at %s. Ensure the agent artifact includes aw-prompts/prompt.txt. Detection will continue with fallback workflow context.",
+			errCodeValidation, promptPath))
+	} else if promptEmpty {
+		arts.addWarning("prompt", fmt.Sprintf(
+			"%s: Detection context prompt at %s is empty. Detection will continue with fallback workflow context.",
+			errCodeValidation, promptPath))
 	}
 
 	// Check for prompt template file (pre-expansion template)
@@ -173,12 +221,32 @@ func Load(dir string) (*Artifacts, error) {
 		arts.PromptImportTreePath = promptImportTreePath
 	}
 
-	// Check for agent output file
+	// Check for agent output file. Missing, zero-length, or invalid JSON is a
+	// degraded input: the detector cannot see the agent's structured output.
 	agentOutputPath := filepath.Join(dir, artifactAgentOutput)
-	if fileExists(agentOutputPath) {
+	agentOutputData, agentOutputErr := os.ReadFile(agentOutputPath)
+	agentOutputMissing := agentOutputErr != nil
+	agentOutputEmpty := agentOutputErr == nil && len(agentOutputData) == 0
+	agentOutputInvalid := agentOutputErr == nil && len(agentOutputData) > 0 && !json.Valid(agentOutputData)
+	if !agentOutputMissing {
 		arts.AgentOutputFilePath = agentOutputPath
+		arts.AgentOutputFileSize = int64(len(agentOutputData))
 	} else {
 		arts.AgentOutputFilePath = "No agent output file found"
+	}
+	switch {
+	case agentOutputMissing:
+		arts.addWarning("agent_output", fmt.Sprintf(
+			"%s: Missing agent output file at %s. Detection will run without the agent's structured output.",
+			errCodeValidation, agentOutputPath))
+	case agentOutputEmpty:
+		arts.addWarning("agent_output", fmt.Sprintf(
+			"%s: Agent output file at %s is empty. Detection will run without the agent's structured output.",
+			errCodeValidation, agentOutputPath))
+	case agentOutputInvalid:
+		arts.addWarning("agent_output", fmt.Sprintf(
+			"%s: Agent output file at %s is not valid JSON. Detection will run without the agent's structured output.",
+			errCodeValidation, agentOutputPath))
 	}
 
 	awInfoPath := filepath.Join(dir, activationInfoName)
@@ -206,24 +274,46 @@ func Load(dir string) (*Artifacts, error) {
 		}
 	}
 
-	// Build patch file info string
-	if len(arts.PatchFiles) > 0 {
-		var infos []string
-		for _, p := range arts.PatchFiles {
-			info, err := os.Stat(p)
-			if err != nil {
-				continue
-			}
-			pType := "git-patch"
-			if strings.HasSuffix(p, ".bundle") {
-				pType = "git-bundle"
-			}
-			infos = append(infos, fmt.Sprintf("%s (%d bytes, %s)", p, info.Size(), pType))
+	// Build patch file info string. A patch/bundle only counts as "present"
+	// for the checks below if it is a readable, non-empty regular file: a
+	// zero-length or unreadable entry provides no actual patch context.
+	var infos []string
+	hasReadablePatch := false
+	for _, p := range arts.PatchFiles {
+		info, statErr := os.Stat(p)
+		if statErr != nil {
+			continue
 		}
+		if info.Size() > 0 {
+			hasReadablePatch = true
+		}
+		pType := "git-patch"
+		if strings.HasSuffix(p, ".bundle") {
+			pType = "git-bundle"
+		}
+		infos = append(infos, fmt.Sprintf("%s (%d bytes, %s)", p, info.Size(), pType))
+	}
+	if len(infos) > 0 {
 		arts.PatchFileInfo = strings.Join(infos, "\n")
 	} else {
 		arts.PatchFileInfo = "No patch or bundle file found"
 	}
+
+	// Cross-check against HAS_PATCH: gh-aw sets this env var when the agent
+	// job reported a patch, so its absence here means the patch/bundle never
+	// made it into the artifacts directory (or it is present but empty/unreadable).
+	if os.Getenv("HAS_PATCH") == "true" && !hasReadablePatch {
+		arts.addWarning("patch", fmt.Sprintf(
+			"%s: HAS_PATCH=true was set but no readable, non-empty aw-*.patch or aw-*.bundle file was found in %s. Detection will run without patch context.",
+			errCodeValidation, dir))
+	}
+
+	// All three primary inputs missing simultaneously means the detector would
+	// otherwise analyze nothing and return a clean verdict: a fail-open failure
+	// mode in a security control. Flag it so the caller can hard-fail instead.
+	arts.AllPrimaryInputsMissing = (promptMissing || promptEmpty) &&
+		(agentOutputMissing || agentOutputEmpty || agentOutputInvalid) &&
+		!hasReadablePatch
 
 	// Discover comment-memory markdown files (an attacker-influenced, persisted
 	// channel written by the agent). The directory is optional; when present but
@@ -410,8 +500,8 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 	info, err := os.Lstat(commentMemoryDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			arts.Warnings = append(arts.Warnings, fmt.Sprintf(
-				"ERR_VALIDATION: Unable to inspect comment-memory directory at %s: %v", commentMemoryDir, err))
+			arts.addWarning("comment_memory", fmt.Sprintf(
+				"%s: Unable to inspect comment-memory directory at %s: %v", errCodeValidation, commentMemoryDir, err))
 		}
 		arts.CommentMemoryFileInfo = "No comment-memory files found"
 		return
@@ -425,8 +515,8 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 
 	entries, err := os.ReadDir(commentMemoryDir)
 	if err != nil {
-		arts.Warnings = append(arts.Warnings, fmt.Sprintf(
-			"ERR_VALIDATION: Unable to read comment-memory directory at %s: %v", commentMemoryDir, err))
+		arts.addWarning("comment_memory", fmt.Sprintf(
+			"%s: Unable to read comment-memory directory at %s: %v", errCodeValidation, commentMemoryDir, err))
 		arts.CommentMemoryFileInfo = "No comment-memory files found"
 		return
 	}
@@ -461,6 +551,21 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// fileSize returns the size of the regular file at path, or an error if it
+// does not exist or is not accessible.
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// addWarning records an ERR_VALIDATION finding on the Artifacts value.
+func (a *Artifacts) addWarning(field, message string) {
+	a.Warnings = append(a.Warnings, ArtifactWarning{Field: field, Message: message})
 }
 
 func envOrDefault(key, defaultVal string) string {
