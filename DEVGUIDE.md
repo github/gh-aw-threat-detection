@@ -192,10 +192,11 @@ Releases follow a **prerelease → promote** model:
    bump. The workflow validates `main` and pushes the next `vX.Y.Z` tag.
 
 2. **Build & Publish (automated)** — pushing a tag matching `v*` triggers the
-   [release workflow](.github/workflows/release.yml). It builds the
-   `threat-detect-linux-amd64` and `threat-detect-linux-arm64` binaries,
-   attaches them (plus a shared `checksums.txt`) to a **prerelease** on GitHub,
-   and records each asset's sha256 in the release notes.
+   [release workflow](.github/workflows/release.yml). It builds every platform
+   in [`release-targets.txt`](release-targets.txt) (Linux and macOS on amd64 and
+   arm64), attaches the binaries plus a shared `checksums.txt` to a
+   **prerelease** on GitHub, and records each asset's sha256 in the release
+   notes.
    The `release-publish` environment gate
    pauses the workflow before publishing so maintainers can abort if needed.
 
@@ -217,9 +218,9 @@ In addition to release tags, every push to `main` triggers the
 [publish-main workflow](.github/workflows/publish-main.yml), which builds the
 binary and republishes a single rolling `main` pre-release:
 
-- The `main` pre-release always carries the `threat-detect-linux-amd64` and
-  `threat-detect-linux-arm64` assets built from the most recent successful build
-  from `main`, versioned `main-<shortsha>`.
+- The `main` pre-release always carries every asset declared in
+  [`release-targets.txt`](release-targets.txt), built from the most recent
+  successful build from `main` and versioned `main-<shortsha>`.
 
 These are **unverified branch builds**. The `main` pre-release is not eligible
 for promotion. The **Latest** stable release pointer is
@@ -246,7 +247,10 @@ After the tag is pushed:
 
 1. Approve the `release-publish` environment gate when the workflow pauses.
 2. Verify the prerelease on the [Releases page](../../releases) and test the
-   version-tagged `threat-detect-linux-amd64` / `threat-detect-linux-arm64` assets.
+   version-tagged binaries for every platform in
+   [`release-targets.txt`](release-targets.txt). Confirm `checksums.txt` contains
+   and verifies each asset; test binaries on their matching Linux and macOS
+   architectures before promotion.
 3. When satisfied, go to **Actions → Promote Release**, enter the tag, and run
    the workflow. Approve the `release-promote` environment gate.
 4. Confirm the **Latest** release now resolves to the new version.

@@ -153,6 +153,77 @@ func TestConcludeContract(t *testing.T) {
 			wantSuccess:     "false",
 			wantReason:      "parse_error",
 		},
+		// --- Remaining matrix combinations from
+		// {RUN_DETECTION} x {result file present/absent/malformed} x {warn/strict} x
+		// {execution outcome} (gh-aw-threat-detection#694). The cases above cover the
+		// primary decision paths; these fill in the combinations that exercise
+		// mustFail's scope (agent_failure/parse_error only, never threat_detected) and
+		// confirm executionFailed is inert on the success path.
+		{
+			name:           "success on safe verdict is unaffected by warn mode",
+			runDetection:   "true",
+			warnMode:       true,
+			resultContent:  safeVerdict,
+			wantExit:       concludeExitProceed,
+			wantConclusion: "success",
+			wantSuccess:    "true",
+			wantReason:     "",
+		},
+		{
+			name:            "success on safe verdict is unaffected by executionFailed",
+			runDetection:    "true",
+			warnMode:        false,
+			executionFailed: true,
+			resultContent:   safeVerdict,
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "success",
+			wantSuccess:     "true",
+			wantReason:      "",
+		},
+		{
+			name:            "threat_detected warns even when execution failed (mustFail excludes threat_detected)",
+			runDetection:    "true",
+			warnMode:        true,
+			executionFailed: true,
+			resultContent:   threatVerdict,
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
+			wantSuccess:     "false",
+			wantReason:      "threat_detected",
+		},
+		{
+			name:            "malformed file warns when execution succeeded",
+			runDetection:    "true",
+			warnMode:        true,
+			executionFailed: false,
+			resultContent:   "{not json",
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
+			wantSuccess:     "false",
+			wantReason:      "parse_error",
+		},
+		{
+			name:            "missing file fails closed in strict mode regardless of execution outcome",
+			runDetection:    "true",
+			warnMode:        false,
+			executionFailed: true,
+			resultMissing:   true,
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+			wantSuccess:     "false",
+			wantReason:      "agent_failure",
+		},
+		{
+			name:            "malformed file fails closed in strict mode regardless of execution outcome",
+			runDetection:    "true",
+			warnMode:        false,
+			executionFailed: true,
+			resultContent:   "{not json",
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+			wantSuccess:     "false",
+			wantReason:      "parse_error",
+		},
 	}
 
 	for _, tt := range tests {
@@ -209,29 +280,88 @@ func TestConcludeContract(t *testing.T) {
 // TestConcludeUnreadableFileIsAgentFailure verifies that an IO error reading the
 // result file (here, the path is a directory) is classified as agent_failure
 // (ERR_SYSTEM), not parse_error — unreadable files are a system-side failure,
-// while parse_error is reserved for readable-but-malformed content.
+// while parse_error is reserved for readable-but-malformed content. It also
+// completes the {warn/strict} x {execution outcome} matrix for the unreadable-file
+// path (gh-aw-threat-detection#694).
 func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
-	dir := t.TempDir()
-	// A directory at the result path yields a non-ErrNotExist *fs.PathError from
-	// os.ReadFile, deterministically across platforms and regardless of euid.
-	resultFile := filepath.Join(dir, "detection_result.json")
-	if err := os.Mkdir(resultFile, 0o755); err != nil {
-		t.Fatalf("Mkdir error = %v", err)
+	tests := []struct {
+		name            string
+		warnMode        bool
+		executionFailed bool
+		wantExit        int
+		wantConclusion  string
+	}{
+		{
+			name:           "strict mode fails closed",
+			warnMode:       false,
+			wantExit:       concludeExitFail,
+			wantConclusion: "failure",
+		},
+		{
+			name:            "strict mode fails closed regardless of execution outcome",
+			warnMode:        false,
+			executionFailed: true,
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+		},
+		{
+			name:           "warn mode warns when execution succeeded",
+			warnMode:       true,
+			wantExit:       concludeExitProceed,
+			wantConclusion: "warning",
+		},
+		{
+			name:            "warn mode fails closed when execution failed (mustFail)",
+			warnMode:        true,
+			executionFailed: true,
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+		},
 	}
 
-	var stdout bytes.Buffer
-	c := &concluder{
-		runDetection: "true",
-		warnMode:     false,
-		githubOutput: filepath.Join(dir, "out"),
-		githubEnv:    filepath.Join(dir, "env"),
-		stdout:       &stdout,
-	}
-	if code := c.run(resultFile); code != concludeExitFail {
-		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
-	}
-	if got := parseKV(t, filepath.Join(dir, "out"))["reason"]; got != "agent_failure" {
-		t.Errorf("reason output = %q, want %q", got, "agent_failure")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// A directory at the result path yields a non-ErrNotExist *fs.PathError
+			// from os.ReadFile, deterministically across platforms and regardless of
+			// euid.
+			resultFile := filepath.Join(dir, "detection_result.json")
+			if err := os.Mkdir(resultFile, 0o755); err != nil {
+				t.Fatalf("Mkdir error = %v", err)
+			}
+
+			var stdout bytes.Buffer
+			c := &concluder{
+				runDetection:    "true",
+				warnMode:        tt.warnMode,
+				executionFailed: tt.executionFailed,
+				githubOutput:    filepath.Join(dir, "out"),
+				githubEnv:       filepath.Join(dir, "env"),
+				stdout:          &stdout,
+			}
+			if code := c.run(resultFile); code != tt.wantExit {
+				t.Fatalf("exit code = %d, want %d (stdout: %s)", code, tt.wantExit, stdout.String())
+			}
+			outputs := parseKV(t, filepath.Join(dir, "out"))
+			if got := outputs["reason"]; got != "agent_failure" {
+				t.Errorf("reason output = %q, want %q", got, "agent_failure")
+			}
+			if got := outputs["conclusion"]; got != tt.wantConclusion {
+				t.Errorf("conclusion output = %q, want %q", got, tt.wantConclusion)
+			}
+			// success=false on every fail path, warn or strict — only a clean
+			// verdict (or skip) sets success=true.
+			if got := outputs["success"]; got != "false" {
+				t.Errorf("success output = %q, want %q", got, "false")
+			}
+			env := parseKV(t, filepath.Join(dir, "env"))
+			if got := env["GH_AW_DETECTION_REASON"]; got != "agent_failure" {
+				t.Errorf("GH_AW_DETECTION_REASON = %q, want %q", got, "agent_failure")
+			}
+			if got := env["GH_AW_DETECTION_CONCLUSION"]; got != tt.wantConclusion {
+				t.Errorf("GH_AW_DETECTION_CONCLUSION = %q, want %q", got, tt.wantConclusion)
+			}
+		})
 	}
 }
 
@@ -264,6 +394,177 @@ func TestConcludeThreatMessageEscaped(t *testing.T) {
 	}
 	if !strings.Contains(got, errCodeValidation) {
 		t.Fatalf("expected %s prefix, got: %q", errCodeValidation, got)
+	}
+}
+
+// TestDetectionFailureReasonMapping verifies every THREAT_DETECTION_STATUS
+// reason from the detection run's captured log maps to the correct gh-aw
+// reason when the structured result file is missing, per the table in issue
+// #693 and specs/threat-detection-spec.md TD-20b.
+func TestDetectionFailureReasonMapping(t *testing.T) {
+	tests := []struct {
+		statusReason string // reason= value in the captured THREAT_DETECTION_STATUS line
+		wantReason   string // gh-aw reason expected on the conclude output
+	}{
+		{"invalid_report_exhausted", "parse_error"},
+		{"output_write_error", "parse_error"},
+		{"engine_error", "agent_failure"},
+		{"cancelled", "agent_failure"},
+		{"config_error", "agent_failure"},
+		{"result_recorded", "agent_failure"}, // not a failure reason; falls back to default
+		{"some_future_unknown_reason", "agent_failure"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.statusReason, func(t *testing.T) {
+			dir := t.TempDir()
+			logPath := filepath.Join(dir, "detection.log")
+			logLine := "THREAT_DETECTION_STATUS: reason=" + tt.statusReason + " exit=2\n"
+			if err := os.WriteFile(logPath, []byte(logLine), 0o600); err != nil {
+				t.Fatalf("WriteFile error = %v", err)
+			}
+
+			outPath := filepath.Join(dir, "out")
+			envPath := filepath.Join(dir, "env")
+			resultFile := filepath.Join(dir, "detection_result.json") // deliberately absent
+
+			var stdout bytes.Buffer
+			c := &concluder{
+				runDetection: "true",
+				warnMode:     false,
+				githubOutput: outPath,
+				githubEnv:    envPath,
+				detectionLog: logPath,
+				stdout:       &stdout,
+			}
+			code := c.run(resultFile)
+			if code != concludeExitFail {
+				t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
+			}
+			outputs := parseKV(t, outPath)
+			if got := outputs["reason"]; got != tt.wantReason {
+				t.Errorf("reason output = %q, want %q", got, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestDetectionFailureReasonUsesLastStatusLine verifies that when the captured
+// log contains multiple THREAT_DETECTION_STATUS lines (e.g. from a retried
+// invocation), only the last one is consulted.
+func TestDetectionFailureReasonUsesLastStatusLine(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "detection.log")
+	content := "THREAT_DETECTION_STATUS: reason=engine_error exit=2\n" +
+		"THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: outPath,
+		githubEnv:    envPath,
+		detectionLog: logPath,
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "parse_error" {
+		t.Errorf("reason output = %q, want %q (should use last status line)", got, "parse_error")
+	}
+}
+
+// TestDetectionFailureReasonTerminalLineWithoutReasonResetsCandidate verifies
+// that a terminal THREAT_DETECTION_STATUS: line lacking a reason= token (e.g.
+// truncated or malformed) does not let an earlier line's reason leak through
+// as a stale candidate; per TD-20b an absent/unrecognized reason on the
+// terminal line falls back to agent_failure.
+func TestDetectionFailureReasonTerminalLineWithoutReasonResetsCandidate(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "detection.log")
+	content := "THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2\n" +
+		"THREAT_DETECTION_STATUS: exit=2\n" // terminal line has no reason= token
+	if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: outPath,
+		githubEnv:    envPath,
+		detectionLog: logPath,
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "agent_failure" {
+		t.Errorf("reason output = %q, want %q (stale reason from earlier line must not leak through)", got, "agent_failure")
+	}
+}
+
+// TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure verifies that a
+// missing or absent detection log preserves the pre-existing agent_failure
+// default rather than erroring.
+func TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: outPath,
+		githubEnv:    envPath,
+		detectionLog: filepath.Join(dir, "does-not-exist.log"),
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "agent_failure" {
+		t.Errorf("reason output = %q, want %q", got, "agent_failure")
+	}
+}
+
+// TestRunConcludeDefaultsDetectionLogPath verifies that --detection-log, when
+// not set, defaults to detection.log next to the result file, and that its
+// status line correctly refines the reported reason.
+func TestRunConcludeDefaultsDetectionLogPath(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json") // absent
+	logPath := filepath.Join(dir, "detection.log")
+	if err := os.WriteFile(logPath, []byte("THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", "false")
+	t.Setenv("GITHUB_OUTPUT", outPath)
+	t.Setenv("GITHUB_ENV", envPath)
+
+	code := runConclude([]string{"--result-file", resultFile})
+	if code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+	}
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "parse_error" {
+		t.Fatalf("reason = %q, want %q", got, "parse_error")
 	}
 }
 

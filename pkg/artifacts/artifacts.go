@@ -24,6 +24,15 @@ const (
 	artifactImportTree  = "aw-prompts/prompt-import-tree.json"
 )
 
+// Default workflow-context values used when neither the corresponding flag nor
+// environment variable supplies one. They are exported so callers (e.g. the CLI)
+// can detect when a value was defaulted rather than provided, which is useful
+// for diagnosing dropped workflow-context plumbing.
+const (
+	DefaultWorkflowName        = "Unnamed Workflow"
+	DefaultWorkflowDescription = "No description provided"
+)
+
 // InventoryEntry describes a file discovered below the artifacts directory.
 type InventoryEntry struct {
 	Path     string `json:"path"`
@@ -102,6 +111,18 @@ type Artifacts struct {
 
 	// CustomPrompt contains additional detection instructions if provided.
 	CustomPrompt string
+
+	// CommentMemoryFiles contains paths to any comment-memory markdown files.
+	CommentMemoryFiles []string
+
+	// CommentMemoryFileInfo is a human-readable description of comment-memory
+	// files for template replacement.
+	CommentMemoryFileInfo string
+
+	// Warnings holds non-fatal validation warnings collected while loading
+	// artifacts (for example, an unreadable comment-memory directory). Each
+	// entry is prefixed with an error code such as ERR_VALIDATION.
+	Warnings []string
 }
 
 // Load reads and validates artifacts from the given directory.
@@ -121,8 +142,8 @@ func Load(dir string) (*Artifacts, error) {
 
 	arts := &Artifacts{
 		Dir:                 dir,
-		WorkflowName:        envOrDefault("WORKFLOW_NAME", "Unnamed Workflow"),
-		WorkflowDescription: envOrDefault("WORKFLOW_DESCRIPTION", "No description provided"),
+		WorkflowName:        envOrDefault("WORKFLOW_NAME", DefaultWorkflowName),
+		WorkflowDescription: envOrDefault("WORKFLOW_DESCRIPTION", DefaultWorkflowDescription),
 		CustomPrompt:        os.Getenv("CUSTOM_PROMPT"),
 	}
 
@@ -203,6 +224,11 @@ func Load(dir string) (*Artifacts, error) {
 	} else {
 		arts.PatchFileInfo = "No patch or bundle file found"
 	}
+
+	// Discover comment-memory markdown files (an attacker-influenced, persisted
+	// channel written by the agent). The directory is optional; when present but
+	// unreadable we record a non-fatal ERR_VALIDATION warning and continue.
+	arts.loadCommentMemory(dir)
 
 	return arts, nil
 }
@@ -375,6 +401,61 @@ func decodeScalar(raw json.RawMessage, field string) (string, error) {
 		return "", fmt.Errorf("field %q exceeds %d-byte limit", field, maxActivationValue)
 	}
 	return text, nil
+}
+
+func (arts *Artifacts) loadCommentMemory(dir string) {
+	commentMemoryDir := filepath.Join(dir, "comment-memory")
+	// Use Lstat so a symlink named comment-memory is not followed: a symlinked
+	// directory would let the engine read markdown outside the artifacts tree.
+	info, err := os.Lstat(commentMemoryDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			arts.Warnings = append(arts.Warnings, fmt.Sprintf(
+				"ERR_VALIDATION: Unable to inspect comment-memory directory at %s: %v", commentMemoryDir, err))
+		}
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		return
+	}
+	// Reject anything that is not a real directory (regular files, symlinks,
+	// FIFOs, etc.).
+	if info.Mode().Type() != os.ModeDir {
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		return
+	}
+
+	entries, err := os.ReadDir(commentMemoryDir)
+	if err != nil {
+		arts.Warnings = append(arts.Warnings, fmt.Sprintf(
+			"ERR_VALIDATION: Unable to read comment-memory directory at %s: %v", commentMemoryDir, err))
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		return
+	}
+
+	var infos []string
+	for _, entry := range entries {
+		// Only accept confirmed regular files: symlinks could point outside the
+		// artifacts tree and FIFOs/other special files could hang a read.
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		p := filepath.Join(commentMemoryDir, name)
+		arts.CommentMemoryFiles = append(arts.CommentMemoryFiles, p)
+		if fi, statErr := os.Stat(p); statErr == nil {
+			infos = append(infos, fmt.Sprintf("%s (%d bytes)", p, fi.Size()))
+		} else {
+			infos = append(infos, p)
+		}
+	}
+
+	if len(infos) > 0 {
+		arts.CommentMemoryFileInfo = strings.Join(infos, "\n")
+	} else {
+		arts.CommentMemoryFileInfo = "No comment-memory files found"
+	}
 }
 
 func fileExists(path string) bool {
