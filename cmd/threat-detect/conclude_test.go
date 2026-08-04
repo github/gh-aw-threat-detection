@@ -267,6 +267,143 @@ func TestConcludeThreatMessageEscaped(t *testing.T) {
 	}
 }
 
+// TestDetectionFailureReasonMapping verifies every THREAT_DETECTION_STATUS
+// reason from the detection run's captured log maps to the correct gh-aw
+// reason when the structured result file is missing, per the table in issue
+// #693 and specs/threat-detection-spec.md TD-20b.
+func TestDetectionFailureReasonMapping(t *testing.T) {
+	tests := []struct {
+		statusReason string // reason= value in the captured THREAT_DETECTION_STATUS line
+		wantReason   string // gh-aw reason expected on the conclude output
+	}{
+		{"invalid_report_exhausted", "parse_error"},
+		{"output_write_error", "parse_error"},
+		{"engine_error", "agent_failure"},
+		{"cancelled", "agent_failure"},
+		{"config_error", "agent_failure"},
+		{"result_recorded", "agent_failure"}, // not a failure reason; falls back to default
+		{"some_future_unknown_reason", "agent_failure"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.statusReason, func(t *testing.T) {
+			dir := t.TempDir()
+			logPath := filepath.Join(dir, "detection.log")
+			logLine := "THREAT_DETECTION_STATUS: reason=" + tt.statusReason + " exit=2\n"
+			if err := os.WriteFile(logPath, []byte(logLine), 0o600); err != nil {
+				t.Fatalf("WriteFile error = %v", err)
+			}
+
+			outPath := filepath.Join(dir, "out")
+			envPath := filepath.Join(dir, "env")
+			resultFile := filepath.Join(dir, "detection_result.json") // deliberately absent
+
+			var stdout bytes.Buffer
+			c := &concluder{
+				runDetection: "true",
+				warnMode:     false,
+				githubOutput: outPath,
+				githubEnv:    envPath,
+				detectionLog: logPath,
+				stdout:       &stdout,
+			}
+			code := c.run(resultFile)
+			if code != concludeExitFail {
+				t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
+			}
+			outputs := parseKV(t, outPath)
+			if got := outputs["reason"]; got != tt.wantReason {
+				t.Errorf("reason output = %q, want %q", got, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestDetectionFailureReasonUsesLastStatusLine verifies that when the captured
+// log contains multiple THREAT_DETECTION_STATUS lines (e.g. from a retried
+// invocation), only the last one is consulted.
+func TestDetectionFailureReasonUsesLastStatusLine(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "detection.log")
+	content := "THREAT_DETECTION_STATUS: reason=engine_error exit=2\n" +
+		"THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2\n"
+	if err := os.WriteFile(logPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: outPath,
+		githubEnv:    envPath,
+		detectionLog: logPath,
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "parse_error" {
+		t.Errorf("reason output = %q, want %q (should use last status line)", got, "parse_error")
+	}
+}
+
+// TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure verifies that a
+// missing or absent detection log preserves the pre-existing agent_failure
+// default rather than erroring.
+func TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: outPath,
+		githubEnv:    envPath,
+		detectionLog: filepath.Join(dir, "does-not-exist.log"),
+		stdout:       &stdout,
+	}
+	c.run(resultFile)
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "agent_failure" {
+		t.Errorf("reason output = %q, want %q", got, "agent_failure")
+	}
+}
+
+// TestRunConcludeDefaultsDetectionLogPath verifies that --detection-log, when
+// not set, defaults to detection.log next to the result file, and that its
+// status line correctly refines the reported reason.
+func TestRunConcludeDefaultsDetectionLogPath(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json") // absent
+	logPath := filepath.Join(dir, "detection.log")
+	if err := os.WriteFile(logPath, []byte("THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	outPath := filepath.Join(dir, "out")
+	envPath := filepath.Join(dir, "env")
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", "false")
+	t.Setenv("GITHUB_OUTPUT", outPath)
+	t.Setenv("GITHUB_ENV", envPath)
+
+	code := runConclude([]string{"--result-file", resultFile})
+	if code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+	}
+	outputs := parseKV(t, outPath)
+	if got := outputs["reason"]; got != "parse_error" {
+		t.Fatalf("reason = %q, want %q", got, "parse_error")
+	}
+}
+
 func TestRunConcludeReadsEnv(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := writeResultFixture(t, safeVerdict)

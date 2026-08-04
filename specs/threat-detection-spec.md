@@ -184,13 +184,27 @@ A failure to open the log file MUST be treated as a configuration error.
 result file written by a prior detection run and emits the host-side job-output
 contract (`conclusion`, `reason`, `success`) consumed by the parent orchestrator.
 The verdict crosses the AWF sandbox boundary as a file (written to a read-write
-mount), not via log scraping. When the result file is missing the subcommand MUST
-report a clear `agent_failure` (e.g. "Detection result file not found at: <path>");
-a malformed file MUST report `parse_error`; detected threats MUST report
-`threat_detected`. In warn mode (`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`)
-non-mandatory failures MUST surface as warnings without failing the job, except
-that `agent_failure` and `parse_error` MUST hard-fail when the detection execution
-step itself failed.
+mount), not via log scraping. When the result file is missing, `conclude` MUST
+consult the detection run's captured log (`--detection-log <path>`, default
+`<result-file-dir>/detection.log`) for the terminal `THREAT_DETECTION_STATUS:`
+line (per TD-20a) and map its `reason=` value onto the host-side `reason` per the
+following table, defaulting to `agent_failure` when the log is absent, unreadable,
+or contains no status line:
+
+| status reason | host-side `reason` |
+|---|---|
+| `invalid_report_exhausted` | `parse_error` |
+| `output_write_error` | `parse_error` |
+| `engine_error` | `agent_failure` |
+| `cancelled` | `agent_failure` |
+| `config_error` | `agent_failure` |
+| absent / unrecognized | `agent_failure` |
+
+A malformed (readable but unparseable) result file MUST unconditionally report
+`parse_error`; detected threats MUST report `threat_detected`. In warn mode
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`) non-mandatory failures MUST
+surface as warnings without failing the job, except that `agent_failure` and
+`parse_error` MUST hard-fail when the detection execution step itself failed.
 
 ### 8.3 Exit Codes
 

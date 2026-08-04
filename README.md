@@ -149,10 +149,21 @@ and `GH_AW_DETECTION_REASON` to `GITHUB_ENV`. It reads these environment inputs:
 - `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` is warn mode
 - `DETECTION_AGENTIC_EXECUTION_OUTCOME` — `"failure"` makes `agent_failure`/`parse_error` hard-fail
 
-A missing result file reports `agent_failure` ("Detection result file not found
-at: <path>"), a malformed file reports `parse_error`, and detected threats report
-`threat_detected`. There is no log-scraping fallback: if the file is absent, the
-step fails loudly.
+A malformed (readable but unparseable) result file always reports `parse_error`,
+and detected threats report `threat_detected`. When the result file is missing,
+`conclude` consults the detection run's captured log (`--detection-log <path>`,
+default `<result-file-dir>/detection.log`) for the terminal
+`THREAT_DETECTION_STATUS: reason=<reason> exit=<code>` line and maps it onto the
+host-side reason:
+
+| status reason | host-side `reason` |
+|---|---|
+| `invalid_report_exhausted` | `parse_error` |
+| `output_write_error` | `parse_error` |
+| `engine_error` | `agent_failure` |
+| `cancelled` | `agent_failure` |
+| `config_error` | `agent_failure` |
+| absent / unrecognized / log unreadable | `agent_failure` ("Detection result file not found at: <path>") |
 
 ### AI Credits and Token Usage
 
