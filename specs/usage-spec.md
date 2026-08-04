@@ -97,6 +97,11 @@ where `<artifacts-dir>` conforms to the artifacts directory shape (per TD-17)
 and the host MUST NOT require all optional artifact files to be present (per
 TD-18).
 
+The detector consumes the prompt artifacts, agent output, activation metadata,
+and root `aw-*.patch` / `aw-*.bundle` files. It inventories all other files
+recursively; `experiments/` and `comment-memory/` are currently inventory-only
+inputs (per TD-17b).
+
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
 where the detector executes. The detector MUST NOT be expected to bundle the
@@ -108,7 +113,9 @@ verdict payload and MUST read it from the location it configured (stdout, or the
 
 **U-09**: The host SHOULD enable the structured JSONL run log via `--log-file`
 (or `THREAT_DETECTION_LOG_FILE`) for observability (per TD-20a), and MUST NOT
-point `--log-file` and `--output` at the same path.
+point `--log-file` and `--output` at the same path. In GitHub Actions, the host
+SHOULD provide `GITHUB_STEP_SUMMARY` so the recursive artifact inventory is
+visible in the run summary (per TD-20c).
 
 ### 3.1 Flags
 

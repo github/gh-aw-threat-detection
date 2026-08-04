@@ -3,6 +3,7 @@ package artifacts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -108,5 +109,117 @@ func TestLoad_WorkflowNameFromEnv(t *testing.T) {
 	}
 	if arts.WorkflowName != "My Custom Workflow" {
 		t.Errorf("WorkflowName = %q, want %q", arts.WorkflowName, "My Custom Workflow")
+	}
+}
+
+func TestLoad_ActivationContextIsAllowlistedAndBounded(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "aw_info.json"), []byte(`{
+		"event_name":"issue_comment",
+		"actor":"external-user",
+		"engine_id":"copilot",
+		"model":"claude-sonnet-5",
+		"workflow_name":"Triage",
+		"repository":"octo/repo",
+		"run_id":123,
+		"allowed_domains":["example.com"],
+		"context":{
+			"repo":"octo/caller",
+			"workflow_id":"octo/caller/.github/workflows/call.yml@refs/heads/main",
+			"actor":"caller-user",
+			"ignored":"not exposed"
+		},
+		"secret_field":"must not be exposed"
+	}`))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if arts.ActivationContext == nil {
+		t.Fatal("ActivationContext = nil")
+	}
+	if arts.ActivationContext.EventName != "issue_comment" {
+		t.Errorf("EventName = %q, want issue_comment", arts.ActivationContext.EventName)
+	}
+	if arts.ActivationContext.RunID != "123" {
+		t.Errorf("RunID = %q, want 123", arts.ActivationContext.RunID)
+	}
+	if arts.ActivationContext.Context == nil || arts.ActivationContext.Context.Actor != "caller-user" {
+		t.Fatalf("caller context not loaded: %#v", arts.ActivationContext.Context)
+	}
+	formatted := arts.FormatActivationContext()
+	for _, excluded := range []string{"allowed_domains", "secret_field", "ignored", "must not be exposed"} {
+		if strings.Contains(formatted, excluded) {
+			t.Errorf("activation context contains non-allowlisted value %q:\n%s", excluded, formatted)
+		}
+	}
+}
+
+func TestLoad_RejectsOversizedActivationValue(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "aw_info.json"), []byte(`{"actor":"`+strings.Repeat("a", maxActivationValue+1)+`"}`))
+
+	_, err := Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "actor") || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("Load() error = %v, want bounded actor error", err)
+	}
+}
+
+func TestLoad_RejectsOversizedAWInfoFile(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "aw_info.json"), []byte(strings.Repeat(" ", maxAWInfoBytes+1)))
+
+	_, err := Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "aw_info.json exceeds") {
+		t.Fatalf("Load() error = %v, want file size limit error", err)
+	}
+}
+
+func TestLoad_RejectsMalformedActivationContext(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "aw_info.json"), []byte(`{"event_name":`))
+
+	_, err := Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "parsing aw_info.json") {
+		t.Fatalf("Load() error = %v, want aw_info parse error", err)
+	}
+}
+
+func TestLoad_InventoryIncludesNestedConsumedAndUnconsumedFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, subdir := range []string{"aw-prompts", "experiments", "comment-memory"} {
+		if err := os.MkdirAll(filepath.Join(dir, subdir), 0o755); err != nil {
+			t.Fatalf("creating %s: %v", subdir, err)
+		}
+	}
+	writeTestFile(t, filepath.Join(dir, "aw-prompts", "prompt.txt"), []byte("prompt"))
+	writeTestFile(t, filepath.Join(dir, "experiments", "assignment.json"), []byte("{}"))
+	writeTestFile(t, filepath.Join(dir, "comment-memory", "memory.md"), []byte("memory"))
+	writeTestFile(t, filepath.Join(dir, "aw-change.patch"), []byte("diff"))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	got := make(map[string]InventoryEntry, len(arts.Inventory))
+	for _, entry := range arts.Inventory {
+		got[entry.Path] = entry
+	}
+	if len(got) != 4 {
+		t.Fatalf("inventory = %#v, want 4 entries", arts.Inventory)
+	}
+	for _, path := range []string{"aw-prompts/prompt.txt", "aw-change.patch"} {
+		if !got[path].Consumed {
+			t.Errorf("%s consumed = false, want true", path)
+		}
+	}
+	for _, path := range []string{"experiments/assignment.json", "comment-memory/memory.md"} {
+		if got[path].Consumed {
+			t.Errorf("%s consumed = true, want false", path)
+		}
+	}
+	if got["experiments/assignment.json"].Size != 2 {
+		t.Errorf("experiment size = %d, want 2", got["experiments/assignment.json"].Size)
 	}
 }

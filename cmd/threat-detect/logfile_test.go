@@ -40,8 +40,15 @@ func findRecord(records []map[string]any, event string) map[string]any {
 
 func TestRunWritesJSONLLog(t *testing.T) {
 	artifactsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(artifactsDir, "experiments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "experiments", "assignment.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
+	summaryPath := filepath.Join(t.TempDir(), "summary.md")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`
 	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
@@ -52,7 +59,8 @@ func TestRunWritesJSONLLog(t *testing.T) {
 		"-log-file", logPath,
 		artifactsDir,
 	}, map[string]string{
-		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PATH":                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GITHUB_STEP_SUMMARY": summaryPath,
 	})
 
 	if code != exitThreat {
@@ -69,6 +77,30 @@ func TestRunWritesJSONLLog(t *testing.T) {
 	}
 	if start["engine"] != "copilot" {
 		t.Errorf("run_start engine = %v, want copilot", start["engine"])
+	}
+
+	loaded := findRecord(records, "artifacts_loaded")
+	if loaded == nil {
+		t.Fatalf("missing artifacts_loaded record: %#v", records)
+	}
+	inventory, ok := loaded["inventory"].([]any)
+	if !ok || len(inventory) != 1 {
+		t.Fatalf("artifacts_loaded inventory = %#v, want one entry", loaded["inventory"])
+	}
+	entry, ok := inventory[0].(map[string]any)
+	if !ok {
+		t.Fatalf("inventory entry = %#v", inventory[0])
+	}
+	if entry["path"] != "experiments/assignment.json" || entry["consumed"] != false {
+		t.Errorf("inventory entry = %#v, want unconsumed experiment", entry)
+	}
+
+	summary, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("reading step summary: %v", err)
+	}
+	if !strings.Contains(string(summary), "| `experiments/assignment.json` | 2 | file | No |") {
+		t.Errorf("step summary missing experiment inventory:\n%s", summary)
 	}
 
 	verdict := findRecord(records, "verdict")
@@ -171,5 +203,33 @@ func TestRunRejectsUnopenableLogFile(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "reason=config_error") {
 		t.Fatalf("stderr missing config_error status, got:\n%s", stderr)
+	}
+}
+
+func TestRunRejectsUnwritableStepSummary(t *testing.T) {
+	artifactsDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "run.jsonl")
+	summaryPath := filepath.Join(t.TempDir(), "missing-dir", "summary.md")
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-log-file", logPath,
+		artifactsDir,
+	}, map[string]string{
+		"GITHUB_STEP_SUMMARY": summaryPath,
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "Error writing artifact inventory summary") {
+		t.Fatalf("stderr missing summary error, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "reason=config_error") {
+		t.Fatalf("stderr missing config_error status, got:\n%s", stderr)
+	}
+	records := readJSONLRecords(t, logPath)
+	if findRecord(records, "artifact_inventory_summary_failed") == nil {
+		t.Fatalf("missing artifact_inventory_summary_failed record: %#v", records)
 	}
 }

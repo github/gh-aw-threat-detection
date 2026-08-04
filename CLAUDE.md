@@ -108,12 +108,16 @@ The detector reads the verdict exclusively from the out-of-band result sink. The
 │   ├── prompt-template.txt       # optional, pre-expansion
 │   └── prompt-import-tree.json   # optional, runtime-import provenance
 ├── agent_output.json             # required
-├── aw_info.json                  # optional, activation metadata
+├── aw_info.json                  # optional, bounded untrusted activation context
 ├── aw-*.patch                    # optional, git format-patch
 ├── aw-*.bundle                   # optional, git bundles
-├── experiments/                  # optional
-└── comment-memory/*.md           # optional
+├── experiments/                  # optional, inventoried only
+└── comment-memory/*.md           # optional, inventoried only
 ```
+
+All files are recursively inventoried in the JSONL run log and Actions step
+summary. The prompt consumes only an allowlisted, size-bounded subset of
+`aw_info.json`; unknown fields are ignored and all included values are untrusted.
 
 ## Detection Flow
 
