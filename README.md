@@ -178,6 +178,34 @@ summary: per-field booleans (`prompt_injection`, `secret_leak`,
 `malicious_patch`), the reasons list, the resolved `conclusion`
 (`success`/`warning`/`failure`/`skipped`), and the reason code.
 
+`conclude` writes a verbose, self-contained diagnostic section to the job log:
+banners framing the section, the environment inputs and resolved paths, and the
+per-field verdict breakdown (`prompt_injection`/`secret_leak`/`malicious_patch`)
+with an indexed reasons list. When the result file is missing or unusable it also
+prints a recursive listing of the result directory plus detection-log statistics
+and every line carrying a `THREAT_DETECTION_STATUS:`/`THREAT_DETECTION_RESULT:`
+marker, so a failed run can be diagnosed without downloading artifacts.
+
+Additional flags:
+
+- `--detection-log <path>` — the detection run's captured log (see the reason
+  table above); it is also the source of the diagnostic log statistics and marker
+  lines. It is consulted for the terminal status reason but never parsed for a
+  verdict.
+- `--log-file <path>` — mirror the conclusion into a JSONL run log (env:
+  `THREAT_DETECTION_LOG_FILE`), emitting `conclude_start`, `conclude_verdict`,
+  `conclude_directory_listing`, `conclude_detection_log`, and `conclude_outcome`
+  events. It must not resolve to the same file as `--result-file` or the
+  detection log — the log is opened truncating, so a collision would destroy the
+  input it is meant to describe. Collisions and unopenable log paths are
+  configuration errors that fail the step.
+
+Diagnostic output is bounded so a pathological run cannot flood the job log, and
+truncation is always labelled rather than passed off as a complete reading.
+Untrusted values (model-authored reasons, artifact filenames, detection-log
+lines) have control characters escaped so each stays on one line and cannot
+inject a workflow command into the host job log.
+
 ### AI Credits and Token Usage
 
 The threat-detection pass is a **separate agentic engine invocation** from the main
@@ -265,8 +293,8 @@ removing quarantine.
 <artifacts-dir>/
 ├── aw-prompts/
 │   ├── prompt.txt          # Expanded workflow prompt file
-│   ├── prompt-template.txt # Pre-expansion prompt template (optional)
-│   └── prompt-import-tree.json # Runtime-import provenance (optional)
+│   ├── prompt-template.txt # Pre-expansion prompt template
+│   └── prompt-import-tree.json # Runtime-import provenance
 ├── agent_output.json       # Agent structured output
 ├── aw_info.json            # Bounded activation context (optional, consumed as untrusted)
 ├── aw-*.patch              # Git format-patch files (optional)
@@ -275,6 +303,11 @@ removing quarantine.
 └── comment-memory/         # Agent comment memory (optional, inventoried only)
     └── *.md
 ```
+
+Integrated hosts must stage all three files under `aw-prompts/`. Direct callers
+may omit the template or import tree, but the detector emits an
+`ERR_VALIDATION` warning because trusted-vs-untrusted prompt analysis is then
+degraded. Empty or unreadable analysis files produce the same warning.
 
 Every file below the artifacts directory is recorded with its size and consumed
 status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is

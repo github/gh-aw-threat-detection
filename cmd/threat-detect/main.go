@@ -41,6 +41,7 @@ const (
 	detectionCorrectionPrefix      = "Your previous response did not record a verdict"
 	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
 	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
+	promptAnalysisValidationCode   = "ERR_VALIDATION"
 )
 
 // statusPrefix is the marker for the single machine-readable status line
@@ -287,13 +288,14 @@ func run() (code int) {
 		promptTemplate = string(data)
 	}
 
-	prompt, err := detector.BuildPrompt(arts, promptTemplate)
+	prompt, promptAnalysis, err := detector.BuildPromptWithAnalysis(arts, promptTemplate)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)
 		logger.Error("prompt_build_failed", map[string]any{"error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
+	warnDegradedPromptAnalysis(promptAnalysis, logger)
 	logger.Info("prompt_built", map[string]any{
 		"prompt_bytes":                   len(prompt),
 		"workflow_name":                  arts.WorkflowName,
@@ -363,6 +365,30 @@ func run() (code int) {
 	code, resultReason = writeResult(result, outputJSON)
 	reason = resultReason
 	return code
+}
+
+func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis, logger *runlog.Logger) {
+	var unavailable []string
+	if analysis == nil || analysis.PromptTemplate == "" {
+		unavailable = append(unavailable, "aw-prompts/prompt-template.txt")
+	}
+	if analysis == nil || analysis.ImportTree == "" {
+		unavailable = append(unavailable, "aw-prompts/prompt-import-tree.json")
+	}
+	if len(unavailable) == 0 {
+		return
+	}
+
+	fmt.Fprintf(
+		os.Stderr,
+		"::warning::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.\n",
+		promptAnalysisValidationCode,
+		strings.Join(unavailable, ", "),
+	)
+	logger.Warning("prompt_analysis_degraded", map[string]any{
+		"error_code":            promptAnalysisValidationCode,
+		"unavailable_artifacts": unavailable,
+	})
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int, logger *runlog.Logger) (*detector.Result, error) {

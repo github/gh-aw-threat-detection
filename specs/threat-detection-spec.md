@@ -160,7 +160,7 @@ threat-detection:
 ├── agent_output.json             # Agent structured output
 ├── aw_info.json                  # Activation metadata (optional)
 ├── aw-*.patch                    # Git format-patch files (optional)
-├── aw-*.bundle                   # Git bundle files (optional)
+├── aw-*.bundle                    # Git bundle files (optional)
 ├── experiments/                  # Experiment state (optional, inventoried only)
 └── comment-memory/               # Agent comment memory (optional, inventoried only)
     └── *.md
@@ -188,6 +188,13 @@ secret leakage. When the `comment-memory` directory is absent or contains no
 markdown files, the detector MUST proceed and record that no comment-memory
 files were found. When the directory is present but cannot be inspected, the
 detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+
+**TD-18b**: If `aw-prompts/prompt-template.txt` or
+`aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
+detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
+MUST emit an `ERR_VALIDATION` warning to the job log. When structured run
+logging is enabled, it MUST also emit a warning-level
+`prompt_analysis_degraded` event identifying the unavailable artifacts.
 
 ### 8.2 Output Contract
 
@@ -238,7 +245,28 @@ surface as warnings without failing the job, except that `agent_failure` and
 artifact inventory defined by TD-17b as a Markdown table. Failure to write the
 configured summary MUST be treated as a configuration error.
 
-**TD-20e**: The detector MUST support appending the prompt it actually rendered
+**TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
+section to standard output that is sufficient, on its own, to explain the
+conclusion. It MUST report the environment inputs it consumed (`RUN_DETECTION`,
+`GH_AW_DETECTION_CONTINUE_ON_ERROR`, `DETECTION_AGENTIC_EXECUTION_OUTCOME`) and
+the resolved result-file and detection-log paths, and — on both the safe and the
+threat path — the per-field verdict (`prompt_injection`, `secret_leak`,
+`malicious_patch`) together with an indexed list of reasons. When the result file
+is missing or unusable it MUST additionally emit a recursive listing of the
+result directory and, when a detection log is present, its line and byte counts
+plus every line containing a `THREAT_DETECTION_STATUS:` or
+`THREAT_DETECTION_RESULT:` marker. The detection log MUST NOT be used to derive
+the verdict itself — its only non-diagnostic use is the status-line reason
+mapping of TD-20b. Diagnostic output MAY be bounded to keep job logs readable,
+but when it is bounded the output MUST indicate that it was truncated and MUST
+NOT report a bounded prefix as though it were the whole input. Untrusted values
+echoed into the diagnostics (model-authored reasons, artifact filenames, and
+detection-log lines) MUST be escaped so that each is confined to a single
+physical output line and cannot emit a host workflow command. When `--log-file`
+is set, `conclude` MUST mirror these diagnostics and the final conclusion into
+the JSONL run log (TD-20a).
+
+**TD-20g**: The detector MUST support appending the prompt it actually rendered
 (after template placeholder substitution and prompt-analysis embedding) to the job
 step summary via the `--step-summary` flag, defaulting to the `GITHUB_STEP_SUMMARY`
 environment variable. The appended block MUST be collapsible (rendered inside a
@@ -247,7 +275,7 @@ model, and retries configuration for the run, and MUST be bounded in size so a
 single run cannot exhaust the step summary's shared per-job budget. A failure to
 write the step summary MUST NOT fail the run; it is a best-effort diagnostic aid.
 
-**TD-20f**: The `conclude` subcommand MUST support appending a verdict block to the
+**TD-20h**: The `conclude` subcommand MUST support appending a verdict block to the
 job step summary via its own `--step-summary` flag, defaulting to
 `GITHUB_STEP_SUMMARY`. The block MUST be collapsible and MUST include the
 per-category booleans (`prompt_injection`, `secret_leak`, `malicious_patch`), the
