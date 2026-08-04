@@ -99,13 +99,17 @@ func run() (code int) {
 	}()
 
 	var (
-		engineID   string
-		model      string
-		promptFile string
-		outputJSON string
-		logFile    string
-		version    bool
-		retries    int
+		engineID            string
+		model               string
+		promptFile          string
+		outputJSON          string
+		logFile             string
+		workflowName        string
+		workflowDescription string
+		customPrompt        string
+		customPromptFile    string
+		version             bool
+		retries             int
 	)
 
 	// Parse flags with ContinueOnError so usage/flag errors return through the
@@ -118,6 +122,10 @@ func run() (code int) {
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
+	flag.StringVar(&workflowName, "workflow-name", "", "Workflow name for the prompt (overrides WORKFLOW_NAME)")
+	flag.StringVar(&workflowDescription, "workflow-description", "", "Workflow description for the prompt (overrides WORKFLOW_DESCRIPTION)")
+	flag.StringVar(&customPrompt, "custom-prompt", "", "Additional detection instructions appended to the prompt (overrides CUSTOM_PROMPT)")
+	flag.StringVar(&customPromptFile, "custom-prompt-file", "", "Path to a file with additional detection instructions (takes precedence over --custom-prompt and CUSTOM_PROMPT)")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
@@ -193,6 +201,50 @@ func run() (code int) {
 	}
 	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
 
+	// Resolve workflow-context overrides. Explicit flags win over the environment
+	// variables consumed by artifacts.Load; empty flags leave the loaded value
+	// (env or built-in default) untouched. This gives gh-aw and local callers a
+	// plumbing-independent way to inject workflow context so it cannot be silently
+	// dropped by an env-passthrough filter.
+	if workflowName != "" {
+		arts.WorkflowName = workflowName
+	}
+	if workflowDescription != "" {
+		arts.WorkflowDescription = workflowDescription
+	}
+
+	// Custom prompt precedence: --custom-prompt-file, then --custom-prompt, then
+	// the CUSTOM_PROMPT environment variable already loaded into arts.
+	customPromptSource := "none"
+	if arts.CustomPrompt != "" {
+		customPromptSource = "env"
+	}
+	if customPrompt != "" {
+		arts.CustomPrompt = customPrompt
+		customPromptSource = "flag"
+	}
+	if customPromptFile != "" {
+		data, err := os.ReadFile(customPromptFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading custom prompt file: %v\n", err)
+			logger.Error("custom_prompt_read_failed", map[string]any{"path": customPromptFile, "error": err.Error()})
+			reason = reasonConfigError
+			return exitError
+		}
+		arts.CustomPrompt = string(data)
+		customPromptSource = "file"
+	}
+
+	nameDefaulted := arts.WorkflowName == artifacts.DefaultWorkflowName
+	descriptionDefaulted := arts.WorkflowDescription == artifacts.DefaultWorkflowDescription
+
+	// Surface the resolved workflow context on stderr so a dropped CUSTOM_PROMPT
+	// or missing workflow name/description is diagnosable from the run log alone,
+	// not silently absorbed into the prompt.
+	fmt.Fprintf(os.Stderr,
+		"Prompt context: workflow_name=%q (defaulted=%t) workflow_description_defaulted=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
+		arts.WorkflowName, nameDefaulted, descriptionDefaulted, customPromptSource, len(arts.CustomPrompt))
+
 	// Build the prompt
 	promptTemplate := ""
 	if promptFile != "" {
@@ -212,7 +264,16 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	logger.Info("prompt_built", map[string]any{"prompt_bytes": len(prompt)})
+	logger.Info("prompt_built", map[string]any{
+		"prompt_bytes":                   len(prompt),
+		"workflow_name":                  arts.WorkflowName,
+		"workflow_description":           arts.WorkflowDescription,
+		"workflow_name_defaulted":        nameDefaulted,
+		"workflow_description_defaulted": descriptionDefaulted,
+		"custom_prompt_applied":          arts.CustomPrompt != "",
+		"custom_prompt_source":           customPromptSource,
+		"custom_prompt_bytes":            len(arts.CustomPrompt),
+	})
 
 	// Create engine
 	eng, err := engine.New(engineID, model)
