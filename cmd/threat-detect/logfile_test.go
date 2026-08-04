@@ -99,7 +99,7 @@ func TestRunWritesJSONLLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading step summary: %v", err)
 	}
-	if !strings.Contains(string(summary), "| `experiments/assignment.json` | 2 | file | No |") {
+	if !strings.Contains(string(summary), "| <code>experiments/assignment.json</code> | 2 | file | No |") {
 		t.Errorf("step summary missing experiment inventory:\n%s", summary)
 	}
 

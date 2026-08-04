@@ -35,7 +35,7 @@ func WriteArtifactInventory(path string, inventory []artifacts.InventoryEntry) e
 		if entry.Consumed {
 			consumed = "Yes"
 		}
-		fmt.Fprintf(&summary, "| `%s` | %d | %s | %s |\n",
+		fmt.Fprintf(&summary, "| <code>%s</code> | %d | %s | %s |\n",
 			escapeCell(entry.Path), entry.Size, escapeCell(entry.Kind), consumed)
 	}
 	summary.WriteByte('\n')
@@ -51,12 +51,19 @@ func WriteArtifactInventory(path string, inventory []artifacts.InventoryEntry) e
 	return nil
 }
 
+// escapeCell renders an untrusted artifact string as a safe Markdown table cell.
+// Values are wrapped in an HTML <code> element by the caller, so HTML-escaping
+// the angle brackets and ampersand neutralizes any markup (including a literal
+// </code> or backtick) an attacker-controlled filename might contain, while the
+// pipe and newline replacements keep it within a single table cell.
 func escapeCell(value string) string {
 	replacer := strings.NewReplacer(
-		"\\", "\\\\",
-		"|", "\\|",
-		"\r", "\\r",
-		"\n", "\\n",
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"|", "&#124;",
+		"\r", " ",
+		"\n", " ",
 	)
 	return replacer.Replace(value)
 }
