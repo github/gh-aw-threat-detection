@@ -190,9 +190,18 @@ threat-detect conclude --result-file <path>/detection_result.json
 `GITHUB_OUTPUT` and export `GH_AW_DETECTION_CONCLUSION` and
 `GH_AW_DETECTION_REASON` to `GITHUB_ENV` (per TD-20b).
 
+**U-18a**: `conclude` emits a self-contained diagnostic section on standard
+output (per TD-20c): the environment inputs and resolved paths, the per-field
+verdict breakdown with indexed reasons, and — when the result file is missing or
+unusable — a recursive listing of the result directory plus detection-log stats
+and any `THREAT_DETECTION_*` marker lines. A conforming host SHOULD surface this
+output in its job log so a detection run can be triaged without downloading
+artifacts, and MAY pass `--detection-log <path>` when the detection run's log is
+not stored beside the result file. A host MAY pass `--log-file <path>` to mirror
+the conclusion into a JSONL run log.
+
 **U-19**: A conforming host MAY control conclusion behavior through these
 environment inputs consumed by `conclude`:
-
 | Variable | Effect |
 |----------|--------|
 | `RUN_DETECTION` | When not `"true"`, the verdict is `skipped`/`success` |

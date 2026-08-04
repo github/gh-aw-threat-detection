@@ -154,6 +154,23 @@ at: <path>"), a malformed file reports `parse_error`, and detected threats repor
 `threat_detected`. There is no log-scraping fallback: if the file is absent, the
 step fails loudly.
 
+`conclude` writes a verbose, self-contained diagnostic section to the job log:
+banners framing the section, the environment inputs and resolved paths, and the
+per-field verdict breakdown (`prompt_injection`/`secret_leak`/`malicious_patch`)
+with an indexed reasons list. When the result file is missing or unusable it also
+prints a recursive listing of the result directory plus detection-log statistics
+and every line carrying a `THREAT_DETECTION_STATUS:`/`THREAT_DETECTION_RESULT:`
+marker, so a failed run can be diagnosed without downloading artifacts.
+
+Additional flags:
+
+- `--detection-log <path>` — detection run log used for diagnostics (defaults to
+  `detection.log` beside the result file); it is never parsed for a verdict
+- `--log-file <path>` — mirror the conclusion into a JSONL run log (env:
+  `THREAT_DETECTION_LOG_FILE`), emitting `conclude_start`, `conclude_verdict`,
+  `conclude_directory_listing`, `conclude_detection_log`, and `conclude_outcome`
+  events
+
 ### AI Credits and Token Usage
 
 The threat-detection pass is a **separate agentic engine invocation** from the main
