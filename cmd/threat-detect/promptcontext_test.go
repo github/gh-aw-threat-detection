@@ -20,6 +20,11 @@ func runDetectionForPromptContext(t *testing.T, env map[string]string, extraArgs
 
 	fullEnv := map[string]string{
 		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		// Clear inherited workflow-context vars so the suite is deterministic
+		// regardless of the developer's shell; cases overlay explicit values.
+		"WORKFLOW_NAME":        "",
+		"WORKFLOW_DESCRIPTION": "",
+		"CUSTOM_PROMPT":        "",
 	}
 	for k, v := range env {
 		fullEnv[k] = v
@@ -120,6 +125,42 @@ func TestPromptContextCustomPromptFileWins(t *testing.T) {
 	}
 	if bytes, ok := built["custom_prompt_bytes"].(float64); !ok || int(bytes) != len("from file") {
 		t.Errorf("custom_prompt_bytes = %v, want %d", built["custom_prompt_bytes"], len("from file"))
+	}
+}
+
+func TestPromptContextExplicitDefaultTextIsNotDefaulted(t *testing.T) {
+	// Supplying the fallback text explicitly must not be misreported as defaulted.
+	built, stderr := runDetectionForPromptContext(t, nil,
+		"-workflow-name", "Unnamed Workflow",
+		"-workflow-description", "No description provided",
+	)
+
+	if built["workflow_name_defaulted"] != false {
+		t.Errorf("workflow_name_defaulted = %v, want false", built["workflow_name_defaulted"])
+	}
+	if built["workflow_description_defaulted"] != false {
+		t.Errorf("workflow_description_defaulted = %v, want false", built["workflow_description_defaulted"])
+	}
+	if !strings.Contains(stderr, "workflow_description=\"No description provided\"") {
+		t.Errorf("stderr missing resolved description, got:\n%s", stderr)
+	}
+}
+
+func TestPromptContextEmptyFlagClearsEnvCustomPrompt(t *testing.T) {
+	// An explicit empty --custom-prompt must win over CUSTOM_PROMPT (flags win),
+	// clearing the applied prompt while recording the flag as its provenance.
+	built, _ := runDetectionForPromptContext(t, map[string]string{
+		"CUSTOM_PROMPT": "from env",
+	}, "-custom-prompt", "")
+
+	if built["custom_prompt_applied"] != false {
+		t.Errorf("custom_prompt_applied = %v, want false", built["custom_prompt_applied"])
+	}
+	if built["custom_prompt_source"] != "flag" {
+		t.Errorf("custom_prompt_source = %v, want flag", built["custom_prompt_source"])
+	}
+	if bytes, ok := built["custom_prompt_bytes"].(float64); !ok || int(bytes) != 0 {
+		t.Errorf("custom_prompt_bytes = %v, want 0", built["custom_prompt_bytes"])
 	}
 }
 

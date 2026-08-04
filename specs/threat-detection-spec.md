@@ -230,8 +230,12 @@ flags so it cannot be silently dropped by environment-variable plumbing:
 `--workflow-name` overrides `WORKFLOW_NAME`, `--workflow-description` overrides
 `WORKFLOW_DESCRIPTION`, and `--custom-prompt` (or `--custom-prompt-file`, which
 reads the instructions from a file) overrides `CUSTOM_PROMPT`. When both a flag
-and its environment variable are set, the flag wins; `--custom-prompt-file` takes
-precedence over `--custom-prompt`. The detector MUST record the resolved workflow
+and its environment variable are set, the flag wins (even when empty, so an
+explicit empty `--custom-prompt` clears an env-supplied prompt);
+`--custom-prompt-file` takes precedence over `--custom-prompt`. A value is
+reported as defaulted only when neither its flag nor its environment variable was
+provided (not merely because it equals the fallback text). The detector MUST
+record the resolved workflow
 name and description, whether each fell back to its built-in default, and the
 source and byte length of any applied custom prompt (`flag`, `file`, `env`, or
 `none`) on the `prompt_built` run-log event and on a single stderr diagnostic

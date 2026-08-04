@@ -201,29 +201,39 @@ func run() (code int) {
 	}
 	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
 
-	// Resolve workflow-context overrides. Explicit flags win over the environment
-	// variables consumed by artifacts.Load; empty flags leave the loaded value
-	// (env or built-in default) untouched. This gives gh-aw and local callers a
-	// plumbing-independent way to inject workflow context so it cannot be silently
-	// dropped by an env-passthrough filter.
-	if workflowName != "" {
+	// Resolve workflow-context overrides. Provenance is tracked from whether a
+	// flag was explicitly provided (FlagSet.Visit) rather than from the value's
+	// content, so an explicit flag wins even when empty and a value that merely
+	// equals the built-in default text is not misreported as defaulted. This
+	// gives gh-aw and local callers a plumbing-independent way to inject workflow
+	// context so it cannot be silently dropped by an env-passthrough filter.
+	providedFlags := map[string]bool{}
+	flag.CommandLine.Visit(func(f *flag.Flag) { providedFlags[f.Name] = true })
+
+	// A value is "defaulted" only when neither the flag nor its environment
+	// variable supplied it; equality with the fallback text is not sufficient.
+	nameDefaulted := !providedFlags["workflow-name"] && os.Getenv("WORKFLOW_NAME") == ""
+	descriptionDefaulted := !providedFlags["workflow-description"] && os.Getenv("WORKFLOW_DESCRIPTION") == ""
+	if providedFlags["workflow-name"] {
 		arts.WorkflowName = workflowName
 	}
-	if workflowDescription != "" {
+	if providedFlags["workflow-description"] {
 		arts.WorkflowDescription = workflowDescription
 	}
 
 	// Custom prompt precedence: --custom-prompt-file, then --custom-prompt, then
-	// the CUSTOM_PROMPT environment variable already loaded into arts.
+	// the CUSTOM_PROMPT environment variable already loaded into arts. Presence is
+	// determined by explicit flag provision, so an explicit empty flag clears an
+	// env-supplied prompt (flags win).
 	customPromptSource := "none"
 	if arts.CustomPrompt != "" {
 		customPromptSource = "env"
 	}
-	if customPrompt != "" {
+	if providedFlags["custom-prompt"] {
 		arts.CustomPrompt = customPrompt
 		customPromptSource = "flag"
 	}
-	if customPromptFile != "" {
+	if providedFlags["custom-prompt-file"] {
 		data, err := os.ReadFile(customPromptFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading custom prompt file: %v\n", err)
@@ -235,15 +245,13 @@ func run() (code int) {
 		customPromptSource = "file"
 	}
 
-	nameDefaulted := arts.WorkflowName == artifacts.DefaultWorkflowName
-	descriptionDefaulted := arts.WorkflowDescription == artifacts.DefaultWorkflowDescription
-
 	// Surface the resolved workflow context on stderr so a dropped CUSTOM_PROMPT
 	// or missing workflow name/description is diagnosable from the run log alone,
 	// not silently absorbed into the prompt.
 	fmt.Fprintf(os.Stderr,
-		"Prompt context: workflow_name=%q (defaulted=%t) workflow_description_defaulted=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
-		arts.WorkflowName, nameDefaulted, descriptionDefaulted, customPromptSource, len(arts.CustomPrompt))
+		"Prompt context: workflow_name=%q (defaulted=%t) workflow_description=%q (defaulted=%t) custom_prompt_applied=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
+		arts.WorkflowName, nameDefaulted, arts.WorkflowDescription, descriptionDefaulted,
+		arts.CustomPrompt != "", customPromptSource, len(arts.CustomPrompt))
 
 	// Build the prompt
 	promptTemplate := ""
