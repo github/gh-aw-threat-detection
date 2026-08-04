@@ -55,7 +55,7 @@ threat-detect [flags] <artifacts-dir>
 
 **Flags:**
 - `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
-- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`)
+- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`). The value is forwarded to the engine CLI verbatim and may be a model alias (`gh-aw` defaults the detection model to the `detection` alias when none is configured); aliases are resolved by the AWF API proxy, not by the detector
 - `--prompt-template` — Path to custom prompt template
 - `--workflow-name` — Workflow name for the prompt. Overrides `WORKFLOW_NAME`
 - `--workflow-description` — Workflow description for the prompt. Overrides `WORKFLOW_DESCRIPTION`
@@ -177,6 +177,19 @@ host-side reason:
 summary: per-field booleans (`prompt_injection`, `secret_leak`,
 `malicious_patch`), the reasons list, the resolved `conclusion`
 (`success`/`warning`/`failure`/`skipped`), and the reason code.
+
+Tooling failures are rendered distinctly from real security findings, matching
+`gh-aw`'s own output so automated scanners can tell them apart:
+
+| host-side `reason` | marker | block title |
+|---|---|---|
+| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Threat Detection Verdict |
+| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure |
+| absent (`success`, `skipped`) | none | Threat Detection Verdict |
+
+An engine failure block states plainly that the analysis engine could not
+complete and that this is a tooling failure, not a security finding; the same
+line is echoed into the job log.
 
 `conclude` writes a verbose, self-contained diagnostic section to the job log:
 banners framing the section, the environment inputs and resolved paths, and the

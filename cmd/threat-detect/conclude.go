@@ -70,11 +70,11 @@ var detectionLogMarkers = []string{"THREAT_DETECTION_STATUS:", "THREAT_DETECTION
 // recorded verdict always leaves a readable result file). Status reasons are
 // intentionally reused from main.go rather than restated as string literals.
 var detectionStatusReasonMap = map[string]string{
-	reasonInvalidReportExhausted: "parse_error",   // engine ran but never recorded a valid verdict
-	reasonOutputWriteError:       "parse_error",   // verdict obtained but writing the result failed
-	reasonEngineError:            "agent_failure", // engine subprocess itself failed
-	reasonCancelled:              "agent_failure", // run was interrupted before a verdict
-	reasonConfigError:            "agent_failure", // setup/validation failed before the engine ran
+	reasonInvalidReportExhausted: detector.ReasonParseError,   // engine ran but never recorded a valid verdict
+	reasonOutputWriteError:       detector.ReasonParseError,   // verdict obtained but writing the result failed
+	reasonEngineError:            detector.ReasonAgentFailure, // engine subprocess itself failed
+	reasonCancelled:              detector.ReasonAgentFailure, // run was interrupted before a verdict
+	reasonConfigError:            detector.ReasonAgentFailure, // setup/validation failed before the engine ran
 }
 
 // runConclude implements the "conclude" subcommand. It reads the structured
@@ -282,7 +282,7 @@ func (c *concluder) conclude(resultFile string) int {
 		}
 		c.info("💡 This usually means the AI engine did not record a verdict in the expected format.")
 		c.info(`   Expected content: {"prompt_injection":bool,"secret_leak":bool,"malicious_patch":bool,"reasons":[...]}`)
-		return c.fail(nil, "parse_error", fmt.Sprintf("%s: ❌ Failed to parse detection result file %s: %v", errCodeParse, resultFile, err))
+		return c.fail(nil, detector.ReasonParseError, fmt.Sprintf("%s: ❌ Failed to parse detection result file %s: %v", errCodeParse, resultFile, err))
 	}
 
 	c.info("✔️  Structured result file found and parsed successfully.")
@@ -304,7 +304,7 @@ func (c *concluder) conclude(resultFile string) int {
 		if len(result.Reasons) > 0 {
 			message += "\nReasons: " + strings.Join(result.Reasons, "; ")
 		}
-		return c.fail(result, "threat_detected", message)
+		return c.fail(result, detector.ReasonThreatDetected, message)
 	}
 
 	c.info("✅ No security threats detected. Safe outputs may proceed.")
@@ -572,13 +572,13 @@ func (c *concluder) detectionFailureReason() (reason, errCode string) {
 	if statusReason := lastDetectionStatusReason(c.detectionLog); statusReason != "" {
 		if mapped, ok := detectionStatusReasonMap[statusReason]; ok {
 			code := errCodeSystem
-			if mapped == "parse_error" {
+			if mapped == detector.ReasonParseError {
 				code = errCodeParse
 			}
 			return mapped, code
 		}
 	}
-	return "agent_failure", errCodeSystem
+	return detector.ReasonAgentFailure, errCodeSystem
 }
 
 // lastDetectionStatusReason reads path (the detection run's captured log) and
@@ -623,7 +623,14 @@ func lastDetectionStatusReason(path string) string {
 //     let the job proceed (exit 0).
 //   - Otherwise set conclusion=failure, emit an error, and fail closed (exit 1).
 func (c *concluder) fail(result *detector.Result, reason, message string) int {
-	mustFail := c.executionFailed && (reason == "agent_failure" || reason == "parse_error")
+	mustFail := c.executionFailed && detector.IsToolingFailureReason(reason)
+	if headline := detector.ThreatHeadline(reason); headline != "" {
+		icon := "🚨"
+		if detector.IsToolingFailureReason(reason) {
+			icon = "⚠️ "
+		}
+		c.info(fmt.Sprintf("%s %s", icon, headline))
+	}
 	c.setOutput("reason", reason)
 	c.exportVariable("GH_AW_DETECTION_REASON", reason)
 	if c.warnMode && !mustFail {
