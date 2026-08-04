@@ -185,8 +185,11 @@ the detector, not inside it:
   `max-turns` value that bounds the agentic loop (see the [spec](specs/threat-detection-spec.md), TD-14).
 
 A plain, non-AWF `./bin/threat-detect` invocation (no API proxy) has **no**
-credit cap and produces no proxy token log — only early termination and
-`max-turns` bound its cost.
+credit cap and produces no proxy token log. It is not bounded by `max-turns`
+either — that is a `gh-aw` workflow setting, and the CLI neither accepts it nor
+forwards one to the engine. Only **early termination** (cancelling the engine as
+soon as a verdict is recorded) and the engine's own built-in limits bound its
+cost.
 
 **Where does the `aic` (AI credits) figure come from?** Not from `threat-detect`.
 On the AWF path the proxy records every steered model request to
