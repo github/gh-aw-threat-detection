@@ -39,6 +39,32 @@ func TestBuildPrompt_Default(t *testing.T) {
 	if !strings.Contains(prompt, "A test workflow") {
 		t.Error("expected workflow description in prompt")
 	}
+	if strings.Contains(prompt, "{COMMENT_MEMORY_FILES}") {
+		t.Error("expected {COMMENT_MEMORY_FILES} to be replaced")
+	}
+}
+
+func TestBuildPrompt_CommentMemoryFiles(t *testing.T) {
+	arts := &artifacts.Artifacts{
+		Dir:                   "/tmp/test",
+		PromptFilePath:        "/tmp/test/aw-prompts/prompt.txt",
+		AgentOutputFilePath:   "/tmp/test/agent_output.json",
+		PatchFileInfo:         "No patch or bundle file found",
+		CommentMemoryFileInfo: "/tmp/test/comment-memory/note.md (12 bytes)",
+		WorkflowName:          "Test Workflow",
+		WorkflowDescription:   "A test workflow",
+	}
+
+	prompt, err := BuildPrompt(arts, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(prompt, "{COMMENT_MEMORY_FILES}") {
+		t.Error("expected {COMMENT_MEMORY_FILES} to be replaced")
+	}
+	if !strings.Contains(prompt, "/tmp/test/comment-memory/note.md") {
+		t.Error("expected comment-memory file path in prompt")
+	}
 }
 
 func TestBuildPrompt_CustomTemplate(t *testing.T) {
@@ -101,5 +127,8 @@ func TestDefaultPromptTemplate(t *testing.T) {
 	}
 	if !strings.Contains(tmpl, "THREAT_DETECTION_RESULT") {
 		t.Error("expected template to contain THREAT_DETECTION_RESULT")
+	}
+	if !strings.Contains(tmpl, "Lockfile Version Recency") {
+		t.Error("expected template to contain npm lockfile false-positive suppression guidance (Lockfile Version Recency)")
 	}
 }

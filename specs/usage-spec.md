@@ -135,7 +135,9 @@ this ordered flow:
 
 1. **Acquire** the pinned detector asset and verify its checksum (Section 2).
 2. **Prepare** the artifacts directory from the guarded agentic run's outputs
-   (per TD-17).
+   (per TD-17). The prepared directory SHOULD include the agent's
+   `comment-memory/` directory when present, so persisted, attacker-influenced
+   comment memory is analyzed alongside the prompt and patch (per TD-18a).
 3. **Run** the detector once, writing its verdict to a structured result file
    (`detection_result.json`).
 4. **Conclude** the run with the `conclude` subcommand (Section 6) to derive the
@@ -199,12 +201,17 @@ environment inputs consumed by `conclude`:
 | `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Anything other than `"false"` selects warn mode |
 | `DETECTION_AGENTIC_EXECUTION_OUTCOME` | `"failure"` makes `agent_failure`/`parse_error` hard-fail |
 
+A host MAY also pass `--detection-log <path>` (default `<result-file-dir>/detection.log`)
+so `conclude` can refine a missing-result-file outcome into `agent_failure` or
+`parse_error` from the run's captured `THREAT_DETECTION_STATUS:` line, per TD-20b.
+
 **U-20**: The host MUST honor the `conclude` outcomes: a missing result file
-reports `agent_failure`, a malformed result file reports `parse_error`, and a
-detected threat reports `threat_detected`. In warn mode, non-mandatory failures
-MUST surface as warnings without failing the job, except that `agent_failure`
-and `parse_error` MUST hard-fail when the detection execution step itself failed
-(per TD-20b).
+reports `agent_failure` or `parse_error` (refined from the detection log per
+TD-20b, defaulting to `agent_failure`), a malformed result file always reports
+`parse_error`, and a detected threat reports `threat_detected`. In warn mode,
+non-mandatory failures MUST surface as warnings without failing the job, except
+that `agent_failure` and `parse_error` MUST hard-fail when the detection execution
+step itself failed (per TD-20b).
 
 ### 6.1 Exit codes and status line
 
