@@ -154,13 +154,30 @@ threat-detection:
 ```
 <artifacts-dir>/
 ├── aw-prompts/
-│   └── prompt.txt          # Workflow prompt file
-├── agent_output.json       # Agent structured output
-├── aw-*.patch              # Git format-patch files (optional)
-├── aw-*.bundle             # Git bundle files (optional)
-└── comment-memory/         # Agent comment memory (optional)
+│   ├── prompt.txt                # Expanded workflow prompt file
+│   ├── prompt-template.txt       # Pre-expansion template (optional)
+│   └── prompt-import-tree.json   # Runtime-import provenance (optional)
+├── agent_output.json             # Agent structured output
+├── aw_info.json                  # Activation metadata (optional)
+├── aw-*.patch                    # Git format-patch files (optional)
+├── aw-*.bundle                   # Git bundle files (optional)
+├── experiments/                  # Experiment state (optional, inventoried only)
+└── comment-memory/               # Agent comment memory (optional, inventoried only)
     └── *.md
 ```
+
+**TD-17a**: When `aw_info.json` is present, the detector MUST expose only a
+bounded, allowlisted subset of activation metadata to the detection model. This
+subset MAY include trigger event, actor, engine and model, workflow and repository
+identity, ref and commit, run identifiers, and bounded caller-workflow context.
+The detector MUST treat every exposed activation value as untrusted runtime data.
+Unknown fields and fields outside the allowlist MUST NOT be included in the
+detection prompt.
+
+**TD-17b**: The detector MUST recursively inventory every non-directory entry in
+the artifacts directory with its relative path, size, entry kind, and whether the
+detector consumes it. `experiments/` and `comment-memory/` are supported as
+inventory-only inputs; their contents MUST NOT be added to the detection prompt.
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
@@ -186,9 +203,10 @@ log path is explicitly configured, the detector MUST write the run log as
 detector MUST write one JSON object per line, each containing at least the `time`,
 `level`, and `event` keys, and MUST record a terminal `status` event whose
 `reason` and `exit` fields carry the same reason string and exit code as the
-stderr status line. The run log is an additive observability sink: it MUST NOT
-alter the result JSON contract (TD-08) or the exit codes (TD-21). A failure to
-open the log file MUST be treated as a configuration error.
+stderr status line. The `artifacts_loaded` event MUST include the artifact
+inventory defined by TD-17b. The run log is an additive observability sink: it
+MUST NOT alter the result JSON contract (TD-08) or the exit codes (TD-21). A
+failure to open the log file MUST be treated as a configuration error.
 
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
@@ -215,6 +233,10 @@ A malformed (readable but unparseable) result file MUST unconditionally report
 (`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`) non-mandatory failures MUST
 surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
+
+**TD-20c**: When `GITHUB_STEP_SUMMARY` is set, the detector MUST append the
+artifact inventory defined by TD-17b as a Markdown table. Failure to write the
+configured summary MUST be treated as a configuration error.
 
 ### 8.3 Exit Codes
 

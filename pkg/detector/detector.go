@@ -51,6 +51,7 @@ func BuildPrompt(arts *artifacts.Artifacts, promptTemplate string) (string, erro
 	prompt = strings.ReplaceAll(prompt, "{WORKFLOW_PROMPT_FILE}", arts.PromptFilePath)
 	prompt = strings.ReplaceAll(prompt, "{AGENT_OUTPUT_FILE}", arts.AgentOutputFilePath)
 	prompt = strings.ReplaceAll(prompt, "{AGENT_PATCH_FILE}", arts.PatchFileInfo)
+	prompt = strings.ReplaceAll(prompt, "{ACTIVATION_CONTEXT}", arts.FormatActivationContext())
 	prompt = strings.ReplaceAll(prompt, "{COMMENT_MEMORY_FILES}", arts.CommentMemoryFileInfo)
 	prompt = strings.ReplaceAll(prompt, "{PROMPT_ANALYSIS}", analysisContent)
 

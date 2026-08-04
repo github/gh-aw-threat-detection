@@ -234,13 +234,19 @@ removing quarantine.
 │   ├── prompt-template.txt # Pre-expansion prompt template (optional)
 │   └── prompt-import-tree.json # Runtime-import provenance (optional)
 ├── agent_output.json       # Agent structured output
-├── aw_info.json            # Activation metadata (optional)
+├── aw_info.json            # Bounded activation context (optional, consumed as untrusted)
 ├── aw-*.patch              # Git format-patch files (optional)
 ├── aw-*.bundle             # Git bundle files (optional)
-├── experiments/            # Experiment assignment/state files (optional)
-└── comment-memory/         # Agent comment memory (optional)
+├── experiments/            # Experiment assignment/state files (optional, inventoried only)
+└── comment-memory/         # Agent comment memory (optional, inventoried only)
     └── *.md
 ```
+
+Every file below the artifacts directory is recorded with its size and consumed
+status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is
+set, in the Actions step summary. Only an allowlisted, size-bounded subset of
+`aw_info.json` is added to the detection prompt, and all of its values are
+explicitly treated as untrusted runtime data.
 
 ### Output (JSON)
 

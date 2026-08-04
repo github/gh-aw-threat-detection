@@ -30,6 +30,7 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
 	"github.com/github/gh-aw-threat-detection/pkg/runlog"
+	"github.com/github/gh-aw-threat-detection/pkg/stepsummary"
 )
 
 const (
@@ -207,7 +208,16 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
+	logger.Info("artifacts_loaded", map[string]any{
+		"artifacts_dir": artifactsDir,
+		"inventory":     arts.Inventory,
+	})
+	if err := stepsummary.WriteArtifactInventory(os.Getenv("GITHUB_STEP_SUMMARY"), arts.Inventory); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing artifact inventory summary: %v\n", err)
+		logger.Error("artifact_inventory_summary_failed", map[string]any{"error": err.Error()})
+		reason = reasonConfigError
+		return exitError
+	}
 	for _, w := range arts.Warnings {
 		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w))
 		logger.Info("artifacts_warning", map[string]any{"warning": w})
