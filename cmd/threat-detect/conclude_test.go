@@ -213,6 +213,17 @@ func TestConcludeContract(t *testing.T) {
 			wantSuccess:     "false",
 			wantReason:      "agent_failure",
 		},
+		{
+			name:            "malformed file fails closed in strict mode regardless of execution outcome",
+			runDetection:    "true",
+			warnMode:        false,
+			executionFailed: true,
+			resultContent:   "{not json",
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+			wantSuccess:     "false",
+			wantReason:      "parse_error",
+		},
 	}
 
 	for _, tt := range tests {
@@ -287,6 +298,13 @@ func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
 			wantConclusion: "failure",
 		},
 		{
+			name:            "strict mode fails closed regardless of execution outcome",
+			warnMode:        false,
+			executionFailed: true,
+			wantExit:        concludeExitFail,
+			wantConclusion:  "failure",
+		},
+		{
 			name:           "warn mode warns when execution succeeded",
 			warnMode:       true,
 			wantExit:       concludeExitProceed,
@@ -331,9 +349,17 @@ func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
 			if got := outputs["conclusion"]; got != tt.wantConclusion {
 				t.Errorf("conclusion output = %q, want %q", got, tt.wantConclusion)
 			}
+			// success=false on every fail path, warn or strict — only a clean
+			// verdict (or skip) sets success=true.
+			if got := outputs["success"]; got != "false" {
+				t.Errorf("success output = %q, want %q", got, "false")
+			}
 			env := parseKV(t, filepath.Join(dir, "env"))
 			if got := env["GH_AW_DETECTION_REASON"]; got != "agent_failure" {
 				t.Errorf("GH_AW_DETECTION_REASON = %q, want %q", got, "agent_failure")
+			}
+			if got := env["GH_AW_DETECTION_CONCLUSION"]; got != tt.wantConclusion {
+				t.Errorf("GH_AW_DETECTION_CONCLUSION = %q, want %q", got, tt.wantConclusion)
 			}
 		})
 	}
