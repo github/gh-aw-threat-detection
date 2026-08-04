@@ -131,6 +131,15 @@ and root `aw-*.patch` / `aw-*.bundle` files. It inventories all other files
 recursively; `experiments/` and `comment-memory/` are currently inventory-only
 inputs (per TD-17b).
 
+**U-06b**: A host MAY declare that the guarded agent job produced a patch by
+setting `HAS_PATCH=true`, and MAY select strict artifact validation by setting
+`GH_AW_DETECTION_CONTINUE_ON_ERROR=false`. When `agent_output.json`,
+`aw-prompts/prompt.txt`, or an expected patch/bundle is absent, the detector
+warns and continues in the default warn mode, and terminates with `config_error`
+(exit `2`) before invoking the engine in strict mode (per TD-18c). A host that
+already validates these artifacts in its own setup step SHOULD pass the same
+`GH_AW_DETECTION_CONTINUE_ON_ERROR` value to the detector so both stages agree.
+
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
 where the detector executes. The detector MUST NOT be expected to bundle the

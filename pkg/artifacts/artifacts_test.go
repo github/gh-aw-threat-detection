@@ -344,3 +344,80 @@ func TestLoad_CommentMemoryNotADirectory(t *testing.T) {
 		t.Errorf("expected no warnings, got %v", arts.Warnings)
 	}
 }
+
+func TestLoad_MissingRequiredArtifacts(t *testing.T) {
+	dir := t.TempDir()
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.MissingRequired) != 2 {
+		t.Fatalf("MissingRequired = %v, want agent output and prompt entries", arts.MissingRequired)
+	}
+	joined := strings.Join(arts.MissingRequired, "\n")
+	if !strings.Contains(joined, "ERR_SYSTEM: Agent output file not found at: ") {
+		t.Errorf("missing agent output entry: %v", arts.MissingRequired)
+	}
+	if !strings.Contains(joined, "ERR_VALIDATION: Prompt file not found at: ") {
+		t.Errorf("missing prompt entry: %v", arts.MissingRequired)
+	}
+}
+
+func TestLoad_CompleteArtifactsHaveNoMissingRequired(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.MissingRequired) != 0 {
+		t.Errorf("MissingRequired = %v, want none", arts.MissingRequired)
+	}
+}
+
+func TestLoad_ExpectedPatchMissing(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.MissingRequired) != 1 ||
+		!strings.Contains(arts.MissingRequired[0], "Patch/bundle file(s) expected but not found in: ") {
+		t.Fatalf("MissingRequired = %v, want a patch entry", arts.MissingRequired)
+	}
+}
+
+func TestLoad_ExpectedPatchPresent(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte("diff content"))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.MissingRequired) != 0 {
+		t.Errorf("MissingRequired = %v, want none", arts.MissingRequired)
+	}
+}

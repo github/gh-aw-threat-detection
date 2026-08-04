@@ -1,0 +1,593 @@
+{
+	"Golang errors": {},
+	"Issues": [
+		{
+			"severity": "HIGH",
+			"confidence": "MEDIUM",
+			"cwe": {
+				"id": "190",
+				"url": "https://cwe.mitre.org/data/definitions/190.html"
+			},
+			"rule_id": "G115",
+			"details": "integer overflow conversion rune -\u003e uint8",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "538: \treturn strings.FieldsFunc(p, func(r rune) bool {\n539: \t\treturn r \u003c= 255 \u0026\u0026 os.IsPathSeparator(uint8(r))\n540: \t})\n",
+			"line": "539",
+			"column": "46",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/engine/engine.go",
+			"code": "318: \tcandidate := filepath.Join(runnerTemp, \"gh-aw\", \"awf-config.json\")\n319: \tif _, err := os.Stat(candidate); err != nil {\n320: \t\treturn nil\n",
+			"line": "319",
+			"column": "22",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/engine/engine.go",
+			"code": "258: \tharnessPath := filepath.Join(runnerTemp, \"gh-aw\", \"actions\", filename)\n259: \tif _, err := os.Stat(harnessPath); err != nil {\n260: \t\treturn \"\", false\n",
+			"line": "259",
+			"column": "22",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "128: \tif err := os.Rename(tmpName, path); err != nil {\n129: \t\tos.Remove(tmpName)\n130: \t\treturn fmt.Errorf(\"renaming result file: %w\", err)\n",
+			"line": "129",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "127: \t}\n128: \tif err := os.Rename(tmpName, path); err != nil {\n129: \t\tos.Remove(tmpName)\n",
+			"line": "128",
+			"column": "21",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "124: \tif err := tmp.Close(); err != nil {\n125: \t\tos.Remove(tmpName)\n126: \t\treturn fmt.Errorf(\"closing result file: %w\", err)\n",
+			"line": "125",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "120: \t\ttmp.Close()\n121: \t\tos.Remove(tmpName)\n122: \t\treturn fmt.Errorf(\"writing result file: %w\", err)\n",
+			"line": "121",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "115: \t\ttmp.Close()\n116: \t\tos.Remove(tmpName)\n117: \t\treturn fmt.Errorf(\"setting result file permissions: %w\", err)\n",
+			"line": "116",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "435: \tif outputJSON != \"\" {\n436: \t\tif err := os.WriteFile(outputJSON, jsonBytes, 0o600); err != nil {\n437: \t\t\tfmt.Fprintf(os.Stderr, \"Error writing output: %v\\n\", err)\n",
+			"line": "436",
+			"column": "25",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "406: \t\t// Remove any stale sink result before each attempt.\n407: \t\tos.Remove(sinkPath)\n408: \t\tif _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath, Logger: logger}); err != nil {\n",
+			"line": "407",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G703",
+			"details": "Path traversal via taint analysis",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "338: \t// Remove the empty placeholder so ReadResultFile only succeeds once the tool writes it.\n339: \tos.Remove(sinkPath)\n340: \tdefer os.Remove(sinkPath)\n",
+			"line": "339",
+			"column": "11",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "HIGH",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G702",
+			"details": "Command injection via taint analysis",
+			"file": "/workspace/project/pkg/engine/engine.go",
+			"code": "442: \n443: \tcmd := exec.CommandContext(ctx, name, args...)\n444: \tif stdinData != \"\" {\n",
+			"line": "443",
+			"column": "28",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": null,
+			"rule_id": "G705",
+			"details": "XSS via taint analysis",
+			"file": "/workspace/project/cmd/threat-detect/report.go",
+			"code": "110: \tfmt.Println(msg)\n111: \tfmt.Fprintln(os.Stderr, msg)\n112: }\n",
+			"line": "111",
+			"column": "14",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "78",
+				"url": "https://cwe.mitre.org/data/definitions/78.html"
+			},
+			"rule_id": "G204",
+			"details": "Subprocess launched with variable",
+			"file": "/workspace/project/pkg/engine/engine.go",
+			"code": "442: \n443: \tcmd := exec.CommandContext(ctx, name, args...)\n444: \tif stdinData != \"\" {\n",
+			"line": "443",
+			"column": "9",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/pkg/runlog/runlog.go",
+			"code": "51: func Open(path string) (*Logger, error) {\n52: \tf, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)\n53: \tif err != nil {\n",
+			"line": "52",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/pkg/engine/codex.go",
+			"code": "34: \t}\n35: \tdata, err := os.ReadFile(configPath)\n36: \tif err != nil {\n",
+			"line": "35",
+			"column": "15",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/pkg/detector/summary.go",
+			"code": "89: \t}\n90: \tf, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)\n91: \tif err != nil {\n",
+			"line": "90",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "137: func ReadResultFile(path string) (*Result, error) {\n138: \tdata, err := os.ReadFile(path)\n139: \tif err != nil {\n",
+			"line": "138",
+			"column": "15",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "281: \tif promptFile != \"\" {\n282: \t\tdata, err := os.ReadFile(promptFile)\n283: \t\tif err != nil {\n",
+			"line": "282",
+			"column": "16",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "259: \tif providedFlags[\"custom-prompt-file\"] {\n260: \t\tdata, err := os.ReadFile(customPromptFile)\n261: \t\tif err != nil {\n",
+			"line": "260",
+			"column": "16",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/cmd/threat-detect/conclude.go",
+			"code": "683: \t}\n684: \tf, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)\n685: \tif err != nil {\n",
+			"line": "684",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/cmd/threat-detect/conclude.go",
+			"code": "592: \t}\n593: \tdata, err := os.ReadFile(path)\n594: \tif err != nil {\n",
+			"line": "593",
+			"column": "15",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "22",
+				"url": "https://cwe.mitre.org/data/definitions/22.html"
+			},
+			"rule_id": "G304",
+			"details": "Potential file inclusion via variable",
+			"file": "/workspace/project/cmd/threat-detect/conclude.go",
+			"code": "502: func readBounded(path string, limit int64) ([]byte, int64, error) {\n503: \tf, err := os.Open(path)\n504: \tif err != nil {\n",
+			"line": "503",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null,
+			"autofix": "Consider using os.Root to scope file access under a fixed root (Go \u003e=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal."
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "276",
+				"url": "https://cwe.mitre.org/data/definitions/276.html"
+			},
+			"rule_id": "G302",
+			"details": "Expect file permissions to be 0600 or less",
+			"file": "/workspace/project/pkg/detector/summary.go",
+			"code": "89: \t}\n90: \tf, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)\n91: \tif err != nil {\n",
+			"line": "90",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "276",
+				"url": "https://cwe.mitre.org/data/definitions/276.html"
+			},
+			"rule_id": "G302",
+			"details": "Expect file permissions to be 0600 or less",
+			"file": "/workspace/project/cmd/threat-detect/conclude.go",
+			"code": "683: \t}\n684: \tf, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)\n685: \tif err != nil {\n",
+			"line": "684",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "MEDIUM",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "276",
+				"url": "https://cwe.mitre.org/data/definitions/276.html"
+			},
+			"rule_id": "G306",
+			"details": "Expect WriteFile permissions to be 0600 or less",
+			"file": "/workspace/project/pkg/engine/tool.go",
+			"code": "34: \tscript := \"#!/bin/sh\\nexec \" + shellQuote(self) + \" report-result \\\"$@\\\"\\n\"\n35: \tif err := os.WriteFile(wrapperPath, []byte(script), 0o700); err != nil {\n36: \t\tcleanup()\n",
+			"line": "35",
+			"column": "12",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/runlog/runlog.go",
+			"code": "59: \tif err := f.Chmod(0o600); err != nil {\n60: \t\tf.Close()\n61: \t\treturn nil, fmt.Errorf(\"securing JSONL log file permissions: %w\", err)\n",
+			"line": "60",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/engine/tool.go",
+			"code": "30: \t}\n31: \tcleanup = func() { os.RemoveAll(toolDir) }\n32: \n",
+			"line": "31",
+			"column": "21",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/engine/engine.go",
+			"code": "416: \tif _, err := promptFile.WriteString(prompt); err != nil {\n417: \t\tpromptFile.Close()\n418: \t\treturn \"\", fmt.Errorf(\"writing temporary prompt file: %w\", err)\n",
+			"line": "417",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "128: \tif err := os.Rename(tmpName, path); err != nil {\n129: \t\tos.Remove(tmpName)\n130: \t\treturn fmt.Errorf(\"renaming result file: %w\", err)\n",
+			"line": "129",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "124: \tif err := tmp.Close(); err != nil {\n125: \t\tos.Remove(tmpName)\n126: \t\treturn fmt.Errorf(\"closing result file: %w\", err)\n",
+			"line": "125",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "120: \t\ttmp.Close()\n121: \t\tos.Remove(tmpName)\n122: \t\treturn fmt.Errorf(\"writing result file: %w\", err)\n",
+			"line": "121",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "119: \tif _, err := tmp.Write(data); err != nil {\n120: \t\ttmp.Close()\n121: \t\tos.Remove(tmpName)\n",
+			"line": "120",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "115: \t\ttmp.Close()\n116: \t\tos.Remove(tmpName)\n117: \t\treturn fmt.Errorf(\"setting result file permissions: %w\", err)\n",
+			"line": "116",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/pkg/detector/result.go",
+			"code": "114: \tif err := tmp.Chmod(0o600); err != nil {\n115: \t\ttmp.Close()\n116: \t\tos.Remove(tmpName)\n",
+			"line": "115",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "406: \t\t// Remove any stale sink result before each attempt.\n407: \t\tos.Remove(sinkPath)\n408: \t\tif _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath, Logger: logger}); err != nil {\n",
+			"line": "407",
+			"column": "3",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "338: \t// Remove the empty placeholder so ReadResultFile only succeeds once the tool writes it.\n339: \tos.Remove(sinkPath)\n340: \tdefer os.Remove(sinkPath)\n",
+			"line": "339",
+			"column": "2",
+			"nosec": false,
+			"suppressions": null
+		},
+		{
+			"severity": "LOW",
+			"confidence": "HIGH",
+			"cwe": {
+				"id": "703",
+				"url": "https://cwe.mitre.org/data/definitions/703.html"
+			},
+			"rule_id": "G104",
+			"details": "Errors unhandled",
+			"file": "/workspace/project/cmd/threat-detect/main.go",
+			"code": "336: \tsinkPath := sinkFile.Name()\n337: \tsinkFile.Close()\n338: \t// Remove the empty placeholder so ReadResultFile only succeeds once the tool writes it.\n",
+			"line": "337",
+			"column": "2",
+			"nosec": false,
+			"suppressions": null
+		}
+	],
+	"Stats": {
+		"files": 15,
+		"lines": 3528,
+		"nosec": 1,
+		"found": 38
+	},
+	"GosecVersion": "dev"
+}

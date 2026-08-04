@@ -71,6 +71,14 @@ func emitStatus(reason string, code int) {
 	fmt.Fprintf(os.Stderr, "%s reason=%s exit=%d\n", statusPrefix, reason, code)
 }
 
+// detectionContinueOnError reports whether the host selected warn mode. It is
+// the single interpretation of GH_AW_DETECTION_CONTINUE_ON_ERROR shared by the
+// detection run and the conclude subcommand: anything other than "false" is
+// warn mode, so an unset variable defaults to warning rather than failing.
+func detectionContinueOnError() bool {
+	return os.Getenv("GH_AW_DETECTION_CONTINUE_ON_ERROR") != "false"
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "report-result" {
 		os.Exit(runReport(os.Args[2:]))
@@ -222,6 +230,33 @@ func run() (code int) {
 	for _, w := range arts.Warnings {
 		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w))
 		logger.Info("artifacts_warning", map[string]any{"warning": w})
+	}
+
+	// Expected-but-absent artifacts follow the host's continue-on-error policy,
+	// mirroring gh-aw's detection setup: in warn mode (the default) they are
+	// surfaced as warnings and detection proceeds with whatever was staged; in
+	// strict mode they are a configuration error before the engine runs.
+	if len(arts.MissingRequired) > 0 {
+		warnMode := detectionContinueOnError()
+		command := "warning"
+		if !warnMode {
+			command = "error"
+		}
+		for _, m := range arts.MissingRequired {
+			message := m
+			if warnMode {
+				message += ". Continuing because GH_AW_DETECTION_CONTINUE_ON_ERROR != \"false\""
+			}
+			fmt.Fprintf(os.Stderr, "::%s::%s\n", command, escapeWorkflowData(message))
+		}
+		logger.Info("artifacts_missing_required", map[string]any{
+			"missing":           arts.MissingRequired,
+			"continue_on_error": warnMode,
+		})
+		if !warnMode {
+			reason = reasonConfigError
+			return exitError
+		}
 	}
 
 	// Resolve workflow-context overrides. Provenance is tracked from whether a

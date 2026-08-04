@@ -123,6 +123,14 @@ type Artifacts struct {
 	// artifacts (for example, an unreadable comment-memory directory). Each
 	// entry is prefixed with an error code such as ERR_VALIDATION.
 	Warnings []string
+
+	// MissingRequired lists the expected-but-absent artifacts that a strict
+	// host treats as a setup failure: the agent output file, the expanded
+	// prompt file, and — when the host declares HAS_PATCH=true — at least one
+	// patch or bundle file. Each entry is prefixed with an error code. Loading
+	// never fails on these; the caller decides whether they are fatal (see the
+	// GH_AW_DETECTION_CONTINUE_ON_ERROR handling in the CLI).
+	MissingRequired []string
 }
 
 // Load reads and validates artifacts from the given directory.
@@ -230,7 +238,29 @@ func Load(dir string) (*Artifacts, error) {
 	// unreadable we record a non-fatal ERR_VALIDATION warning and continue.
 	arts.loadCommentMemory(dir)
 
+	// Record (but never fail on) artifacts the host was expected to stage. The
+	// CLI decides whether these are warnings or a configuration error.
+	arts.checkRequired(dir, promptPath, agentOutputPath)
+
 	return arts, nil
+}
+
+// checkRequired records the expected-but-absent artifacts described by
+// MissingRequired. Error-code prefixes mirror gh-aw's detection setup so job
+// logs categorize the same failure identically on both paths.
+func (a *Artifacts) checkRequired(dir, promptPath, agentOutputPath string) {
+	if !fileExists(agentOutputPath) {
+		a.MissingRequired = append(a.MissingRequired,
+			fmt.Sprintf("ERR_SYSTEM: Agent output file not found at: %s", agentOutputPath))
+	}
+	if !fileExists(promptPath) {
+		a.MissingRequired = append(a.MissingRequired,
+			fmt.Sprintf("ERR_VALIDATION: Prompt file not found at: %s", promptPath))
+	}
+	if os.Getenv("HAS_PATCH") == "true" && len(a.PatchFiles) == 0 {
+		a.MissingRequired = append(a.MissingRequired,
+			fmt.Sprintf("ERR_VALIDATION: Patch/bundle file(s) expected but not found in: %s", dir))
+	}
 }
 
 // FormatActivationContext returns indented JSON for prompt rendering.

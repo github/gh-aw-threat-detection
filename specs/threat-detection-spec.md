@@ -181,6 +181,19 @@ inventory-only inputs; their contents MUST NOT be added to the detection prompt.
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
+**TD-18c**: The detector MUST report the expected-but-absent host-staged
+artifacts — `agent_output.json`, `aw-prompts/prompt.txt`, and, when the host
+declares `HAS_PATCH=true`, at least one `aw-*.patch` or `aw-*.bundle` file — and
+MUST follow the host's continue-on-error policy for them. In warn mode
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`, the default) it MUST emit a
+warning for each and continue detection with the artifacts that were staged. In
+strict mode (`GH_AW_DETECTION_CONTINUE_ON_ERROR == "false"`) it MUST emit an
+error for each and terminate as a configuration error (`config_error`, exit `2`)
+before invoking the engine. The missing agent output MUST be reported with the
+`ERR_SYSTEM` code and the missing prompt and patch/bundle with `ERR_VALIDATION`.
+When structured run logging is enabled, the detector MUST record an
+`artifacts_missing_required` event listing the entries and the resolved mode.
+
 **TD-18a**: The detector MUST discover comment-memory markdown files
 (`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
 as untrusted, attacker-influenced input to be analyzed for prompt injection and

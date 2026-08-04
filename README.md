@@ -123,7 +123,8 @@ directory. The log uses [JSON Lines](https://jsonlines.org/): one JSON object pe
 line, created fresh (truncating any existing file) with `0600` permissions. Every
 record starts with `time` (RFC 3339), `level`
 (`info`/`error`), and `event`, followed by event-specific fields. Emitted
-events include `run_start`, `artifacts_loaded`, `prompt_built`,
+events include `run_start`, `artifacts_loaded`, `artifacts_missing_required`,
+`prompt_built`,
 `attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
 `detection_failed`, and a terminal `status` record carrying the same `reason`
 and `exit` code as the stderr status line. The verdict JSON contract
@@ -309,6 +310,13 @@ may omit the template or import tree, but the detector emits an
 `ERR_VALIDATION` warning because trusted-vs-untrusted prompt analysis is then
 degraded. Empty or unreadable analysis files produce the same warning.
 
+`agent_output.json` and `aw-prompts/prompt.txt` are the artifacts a host is
+expected to stage, as is at least one `aw-*.patch` / `aw-*.bundle` when the host
+sets `HAS_PATCH=true`. When one is missing the detector follows the host's
+continue-on-error policy: by default it warns and analyzes whatever was staged,
+and with `GH_AW_DETECTION_CONTINUE_ON_ERROR=false` it reports an error and exits
+`2` (`config_error`) before the engine runs.
+
 Every file below the artifacts directory is recorded with its size and consumed
 status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is
 set, in the Actions step summary. Only an allowlisted, size-bounded subset of
@@ -390,6 +398,8 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_NAME` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-name`. |
 | `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-description`. |
 | `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. Overridable with `--custom-prompt` / `--custom-prompt-file`. |
+| `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Optional, host-integrated runs | Anything other than `"false"` is warn mode. `"false"` makes missing required artifacts a `config_error` (exit `2`), and is also honored by `conclude`. |
+| `HAS_PATCH` | Optional, host-integrated runs | `"true"` declares that the agent job produced a patch, so a missing `aw-*.patch` / `aw-*.bundle` is reported. |
 
 ## Development
 
