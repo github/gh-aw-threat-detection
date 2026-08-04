@@ -264,19 +264,39 @@ func Load(dir string) (*Artifacts, error) {
 		return nil, fmt.Errorf("reading artifacts directory: %w", err)
 	}
 
-	var hasReadablePatch bool
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
 		if strings.HasPrefix(name, "aw-") && (strings.HasSuffix(name, ".patch") || strings.HasSuffix(name, ".bundle")) {
-			p := filepath.Join(dir, name)
-			arts.PatchFiles = append(arts.PatchFiles, p)
-			if size, err := fileSize(p); err == nil && size > 0 {
-				hasReadablePatch = true
-			}
+			arts.PatchFiles = append(arts.PatchFiles, filepath.Join(dir, name))
 		}
+	}
+
+	// Build patch file info string. A patch/bundle only counts as "present"
+	// for the checks below if it is a readable, non-empty regular file: a
+	// zero-length or unreadable entry provides no actual patch context.
+	var infos []string
+	hasReadablePatch := false
+	for _, p := range arts.PatchFiles {
+		info, statErr := os.Stat(p)
+		if statErr != nil {
+			continue
+		}
+		if info.Size() > 0 {
+			hasReadablePatch = true
+		}
+		pType := "git-patch"
+		if strings.HasSuffix(p, ".bundle") {
+			pType = "git-bundle"
+		}
+		infos = append(infos, fmt.Sprintf("%s (%d bytes, %s)", p, info.Size(), pType))
+	}
+	if len(infos) > 0 {
+		arts.PatchFileInfo = strings.Join(infos, "\n")
+	} else {
+		arts.PatchFileInfo = "No patch or bundle file found"
 	}
 
 	// Cross-check against HAS_PATCH: gh-aw sets this env var when the agent
@@ -294,25 +314,6 @@ func Load(dir string) (*Artifacts, error) {
 	arts.AllPrimaryInputsMissing = (promptMissing || promptEmpty) &&
 		(agentOutputMissing || agentOutputEmpty || agentOutputInvalid) &&
 		!hasReadablePatch
-
-	// Build patch file info string
-	if len(arts.PatchFiles) > 0 {
-		var infos []string
-		for _, p := range arts.PatchFiles {
-			info, err := os.Stat(p)
-			if err != nil {
-				continue
-			}
-			pType := "git-patch"
-			if strings.HasSuffix(p, ".bundle") {
-				pType = "git-bundle"
-			}
-			infos = append(infos, fmt.Sprintf("%s (%d bytes, %s)", p, info.Size(), pType))
-		}
-		arts.PatchFileInfo = strings.Join(infos, "\n")
-	} else {
-		arts.PatchFileInfo = "No patch or bundle file found"
-	}
 
 	// Discover comment-memory markdown files (an attacker-influenced, persisted
 	// channel written by the agent). The directory is optional; when present but
