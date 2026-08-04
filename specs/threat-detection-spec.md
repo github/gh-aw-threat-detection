@@ -285,6 +285,23 @@ block MUST be written for every terminal outcome, including `skipped` (RUN_DETEC
 verdict. A failure to write the step summary MUST NOT change the subcommand's exit
 code.
 
+**TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
+actual security finding, so automated scanners and reviewers do not treat a
+detection outage as a threat. A reason of `agent_failure` or `parse_error` is a
+tooling failure; `threat_detected` is a security finding. The verdict step-summary
+block (TD-20h) MUST carry the marker matching the reason and MUST be titled and
+introduced accordingly, and the job-log diagnostics (TD-20d) MUST state the same
+distinction:
+
+| host-side `reason` | marker | headline |
+|---|---|---|
+| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Agentic threat detected — Manual review is REQUIRED before any follow-up automation. |
+| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure — The analysis engine could not complete. This is a tooling failure, not a security finding. |
+| absent (`success`, `skipped`) | none | none |
+
+The markers mirror gh-aw's `getThreatDetectedMarker` / `getThreatEngineErrorMarker`
+so both the inline and standalone paths emit identical machine-readable output.
+
 ### 8.3 Exit Codes
 
 **TD-21**: The detector MUST use the following exit codes:

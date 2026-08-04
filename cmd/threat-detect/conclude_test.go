@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
 
 // parseKV reads a name=value file (as written to $GITHUB_OUTPUT / $GITHUB_ENV)
@@ -1139,5 +1141,78 @@ func TestRunConcludeRejectsStepSummaryCollidingWithGithubOutput(t *testing.T) {
 	code := runConclude([]string{"--result-file", resultFile, "--step-summary", shared})
 	if code != concludeExitFail {
 		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
+	}
+}
+
+// A missing verdict is a tooling failure, not a security finding: the step
+// summary must carry the engine-error marker (never the threat marker) and the
+// job log must say so plainly, matching gh-aw's engine-error rendering.
+func TestConcludeToolingFailureUsesEngineErrorMarker(t *testing.T) {
+	dir := t.TempDir()
+	stepSummaryPath := filepath.Join(dir, "step_summary.md")
+	resultFile := filepath.Join(dir, "detection_result.json")
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     true,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stepSummary:  stepSummaryPath,
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitProceed, stdout.String())
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	summary := string(data)
+	if !strings.Contains(summary, detector.ThreatEngineErrorMarker) {
+		t.Errorf("step summary missing engine-error marker; got:\n%s", summary)
+	}
+	if strings.Contains(summary, detector.ThreatDetectedMarker) {
+		t.Errorf("step summary must not carry the threat marker for a tooling failure; got:\n%s", summary)
+	}
+	if !strings.Contains(summary, "<summary>Threat Detection Engine Failure</summary>") {
+		t.Errorf("step summary missing engine-failure title; got:\n%s", summary)
+	}
+	if !strings.Contains(stdout.String(), "This is a tooling failure, not a security finding.") {
+		t.Errorf("job log missing tooling-failure disclaimer; got:\n%s", stdout.String())
+	}
+}
+
+// A real threat verdict keeps the threat marker and must never be conflated
+// with an engine failure.
+func TestConcludeThreatVerdictUsesThreatMarker(t *testing.T) {
+	dir := t.TempDir()
+	stepSummaryPath := filepath.Join(dir, "step_summary.md")
+	resultFile := writeResultFixture(t, threatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     false,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stepSummary:  stepSummaryPath,
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
+	}
+
+	data, err := os.ReadFile(stepSummaryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
+	}
+	summary := string(data)
+	if !strings.Contains(summary, detector.ThreatDetectedMarker) {
+		t.Errorf("step summary missing threat marker; got:\n%s", summary)
+	}
+	if strings.Contains(summary, detector.ThreatEngineErrorMarker) {
+		t.Errorf("step summary must not carry the engine-error marker for a real threat; got:\n%s", summary)
 	}
 }
