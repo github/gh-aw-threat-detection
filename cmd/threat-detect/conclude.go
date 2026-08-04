@@ -52,12 +52,29 @@ func runConclude(args []string) int {
 		return concludeExitFail
 	}
 
+	githubOutput := os.Getenv("GITHUB_OUTPUT")
+	githubEnv := os.Getenv("GITHUB_ENV")
+
+	// Reject collisions among the run's independently-written destinations:
+	// --step-summary must not alias the structured result file (which would be
+	// overwritten with Markdown after being read) or the GitHub Actions command
+	// files (which the runner may reject outright if polluted with Markdown).
+	if err := rejectPathCollisions(
+		namedPath{"--result-file", resultFile},
+		namedPath{"--step-summary", stepSummary},
+		namedPath{"$GITHUB_OUTPUT", githubOutput},
+		namedPath{"$GITHUB_ENV", githubEnv},
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return concludeExitFail
+	}
+
 	c := &concluder{
 		runDetection:    os.Getenv("RUN_DETECTION"),
 		warnMode:        os.Getenv("GH_AW_DETECTION_CONTINUE_ON_ERROR") != "false",
 		executionFailed: os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
-		githubOutput:    os.Getenv("GITHUB_OUTPUT"),
-		githubEnv:       os.Getenv("GITHUB_ENV"),
+		githubOutput:    githubOutput,
+		githubEnv:       githubEnv,
 		stepSummary:     stepSummary,
 		stdout:          os.Stdout,
 	}

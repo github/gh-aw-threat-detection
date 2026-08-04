@@ -16,13 +16,29 @@ func TestFormatPromptSummary(t *testing.T) {
 		"**Engine**: copilot",
 		"**Model**: gpt-5",
 		"**Retries**: 2",
-		"```markdown",
+		"<pre><code>",
 		"Analyze this prompt.",
+		"</code></pre>",
 		"</details>",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("FormatPromptSummary() missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+func TestFormatPromptSummary_EscapesHTML(t *testing.T) {
+	// A prompt containing a closing fence-equivalent (here, raw HTML/script
+	// content) must not be able to break out of the <pre><code> block and be
+	// rendered as live Markdown/HTML in the job summary.
+	malicious := "</code></pre><script>alert(1)</script><details><summary>spoofed</summary>"
+	out := FormatPromptSummary("copilot", "gpt-5", 1, malicious)
+
+	if strings.Contains(out, "<script>") {
+		t.Errorf("FormatPromptSummary() did not escape embedded HTML; got:\n%s", out)
+	}
+	if !strings.Contains(out, "&lt;script&gt;") {
+		t.Errorf("FormatPromptSummary() expected escaped script tag; got:\n%s", out)
 	}
 }
 
@@ -54,6 +70,22 @@ func TestFormatVerdictSummary(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("FormatVerdictSummary() missing %q; got:\n%s", want, out)
 		}
+	}
+}
+
+func TestFormatVerdictSummary_EscapesReasons(t *testing.T) {
+	// Reasons come from the detection engine's analysis of untrusted artifact
+	// content and must not be able to inject Markdown/HTML into the verdict
+	// summary (e.g. escaping a list item to add a spoofed heading or a nested
+	// <details> block).
+	result := &Result{PromptInjection: true, Reasons: []string{"</code></pre><details><summary>spoofed</summary>evil"}}
+	out := FormatVerdictSummary(result, "failure", "threat_detected")
+
+	if strings.Contains(out, "<details><summary>spoofed</summary>") {
+		t.Errorf("FormatVerdictSummary() did not escape embedded HTML in reason; got:\n%s", out)
+	}
+	if !strings.Contains(out, "&lt;details&gt;&lt;summary&gt;spoofed&lt;/summary&gt;") {
+		t.Errorf("FormatVerdictSummary() expected escaped reason; got:\n%s", out)
 	}
 }
 

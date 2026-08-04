@@ -142,19 +142,17 @@ func run() (code int) {
 	// standalone detector honors the model gh-aw configured for detection.
 	model = engine.ResolveModel(engineID, model)
 
-	// Reject a --log-file that collides with --output: they are opened and
-	// truncated independently, so sharing an inode would interleave the JSONL
-	// trace and the result JSON and corrupt both while still reporting success.
-	if logFile != "" && outputJSON != "" {
-		if same, err := samePath(logFile, outputJSON); err != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving output paths: %v\n", err)
-			reason = reasonConfigError
-			return exitError
-		} else if same {
-			fmt.Fprintf(os.Stderr, "Error: --log-file and --output must not point to the same file (%q)\n", logFile)
-			reason = reasonConfigError
-			return exitError
-		}
+	// Reject collisions among the run's independently-written destinations
+	// (--log-file, --output, --step-summary): each is opened and written on
+	// its own, so aliasing any two would interleave or clobber their content.
+	if err := rejectPathCollisions(
+		namedPath{"--log-file", logFile},
+		namedPath{"--output", outputJSON},
+		namedPath{"--step-summary", stepSummary},
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		reason = reasonConfigError
+		return exitError
 	}
 
 	// Open the JSONL run log if requested. A failure here is a config error:

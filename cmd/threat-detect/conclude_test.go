@@ -349,3 +349,41 @@ func TestRunConcludeReadsEnv(t *testing.T) {
 		t.Fatalf("conclusion = %q, want success", outputs["conclusion"])
 	}
 }
+
+func TestRunConcludeRejectsStepSummaryCollidingWithResultFile(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, safeVerdict)
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	code := runConclude([]string{"--result-file", resultFile, "--step-summary", resultFile})
+	if code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
+	}
+	// The result file must survive untouched — a collision must be rejected
+	// before anything is written, so the structured verdict is never clobbered.
+	data, err := os.ReadFile(resultFile)
+	if err != nil {
+		t.Fatalf("ReadFile(resultFile) error = %v", err)
+	}
+	if string(data) != safeVerdict {
+		t.Fatalf("result file was modified: got %q, want %q", string(data), safeVerdict)
+	}
+}
+
+func TestRunConcludeRejectsStepSummaryCollidingWithGithubOutput(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, safeVerdict)
+	shared := filepath.Join(dir, "shared")
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GITHUB_OUTPUT", shared)
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	code := runConclude([]string{"--result-file", resultFile, "--step-summary", shared})
+	if code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
+	}
+}
