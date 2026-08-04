@@ -146,7 +146,9 @@ func Load(dir string) (*Artifacts, error) {
 
 func (arts *Artifacts) loadCommentMemory(dir string) {
 	commentMemoryDir := filepath.Join(dir, "comment-memory")
-	info, err := os.Stat(commentMemoryDir)
+	// Use Lstat so a symlink named comment-memory is not followed: a symlinked
+	// directory would let the engine read markdown outside the artifacts tree.
+	info, err := os.Lstat(commentMemoryDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			arts.Warnings = append(arts.Warnings, fmt.Sprintf(
@@ -155,7 +157,9 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 		arts.CommentMemoryFileInfo = "No comment-memory files found"
 		return
 	}
-	if !info.IsDir() {
+	// Reject anything that is not a real directory (regular files, symlinks,
+	// FIFOs, etc.).
+	if info.Mode().Type() != os.ModeDir {
 		arts.CommentMemoryFileInfo = "No comment-memory files found"
 		return
 	}
@@ -170,7 +174,9 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 
 	var infos []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		// Only accept confirmed regular files: symlinks could point outside the
+		// artifacts tree and FIFOs/other special files could hang a read.
+		if !entry.Type().IsRegular() {
 			continue
 		}
 		name := entry.Name()

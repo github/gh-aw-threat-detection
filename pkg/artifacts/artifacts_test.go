@@ -102,6 +102,56 @@ func TestLoad_FileInsteadOfDirectory(t *testing.T) {
 	}
 }
 
+func TestLoad_CommentMemorySymlinkedDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	// A real directory outside the artifacts tree that a symlink would point to.
+	outside := t.TempDir()
+	writeTestFile(t, filepath.Join(outside, "secret.md"), []byte("outside the tree"))
+
+	link := filepath.Join(dir, "comment-memory")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.CommentMemoryFiles) != 0 {
+		t.Errorf("expected symlinked dir to be rejected, got %v", arts.CommentMemoryFiles)
+	}
+	if arts.CommentMemoryFileInfo != "No comment-memory files found" {
+		t.Errorf("expected no comment-memory info, got %q", arts.CommentMemoryFileInfo)
+	}
+}
+
+func TestLoad_CommentMemorySymlinkedFileSkipped(t *testing.T) {
+	dir := t.TempDir()
+	cmDir := filepath.Join(dir, "comment-memory")
+	if err := os.MkdirAll(cmDir, 0o755); err != nil {
+		t.Fatalf("creating comment-memory dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(cmDir, "real.md"), []byte("real memory"))
+
+	// A .md symlink pointing outside the tree must be skipped.
+	outside := filepath.Join(t.TempDir(), "target.md")
+	writeTestFile(t, outside, []byte("outside"))
+	if err := os.Symlink(outside, filepath.Join(cmDir, "link.md")); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.CommentMemoryFiles) != 1 {
+		t.Fatalf("expected only the regular file, got %v", arts.CommentMemoryFiles)
+	}
+	if strings.Contains(arts.CommentMemoryFileInfo, "link.md") {
+		t.Errorf("expected symlinked file to be skipped, got %q", arts.CommentMemoryFileInfo)
+	}
+}
+
 func TestLoad_WorkflowNameFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WORKFLOW_NAME", "My Custom Workflow")

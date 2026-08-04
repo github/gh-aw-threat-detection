@@ -193,7 +193,7 @@ func run() (code int) {
 	}
 	logger.Info("artifacts_loaded", map[string]any{"artifacts_dir": artifactsDir})
 	for _, w := range arts.Warnings {
-		fmt.Fprintf(os.Stderr, "::warning::%s\n", w)
+		fmt.Fprintf(os.Stderr, "::warning::%s\n", escapeWorkflowData(w))
 		logger.Info("artifacts_warning", map[string]any{"warning": w})
 	}
 
