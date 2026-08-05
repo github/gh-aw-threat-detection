@@ -227,11 +227,15 @@ func run() (code int) {
 		"patch_files":                len(arts.PatchFiles),
 		"all_primary_inputs_missing": arts.AllPrimaryInputsMissing,
 	})
-	if err := stepsummary.WriteArtifactInventory(os.Getenv("GITHUB_STEP_SUMMARY"), arts.Inventory); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing artifact inventory summary: %v\n", err)
+	// The step summary is a best-effort diagnostic, so a failed write must not
+	// abort detection. Under AWF the inherited GITHUB_STEP_SUMMARY can name a
+	// runner path that is not mounted inside the sandbox; treating that as a
+	// configuration error would fail the whole detection job for an
+	// observability artifact. This mirrors the prompt summary (TD-20g) and the
+	// verdict summary (TD-20h), which are already best-effort.
+	if err := stepsummary.WriteArtifactInventory(stepSummary, arts.Inventory); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write artifact inventory summary: %v\n", err)
 		logger.Error("artifact_inventory_summary_failed", map[string]any{"error": err.Error()})
-		reason = reasonConfigError
-		return exitError
 	}
 
 	// Degraded inputs (missing/empty prompt or agent output, an expected but
