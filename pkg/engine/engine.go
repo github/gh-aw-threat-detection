@@ -305,10 +305,16 @@ const copilotHarnessDefaultAwfConfigPath = "/tmp/gh-aw/awf-config.json"
 // default path exists (the harness will find it there), or when no mounted
 // config can be located.
 func copilotHarnessAwfConfigEnv() []string {
+	return copilotHarnessAwfConfigEnvAt(copilotHarnessDefaultAwfConfigPath)
+}
+
+// copilotHarnessAwfConfigEnvAt implements copilotHarnessAwfConfigEnv against an
+// explicit harness default path so tests can stay hermetic.
+func copilotHarnessAwfConfigEnvAt(harnessDefaultPath string) []string {
 	if strings.TrimSpace(os.Getenv("GH_AW_AWF_CONFIG_PATH")) != "" {
 		return nil
 	}
-	if _, err := os.Stat(copilotHarnessDefaultAwfConfigPath); err == nil {
+	if _, err := os.Stat(harnessDefaultPath); err == nil {
 		return nil
 	}
 	runnerTemp := strings.TrimSpace(os.Getenv("RUNNER_TEMP"))
