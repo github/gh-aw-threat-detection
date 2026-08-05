@@ -214,6 +214,17 @@ MUST emit an `ERR_VALIDATION` warning to the job log. When structured run
 logging is enabled, it MUST also emit a warning-level
 `prompt_analysis_degraded` event identifying the unavailable artifacts.
 
+**TD-18c**: The detector MUST identify the `gh-aw` framework scaffolding
+preamble in the rendered workflow prompt — the `<system>...</system>` block that
+opens the prompt, ignoring leading whitespace, and ends at the first
+`</system>` — and MUST report it to the detection engine as trusted,
+framework-authored content that is not prompt injection. This identification
+MUST be performed independently of TD-18b, so that it remains available when
+`prompt-template.txt` or `prompt-import-tree.json` is unavailable. A `<system>`
+marker occurring anywhere after that leading block MUST NOT be treated as
+trusted scaffolding, because such markers are reachable from untrusted
+interpolated content.
+
 ### 8.2 Output Contract
 
 **TD-19**: The detector MUST output the structured JSON result (per TD-08) to stdout.

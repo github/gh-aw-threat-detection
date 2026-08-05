@@ -23,6 +23,10 @@ type PromptAnalysis struct {
 	ImportTree string
 	// UntrustedInputs maps placeholder names to their interpolated content.
 	UntrustedInputs []UntrustedInput
+	// Scaffolding describes the gh-aw framework `<system>` preamble detected in
+	// the rendered prompt. It is reported to the model as trusted content so
+	// framework directives are not mistaken for prompt injection.
+	Scaffolding *FrameworkScaffolding
 }
 
 // UntrustedInput represents a single untrusted region extracted from the rendered prompt.
@@ -58,12 +62,22 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 		}
 	}
 
-	// Extract untrusted inputs if both template and rendered prompt are available.
-	if analysis.PromptTemplate != "" && arts.PromptFilePath != "" && arts.PromptFilePath != "No prompt file found" {
-		promptData, err := os.ReadFile(arts.PromptFilePath)
+	// Load the rendered prompt once: it is used both for framework-scaffolding
+	// detection (which does not require the template) and for untrusted-input
+	// extraction (which does).
+	var rendered string
+	if arts.PromptFilePath != "" && arts.PromptFilePath != "No prompt file found" {
+		data, err := os.ReadFile(arts.PromptFilePath)
 		if err == nil {
-			analysis.UntrustedInputs = ExtractUntrustedInputs(analysis.PromptTemplate, string(promptData))
+			rendered = string(data)
 		}
+	}
+
+	analysis.Scaffolding = DetectFrameworkScaffolding(rendered)
+
+	// Extract untrusted inputs if both template and rendered prompt are available.
+	if analysis.PromptTemplate != "" && rendered != "" {
+		analysis.UntrustedInputs = ExtractUntrustedInputs(analysis.PromptTemplate, rendered)
 	}
 
 	if arts.ActivationContext != nil {
@@ -84,6 +98,10 @@ func (a *PromptAnalysis) FormatForPrompt() string {
 	}
 
 	var sections []string
+
+	if s := a.Scaffolding.FormatForPrompt(); s != "" {
+		sections = append(sections, s)
+	}
 
 	if a.PromptTemplate != "" {
 		sections = append(sections, fmt.Sprintf("### Prompt Template (pre-interpolation)\n\nThis is the raw template before any user content was inserted. Content within `{{placeholder}}` markers is where untrusted runtime content was interpolated.\n\n```\n%s\n```", a.PromptTemplate))

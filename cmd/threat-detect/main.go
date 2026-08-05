@@ -361,6 +361,7 @@ func run() (code int) {
 		"custom_prompt_applied":          arts.CustomPrompt != "",
 		"custom_prompt_source":           customPromptSource,
 		"custom_prompt_bytes":            len(arts.CustomPrompt),
+		"framework_scaffolding_detected": promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.Detected,
 	})
 
 	// Surface the prompt actually rendered by threat-detect (including the
