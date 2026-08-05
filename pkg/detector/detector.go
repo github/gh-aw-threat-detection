@@ -13,6 +13,10 @@ import (
 // Version is set at build time via ldflags.
 var Version = "dev"
 
+// promptAnalysisPlaceholder is the template token replaced by the
+// trusted-vs-untrusted prompt analysis and framework-scaffolding findings.
+const promptAnalysisPlaceholder = "{PROMPT_ANALYSIS}"
+
 //go:embed prompts/threat_detection.md
 var defaultPromptFS embed.FS
 
@@ -47,6 +51,7 @@ func BuildPromptWithAnalysis(arts *artifacts.Artifacts, promptTemplate string) (
 	// Build prompt analysis from template/rendered prompt/import tree
 	analysis := BuildPromptAnalysis(arts)
 	analysisContent := analysis.FormatForPrompt()
+	appendAnalysis := analysisContent != "" && !strings.Contains(promptTemplate, promptAnalysisPlaceholder)
 	if analysisContent == "" {
 		analysisContent = "No prompt template or import tree available. Prompt analysis was not performed."
 	}
@@ -60,7 +65,15 @@ func BuildPromptWithAnalysis(arts *artifacts.Artifacts, promptTemplate string) (
 	prompt = strings.ReplaceAll(prompt, "{AGENT_PATCH_FILE}", arts.PatchFileInfo)
 	prompt = strings.ReplaceAll(prompt, "{ACTIVATION_CONTEXT}", arts.FormatActivationContext())
 	prompt = strings.ReplaceAll(prompt, "{COMMENT_MEMORY_FILES}", arts.CommentMemoryFileInfo)
-	prompt = strings.ReplaceAll(prompt, "{PROMPT_ANALYSIS}", analysisContent)
+	prompt = strings.ReplaceAll(prompt, promptAnalysisPlaceholder, analysisContent)
+
+	// A custom template (--prompt-template) may omit the placeholder entirely.
+	// The trusted-vs-untrusted breakdown and the framework-scaffolding
+	// identification are required guidance, so append them rather than
+	// silently dropping them.
+	if appendAnalysis {
+		prompt += "\n\n## Prompt Analysis (Trusted vs Untrusted Content)\n\n" + analysisContent
+	}
 
 	// Append custom prompt instructions if provided
 	if arts.CustomPrompt != "" {

@@ -31,6 +31,7 @@ pkg/detector/             Core detection logic
   ├── detector.go         BuildPrompt and prompt template handling (//go:embed prompts/)
   ├── result.go           Result struct + JSON Schema + structured sink parser/writer
   ├── static.go           PromptAnalysis: trusted-template vs untrusted-input breakdown
+  ├── scaffolding.go      Detects the gh-aw `<system>` framework preamble (trusted, never injection)
   ├── correction.go       Self-correction retry prompt builders
 
   └── prompts/            Embedded markdown prompts (threat_detection.md)
