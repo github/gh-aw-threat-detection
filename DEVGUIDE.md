@@ -123,14 +123,16 @@ post-hoc transcript scraping:
   cancels the engine subprocess as soon as a valid result is recorded (early
   termination). A subprocess kill is treated as success when a valid sink result
   exists.
-- `analyzeWithRetries` prefers the sink result (`detector.ReadResultFile`) and
-  only falls back to `detector.ParseResult` transcript scraping when the sink is
-  absent or invalid. Helpers live in `pkg/detector/result.go`
-  (`WriteResultFile`, `ReadResultFile`, `BuildResultFromReport`,
-  `ValidateReportFields`).
-- Claude is invoked with `--allowed-tools Bash` when the sink is enabled so it
-  can execute the wrapper; engines that cannot run shell tools fall back to the
-  legacy `THREAT_DETECTION_RESULT:{...}` transcript line, which remains supported.
+- `analyzeWithRetries` reads the verdict exclusively from the sink
+  (`detector.ReadResultFile`). The engine transcript is never scraped for a
+  verdict; a run that records no valid sink result is retried and, on retry
+  exhaustion, fails closed as an infrastructure error. Helpers live in
+  `pkg/detector/result.go` (`WriteResultFile`, `ReadResultFile`,
+  `BuildResultFromReport`, `ValidateReportFields`).
+- Claude is invoked with `--allowed-tools Bash` so it can execute the wrapper.
+  An engine that cannot run the wrapper has no fallback channel: the legacy
+  `THREAT_DETECTION_RESULT:{...}` transcript line is not parsed by this repo
+  (`TestRunPrefersSinkResultOverTranscript` guards against reintroducing it).
 
 ### Safe Outputs Context
 
