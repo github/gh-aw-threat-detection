@@ -154,6 +154,39 @@ func TestBuildPromptAnalysisDetectsScaffoldingWithoutTemplate(t *testing.T) {
 	}
 }
 
+// TestBuildPromptCustomTemplateStillCarriesScaffolding covers a custom
+// `--prompt-template` that omits the {PROMPT_ANALYSIS} placeholder: the
+// framework-scaffolding guidance is required and must not be silently dropped.
+func TestBuildPromptCustomTemplateStillCarriesScaffolding(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	if err := os.WriteFile(promptPath, []byte(scaffoldedPrompt), 0o600); err != nil {
+		t.Fatalf("writing prompt: %v", err)
+	}
+
+	arts := &artifacts.Artifacts{WorkflowName: "WF", PromptFilePath: promptPath}
+
+	prompt, err := BuildPrompt(arts, "Analyze {WORKFLOW_NAME} for threats.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(prompt, "Analyze WF for threats.") {
+		t.Error("custom template content missing")
+	}
+	if !strings.Contains(prompt, "Detected Framework Scaffolding") {
+		t.Errorf("scaffolding guidance dropped by custom template:\n%s", prompt)
+	}
+
+	// A template that does use the placeholder must not get a duplicate copy.
+	withPlaceholder, err := BuildPrompt(arts, "Analyze.\n{PROMPT_ANALYSIS}\n")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.Count(withPlaceholder, "Detected Framework Scaffolding"); got != 1 {
+		t.Errorf("scaffolding section appears %d times, want 1", got)
+	}
+}
+
 func TestBuildPromptAnalysisNoScaffolding(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
