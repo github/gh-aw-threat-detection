@@ -440,6 +440,13 @@ func TestRunWarnsOnUnwritableStepSummary(t *testing.T) {
 	writeMinimalArtifacts(t, artifactsDir)
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	summaryPath := filepath.Join(t.TempDir(), "missing-dir", "summary.md")
+	// This test runs past the step-summary write into the engine invocation, so
+	// the engine must be stubbed. Without a fake copilot on PATH the run would
+	// execute whatever real `copilot` the host provides — which, on a runner
+	// with working engine credentials, starts a live agentic session and hangs
+	// until the package test timeout.
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
 
 	code, stderr := runWithTestArgsCapture(t, []string{
 		"threat-detect",
@@ -447,6 +454,7 @@ func TestRunWarnsOnUnwritableStepSummary(t *testing.T) {
 		artifactsDir,
 	}, map[string]string{
 		"GITHUB_STEP_SUMMARY": summaryPath,
+		"PATH":                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 	})
 
 	if code == exitError && strings.Contains(stderr, "reason=config_error") {
