@@ -432,8 +432,12 @@ func TestRunRejectsUnopenableLogFile(t *testing.T) {
 	}
 }
 
-func TestRunRejectsUnwritableStepSummary(t *testing.T) {
+// An unwritable step summary is a best-effort diagnostic failure (TD-20c): it
+// must warn and let detection continue, not abort as a configuration error.
+// Under AWF the inherited GITHUB_STEP_SUMMARY path is outside the sandbox.
+func TestRunWarnsOnUnwritableStepSummary(t *testing.T) {
 	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	summaryPath := filepath.Join(t.TempDir(), "missing-dir", "summary.md")
 
@@ -445,17 +449,18 @@ func TestRunRejectsUnwritableStepSummary(t *testing.T) {
 		"GITHUB_STEP_SUMMARY": summaryPath,
 	})
 
-	if code != exitError {
-		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	if code == exitError && strings.Contains(stderr, "reason=config_error") {
+		t.Fatalf("step summary failure must not be a config error, got:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "Error writing artifact inventory summary") {
-		t.Fatalf("stderr missing summary error, got:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "reason=config_error") {
-		t.Fatalf("stderr missing config_error status, got:\n%s", stderr)
+	if !strings.Contains(stderr, "Warning: failed to write artifact inventory summary") {
+		t.Fatalf("stderr missing summary warning, got:\n%s", stderr)
 	}
 	records := readJSONLRecords(t, logPath)
 	if findRecord(records, "artifact_inventory_summary_failed") == nil {
 		t.Fatalf("missing artifact_inventory_summary_failed record: %#v", records)
+	}
+	// Detection proceeded past the summary write to the engine invocation.
+	if findRecord(records, "prompt_built") == nil {
+		t.Fatalf("expected run to continue after step summary failure: %#v", records)
 	}
 }

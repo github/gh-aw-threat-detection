@@ -275,9 +275,11 @@ per TD-18c) non-mandatory failures MUST
 surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
-**TD-20c**: When `GITHUB_STEP_SUMMARY` is set, the detector MUST append the
-artifact inventory defined by TD-17b as a Markdown table. Failure to write the
-configured summary MUST be treated as a configuration error.
+**TD-20c**: When a step summary path is configured (the `--step-summary` flag,
+defaulting to the `GITHUB_STEP_SUMMARY` environment variable), the detector MUST
+append the artifact inventory defined by TD-17b as a Markdown table. A failure to
+write the step summary MUST NOT fail the run; it is a best-effort diagnostic aid
+and MUST be reported as a warning and recorded in the run log (TD-20a).
 
 **TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
 section to standard output that is sufficient, on its own, to explain the

@@ -63,7 +63,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
-- `--step-summary` — Path to append the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section) as a collapsible block in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`
+- `--step-summary` — Path to append the artifact inventory table and the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section, as a collapsible block) in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`. Best effort: a failed write warns and never fails detection
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -333,8 +333,10 @@ engine runs. Findings about other artifacts stay advisory warnings in both
 modes.
 
 Every file below the artifacts directory is recorded with its size and consumed
-status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is
-set, in the Actions step summary. Only an allowlisted, size-bounded subset of
+status in the JSONL `artifacts_loaded` event and, when a step summary path is
+configured (`--step-summary`, defaulting to `GITHUB_STEP_SUMMARY`), in the
+Actions step summary. A step summary that cannot be written is reported as a
+warning and never fails detection. Only an allowlisted, size-bounded subset of
 `aw_info.json` is added to the detection prompt, and all of its values are
 explicitly treated as untrusted runtime data.
 

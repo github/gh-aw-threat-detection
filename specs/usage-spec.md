@@ -156,7 +156,9 @@ verdict payload and MUST read it from the location it configured (stdout, or the
 writes `detection-runlog.jsonl` in the result file's directory. The host MUST NOT
 point `--log-file` and `--output` at the same path. In GitHub Actions, the host
 SHOULD provide `GITHUB_STEP_SUMMARY` so the recursive artifact inventory is
-visible in the run summary (per TD-20c).
+visible in the run summary (per TD-20c). When the detector runs sandboxed (for
+example under AWF), the host SHOULD point that path at a location writable
+inside the sandbox; an unwritable step summary is a warning, not a failure.
 
 ### 3.1 Flags
 
