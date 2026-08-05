@@ -555,3 +555,199 @@ func readResultFile(t *testing.T, path string) map[string]any {
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
+
+func TestRunWarnsOnDegradedRequiredInput(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	if err := os.Remove(filepath.Join(artifactsDir, "agent_output.json")); err != nil {
+		t.Fatalf("removing agent output: %v", err)
+	}
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d (warn mode must not fail)", code, exitSafe)
+	}
+	if _, err := os.Stat(copilotMarker); err != nil {
+		t.Fatalf("expected detection to run in warn mode: %v", err)
+	}
+	if !strings.Contains(stderr, "::warning::ERR_VALIDATION: Missing agent output file at ") {
+		t.Errorf("expected missing agent output warning, got:\n%s", stderr)
+	}
+}
+
+func TestRunFailsOnDegradedRequiredInputInStrictMode(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	if err := os.Remove(filepath.Join(artifactsDir, "agent_output.json")); err != nil {
+		t.Fatalf("removing agent output: %v", err)
+	}
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (strict mode must fail)", code, exitError)
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Fatal("expected detection not to run in strict mode")
+	}
+	if !strings.Contains(stderr, "::error::ERR_VALIDATION: Missing agent output file at ") {
+		t.Errorf("expected missing agent output error annotation, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError) {
+		t.Errorf("expected config_error status line, got:\n%s", stderr)
+	}
+}
+
+func TestRunStrictModeSucceedsWithCompleteArtifacts(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+}
+
+func TestRunFailsOnExpectedButMissingPatchInStrictMode(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+		"HAS_PATCH":                         "true",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "::error::ERR_VALIDATION: HAS_PATCH=true was set but no readable") {
+		t.Errorf("expected missing patch error annotation, got:\n%s", stderr)
+	}
+}
+
+// Advisory (non-required-input) findings must stay warnings even in strict
+// mode, so a degraded prompt-analysis artifact never blocks detection.
+func TestRunStrictModeKeepsAdvisoryFindingsNonFatal(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d (prompt-analysis degradation is advisory)\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "::warning::"+promptAnalysisValidationCode) {
+		t.Errorf("expected advisory prompt-analysis warning, got:\n%s", stderr)
+	}
+}
+
+func TestDetectionContinueOnError(t *testing.T) {
+	tests := []struct {
+		value string
+		set   bool
+		want  bool
+	}{
+		{set: false, want: true},
+		{value: "", set: true, want: true},
+		{value: "true", set: true, want: true},
+		{value: "false", set: true, want: false},
+		{value: "False", set: true, want: false},
+		{value: "FALSE", set: true, want: false},
+		{value: "no", set: true, want: true},
+	}
+	for _, tt := range tests {
+		name := "unset"
+		if tt.set {
+			name = "value=" + tt.value
+		}
+		t.Run(name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", tt.value)
+			} else {
+				t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", "true")
+				if err := os.Unsetenv("GH_AW_DETECTION_CONTINUE_ON_ERROR"); err != nil {
+					t.Fatalf("unsetting env: %v", err)
+				}
+			}
+			if got := detectionContinueOnError(); got != tt.want {
+				t.Errorf("detectionContinueOnError() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunFailsOnDegradedRequiredInputInMixedCaseStrictMode(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	if err := os.Remove(filepath.Join(artifactsDir, "agent_output.json")); err != nil {
+		t.Fatalf("removing agent output: %v", err)
+	}
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "False",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (\"False\" must select strict mode)", code, exitError)
+	}
+	if !strings.Contains(stderr, "::error::ERR_VALIDATION: Missing agent output file at ") {
+		t.Errorf("expected missing agent output error annotation, got:\n%s", stderr)
+	}
+}

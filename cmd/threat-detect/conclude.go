@@ -169,7 +169,7 @@ func runConclude(args []string) int {
 
 	c := &concluder{
 		runDetection:     os.Getenv("RUN_DETECTION"),
-		warnMode:         os.Getenv("GH_AW_DETECTION_CONTINUE_ON_ERROR") != "false",
+		warnMode:         detectionContinueOnError(),
 		executionFailed:  os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
 		executionOutcome: os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
 		githubOutput:     githubOutput,

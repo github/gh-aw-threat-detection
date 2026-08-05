@@ -622,3 +622,87 @@ func TestLoad_CommentMemoryNotADirectory(t *testing.T) {
 		t.Errorf("expected no warnings, got %v", arts.Warnings)
 	}
 }
+func TestLoad_RequiredInputWarningsAreMarked(t *testing.T) {
+	dir := t.TempDir()
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !arts.HasRequiredInputWarnings() {
+		t.Fatalf("expected required-input warnings, got %+v", arts.Warnings)
+	}
+	fields := map[string]bool{}
+	for _, w := range arts.Warnings {
+		if !w.RequiredInput {
+			t.Errorf("warning for %q should be marked as a required input: %s", w.Field, w.Message)
+		}
+		fields[w.Field] = true
+	}
+	for _, field := range []string{"prompt", "agent_output"} {
+		if !fields[field] {
+			t.Errorf("expected a %q warning, got %+v", field, arts.Warnings)
+		}
+	}
+}
+
+func TestLoad_ExpectedPatchWarningIsRequiredInput(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(arts.Warnings) != 1 || arts.Warnings[0].Field != "patch" {
+		t.Fatalf("Warnings = %+v, want a single patch warning", arts.Warnings)
+	}
+	if !arts.Warnings[0].RequiredInput || !arts.HasRequiredInputWarnings() {
+		t.Errorf("expected the patch warning to be a required input: %+v", arts.Warnings[0])
+	}
+}
+
+func TestAddWarning_MarksOnlyRequiredInputFields(t *testing.T) {
+	arts := &Artifacts{}
+	arts.addWarning("comment_memory", "ERR_VALIDATION: advisory")
+	if arts.Warnings[0].RequiredInput {
+		t.Errorf("comment_memory warning should not be a required input: %+v", arts.Warnings[0])
+	}
+	if arts.HasRequiredInputWarnings() {
+		t.Error("HasRequiredInputWarnings() = true, want false for advisory findings only")
+	}
+
+	for _, field := range []string{"prompt", "agent_output", "patch"} {
+		required := &Artifacts{}
+		required.addWarning(field, "ERR_VALIDATION: degraded")
+		if !required.Warnings[0].RequiredInput || !required.HasRequiredInputWarnings() {
+			t.Errorf("%q warning should be a required input: %+v", field, required.Warnings[0])
+		}
+	}
+}
+
+func TestLoad_CompleteArtifactsHaveNoRequiredInputWarnings(t *testing.T) {
+	dir := t.TempDir()
+	promptDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatalf("creating prompt dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(promptDir, "prompt.txt"), []byte("test prompt"))
+	writeTestFile(t, filepath.Join(dir, "agent_output.json"), []byte(`{"items":[]}`))
+	writeTestFile(t, filepath.Join(dir, "aw-feature.patch"), []byte("diff content"))
+	t.Setenv("HAS_PATCH", "true")
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if arts.HasRequiredInputWarnings() {
+		t.Errorf("expected no required-input warnings, got %+v", arts.Warnings)
+	}
+}

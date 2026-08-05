@@ -123,7 +123,8 @@ directory. The log uses [JSON Lines](https://jsonlines.org/): one JSON object pe
 line, created fresh (truncating any existing file) with `0600` permissions. Every
 record starts with `time` (RFC 3339), `level`
 (`info`/`error`), and `event`, followed by event-specific fields. Emitted
-events include `run_start`, `artifacts_loaded`, `prompt_built`,
+events include `run_start`, `artifacts_loaded`, `artifact_degraded`,
+`prompt_built`,
 `attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
 `detection_failed`, and a terminal `status` record carrying the same `reason`
 and `exit` code as the stderr status line. The verdict JSON contract
@@ -153,7 +154,7 @@ threat-detect conclude --result-file /tmp/gh-aw/threat-detection/detection_resul
 and `GH_AW_DETECTION_REASON` to `GITHUB_ENV`. It reads these environment inputs:
 
 - `RUN_DETECTION` — when not `"true"`, the verdict is `skipped`/`success`
-- `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` is warn mode
+- `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` (compared case-insensitively) is warn mode
 - `DETECTION_AGENTIC_EXECUTION_OUTCOME` — `"failure"` makes `agent_failure`/`parse_error` hard-fail
 
 A malformed (readable but unparseable) result file always reports `parse_error`,
@@ -322,6 +323,15 @@ may omit the template or import tree, but the detector emits an
 `ERR_VALIDATION` warning because trusted-vs-untrusted prompt analysis is then
 degraded. Empty or unreadable analysis files produce the same warning.
 
+`aw-prompts/prompt.txt` and `agent_output.json` are the required detection
+inputs, as is at least one `aw-*.patch` / `aw-*.bundle` when the host sets
+`HAS_PATCH=true`. When one of them is missing, empty, or unusable the detector
+follows the host's continue-on-error policy: by default it warns and analyzes
+whatever was staged, and with `GH_AW_DETECTION_CONTINUE_ON_ERROR=false` it
+reports each finding as an error and exits `2` (`config_error`) before the
+engine runs. Findings about other artifacts stay advisory warnings in both
+modes.
+
 Every file below the artifacts directory is recorded with its size and consumed
 status in the JSONL `artifacts_loaded` event and, when `GITHUB_STEP_SUMMARY` is
 set, in the Actions step summary. Only an allowlisted, size-bounded subset of
@@ -403,6 +413,8 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_NAME` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-name`. |
 | `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-description`. |
 | `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. Overridable with `--custom-prompt` / `--custom-prompt-file`. |
+| `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Optional, host-integrated runs | Anything other than `"false"` is warn mode; the value is compared case-insensitively, so `"False"` also selects strict mode. Strict mode makes a degraded required input a `config_error` (exit `2`), and is also honored by `conclude`. |
+| `HAS_PATCH` | Optional, host-integrated runs | `"true"` declares that the agent job produced a patch, so a missing `aw-*.patch` / `aw-*.bundle` is reported as a degraded required input. |
 
 ## Development
 

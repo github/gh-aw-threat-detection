@@ -33,3 +33,9 @@ Thumbs.db
 
 # Temporary files
 /tmp/
+
+# Generated scan and SBOM reports (see `make clean`)
+gosec-report.json
+licenses.csv
+sbom.spdx.json
+sbom.cdx.json

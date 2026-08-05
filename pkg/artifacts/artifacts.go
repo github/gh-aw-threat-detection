@@ -48,6 +48,32 @@ type ArtifactWarning struct {
 	// Field identifies which artifact the warning concerns (e.g. "prompt",
 	// "agent_output", "patch"), for structured logging.
 	Field string
+	// RequiredInput is true when the warning concerns an artifact the host was
+	// expected to stage (the prompt, the agent output, or a patch declared by
+	// HAS_PATCH). A host running in strict mode
+	// (GH_AW_DETECTION_CONTINUE_ON_ERROR="false") treats these as a setup
+	// failure rather than a warning; other findings stay advisory in both modes.
+	RequiredInput bool
+}
+
+// requiredInputFields are the ArtifactWarning fields that describe an artifact
+// the host was expected to stage. They mirror the inputs gh-aw's detection
+// setup validates before invoking the detector.
+var requiredInputFields = map[string]bool{
+	"prompt":       true,
+	"agent_output": true,
+	"patch":        true,
+}
+
+// HasRequiredInputWarnings reports whether any recorded warning concerns an
+// artifact the host was expected to stage.
+func (a *Artifacts) HasRequiredInputWarnings() bool {
+	for _, w := range a.Warnings {
+		if w.RequiredInput {
+			return true
+		}
+	}
+	return false
 }
 
 // InventoryEntry describes a file discovered below the artifacts directory.
@@ -565,7 +591,11 @@ func fileSize(path string) (int64, error) {
 
 // addWarning records an ERR_VALIDATION finding on the Artifacts value.
 func (a *Artifacts) addWarning(field, message string) {
-	a.Warnings = append(a.Warnings, ArtifactWarning{Field: field, Message: message})
+	a.Warnings = append(a.Warnings, ArtifactWarning{
+		Field:         field,
+		Message:       message,
+		RequiredInput: requiredInputFields[field],
+	})
 }
 
 func envOrDefault(key, defaultVal string) string {

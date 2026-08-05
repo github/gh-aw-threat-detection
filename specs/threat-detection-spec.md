@@ -181,6 +181,24 @@ inventory-only inputs; their contents MUST NOT be added to the detection prompt.
 
 **TD-18**: The detector MUST NOT require all artifact files to be present. Missing optional files MUST be handled gracefully.
 
+**TD-18c**: The detector MUST record an `ERR_VALIDATION` finding for each
+degraded required input — a missing or empty `aw-prompts/prompt.txt`, a missing,
+empty, or unparseable `agent_output.json`, and, when the host declares
+`HAS_PATCH=true`, the absence of any readable non-empty `aw-*.patch` or
+`aw-*.bundle` file — and MUST follow the host's continue-on-error policy for
+them. In warn mode — the default, selected whenever
+`GH_AW_DETECTION_CONTINUE_ON_ERROR` is unset or is not case-insensitively equal
+to `"false"` — the detector MUST emit each finding as a warning and continue
+detection with the inputs that were staged. In strict mode
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR` case-insensitively equal to `"false"`) it
+MUST emit each finding as an error and terminate as a configuration error
+(`config_error`, exit `2`) before invoking the engine. Findings about other
+artifacts (for example an unreadable `comment-memory` directory, per TD-18a)
+remain advisory warnings in both modes. When structured run logging is enabled,
+each finding MUST be recorded with the artifact it concerns and whether it is a
+required input. The detector MUST apply this same mode selection everywhere it
+consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
+
 **TD-18a**: The detector MUST discover comment-memory markdown files
 (`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
 as untrusted, attacker-influenced input to be analyzed for prompt injection and
@@ -237,7 +255,8 @@ or contains no status line:
 
 A malformed (readable but unparseable) result file MUST unconditionally report
 `parse_error`; detected threats MUST report `threat_detected`. In warn mode
-(`GH_AW_DETECTION_CONTINUE_ON_ERROR != "false"`) non-mandatory failures MUST
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR` not case-insensitively equal to `"false"`,
+per TD-18c) non-mandatory failures MUST
 surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
