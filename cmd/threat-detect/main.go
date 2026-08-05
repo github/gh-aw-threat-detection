@@ -362,6 +362,7 @@ func run() (code int) {
 		"custom_prompt_source":           customPromptSource,
 		"custom_prompt_bytes":            len(arts.CustomPrompt),
 		"framework_scaffolding_detected": promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.Detected,
+		"framework_scaffolding_markers":  scaffoldingMarkers(promptAnalysis),
 	})
 
 	// Surface the prompt actually rendered by threat-detect (including the
@@ -422,6 +423,15 @@ func run() (code int) {
 	code, resultReason = writeResult(result, outputJSON)
 	reason = resultReason
 	return code
+}
+
+// scaffoldingMarkers returns the framework markers found in the detected
+// `<system>` preamble, for run-log observability.
+func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
+	if analysis == nil || analysis.Scaffolding == nil {
+		return nil
+	}
+	return analysis.Scaffolding.Markers
 }
 
 func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis, logger *runlog.Logger) {

@@ -223,7 +223,9 @@ MUST be performed independently of TD-18b, so that it remains available when
 `prompt-template.txt` or `prompt-import-tree.json` is unavailable. A `<system>`
 marker occurring anywhere after that leading block MUST NOT be treated as
 trusted scaffolding, because such markers are reachable from untrusted
-interpolated content.
+interpolated content. The detector MUST NOT grant trusted status to a block
+larger than an implementation-defined bound, and MUST convey that runtime values
+interpolated inside the preamble remain untrusted input.
 
 ### 8.2 Output Contract
 
