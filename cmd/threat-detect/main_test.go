@@ -426,6 +426,12 @@ func runWithTestArgsCapture(t *testing.T, args []string, env map[string]string) 
 	for key, value := range env {
 		t.Setenv(key, value)
 	}
+	if _, ok := env["PATH"]; !ok {
+		// Keep the package hermetic: a test that reaches the engine without
+		// explicitly stubbing one must not fall through to a real engine CLI on
+		// the host PATH, which can block on network/auth until the test timeout.
+		t.Setenv("PATH", t.TempDir())
+	}
 
 	r, w, err := os.Pipe()
 	if err != nil {
