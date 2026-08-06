@@ -55,7 +55,7 @@ threat-detect [flags] <artifacts-dir>
 
 **Flags:**
 - `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
-- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`). The value is forwarded to the engine CLI verbatim and may be a model alias (`gh-aw` defaults the detection model to the `detection` alias when none is configured); aliases are resolved by the AWF API proxy, not by the detector
+- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`). The value is forwarded to the engine CLI verbatim and may be a model alias (`gh-aw` defaults the detection model to the `detection` alias when none is configured); aliases are resolved by the AWF API proxy, not by the detector. Alias resolution is not guaranteed to land on a priced model — if the proxy steers to a model with no AI-credits pricing it rejects the request and the engine fails, so hosts that need a deterministic detection pass should configure a concrete model (see [AW Smoke Workflows](#aw-smoke-workflows))
 - `--prompt-template` — Path to custom prompt template
 - `--workflow-name` — Workflow name for the prompt. Overrides `WORKFLOW_NAME`
 - `--workflow-description` — Workflow description for the prompt. Overrides `WORKFLOW_DESCRIPTION`
@@ -433,6 +433,27 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-codex-standalone.md`
 
 Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
+
+**Codex detection model pin.** The Codex smokes pin the detection model explicitly:
+
+```yaml
+safe-outputs:
+  threat-detection:
+    engine:
+      runtime:
+        id: codex
+      provider:
+        model: gpt-5.4-mini
+```
+
+Without this, `gh-aw` passes its default `detection` model alias to `codex exec`. The
+alias is resolved by the AWF API proxy's token steering, which can land on an
+unpriced preview model; the proxy then rejects the request with
+`unknown_model_ai_credits` and every Codex attempt exits non-zero, failing the
+detection job with `reason=engine_error exit=2`. Copilot and Claude do not hit
+this because `gh-aw` does not set `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE}` for
+them. Pinning a concrete, priced OpenAI model keeps the pass cheap and
+deterministic.
 
 ### Detection-only Workflow
 
