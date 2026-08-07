@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 )
 
 func TestRunInvokesAgenticEngine(t *testing.T) {
@@ -685,5 +688,142 @@ func TestRunFailsOnDegradedRequiredInputInMixedCaseStrictMode(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "::error::ERR_VALIDATION: Missing agent output file at ") {
 		t.Errorf("expected missing agent output error annotation, got:\n%s", stderr)
+	}
+}
+
+// TestRunWarnsWhenPromptAnalysisArtifactsAreMissing verifies the TD-18b
+// degraded-analysis finding reaches the job log. Now that stderr is the sole
+// diagnostic sink, this is the only place the warning is observable.
+func TestRunWarnsWhenPromptAnalysisArtifactsAreMissing(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitSafe, stderr)
+	}
+	for _, want := range []string{
+		"::warning::ERR_VALIDATION:",
+		"aw-prompts/prompt-template.txt",
+		"aw-prompts/prompt-import-tree.json",
+		"Trusted-vs-untrusted prompt analysis is degraded",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// TestReportArtifactsBoundsAndEscapesInventory verifies the TD-20a guarantees
+// for the stderr inventory: the listing is bounded with a labelled omission
+// count, and a filename carrying control characters cannot open a line of its
+// own (which the Actions runner would read as a workflow command).
+func TestReportArtifactsBoundsAndEscapesInventory(t *testing.T) {
+	t.Run("bounds the listing and labels the omission", func(t *testing.T) {
+		arts := &artifacts.Artifacts{}
+		for i := 0; i < maxInventoryEntries+25; i++ {
+			arts.Inventory = append(arts.Inventory, artifacts.InventoryEntry{
+				Path: fmt.Sprintf("file-%03d.txt", i),
+				Kind: "file",
+			})
+		}
+
+		stderr := captureStderr(t, func() { reportArtifacts("/artifacts", arts) })
+
+		if !strings.Contains(stderr, fmt.Sprintf("artifact inventory (%d entries):", maxInventoryEntries+25)) {
+			t.Errorf("stderr should report the true total, got:\n%s", stderr)
+		}
+		if strings.Contains(stderr, "file-200.txt") {
+			t.Errorf("stderr should not list entries beyond the bound:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "... 25 more entry(ies) omitted") {
+			t.Errorf("stderr should label the omission, got:\n%s", stderr)
+		}
+		// One header, one bound line, maxInventoryEntries listed, one omission line.
+		if got, want := strings.Count(stderr, "\n"), maxInventoryEntries+3; got != want {
+			t.Errorf("stderr line count = %d, want %d:\n%s", got, want, stderr)
+		}
+	})
+
+	t.Run("escapes control characters in paths", func(t *testing.T) {
+		arts := &artifacts.Artifacts{Inventory: []artifacts.InventoryEntry{
+			{Path: "evil.txt\n::error::forged", Kind: "file\nbogus", Size: 1},
+		}}
+
+		stderr := captureStderr(t, func() { reportArtifacts("/artifacts\n::error::dir", arts) })
+
+		if strings.Contains(stderr, "\n::error::") {
+			t.Errorf("a path must not be able to open a workflow-command line:\n%q", stderr)
+		}
+		if !strings.Contains(stderr, `\n::error::forged`) {
+			t.Errorf("the newline should be escaped in place, got:\n%q", stderr)
+		}
+		// Header, bound line, and the single entry.
+		if got, want := strings.Count(stderr, "\n"), 3; got != want {
+			t.Errorf("stderr line count = %d, want %d:\n%q", got, want, stderr)
+		}
+	})
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns what was
+// written to it.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating stderr pipe: %v", err)
+	}
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = original })
+
+	done := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- string(data)
+	}()
+
+	fn()
+	w.Close()
+	os.Stderr = original
+	out := <-done
+	r.Close()
+	return out
+}
+
+// TestRunStartLineEscapesEngineID verifies the run-configuration diagnostic
+// cannot be split by a hostile --engine value. The ID is echoed before
+// engine.New validates it, and Canonical only lowercases, so an arbitrary
+// string reaches this line.
+func TestRunStartLineEscapesEngineID(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+
+	_, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-engine", "copilot\n::error::forged",
+		artifactsDir,
+	}, nil)
+
+	if strings.Contains(stderr, "\n::error::forged") {
+		t.Errorf("engine ID must not open a workflow-command line:\n%q", stderr)
+	}
+	if !strings.Contains(stderr, `[threat-detect] run start: version=`) {
+		t.Fatalf("stderr missing the run start line:\n%s", stderr)
+	}
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(line, "[threat-detect] run start:") && !strings.Contains(line, `\n::error::forged`) {
+			t.Errorf("engine ID should be escaped in place on the run start line: %q", line)
+		}
 	}
 }

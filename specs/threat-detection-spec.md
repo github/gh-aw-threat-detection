@@ -209,9 +209,8 @@ detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
 **TD-18b**: If `aw-prompts/prompt-template.txt` or
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
 detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
-MUST emit an `ERR_VALIDATION` warning to the job log. When structured run
-logging is enabled, it MUST also emit a warning-level
-`prompt_analysis_degraded` event identifying the unavailable artifacts.
+MUST emit an `ERR_VALIDATION` warning to the job log identifying the
+unavailable artifacts.
 
 **TD-18d**: The detector MUST identify the `gh-aw` framework scaffolding
 preamble in the rendered workflow prompt — the `<system>...</system>` block that
@@ -245,11 +244,17 @@ configuration (detector version, engine, model, retry budget); the artifact
 inventory defined by TD-17b; the prompt metadata of TD-20c; each degraded-input finding of TD-18c with the
 artifact it concerns and whether it is a required input; each detection
 attempt and whether it recorded a verdict; the engine subprocess invocation; and
-the terminal `THREAT_DETECTION_STATUS:` line (TD-21a). Untrusted values echoed
-into these diagnostics — model-authored text, artifact paths, and configuration
-values — MUST be escaped so that each is confined to a single physical output
-line and cannot emit a host workflow command, and listings MUST be bounded so a
-pathological input cannot flood the job log.
+the terminal `THREAT_DETECTION_STATUS:` line (TD-21a).
+
+Untrusted values echoed into a detector-authored diagnostic — model-authored
+text, artifact paths, and configuration values such as the engine ID, model, and
+process name — MUST be escaped so that each is confined to a single physical
+output line and cannot emit a host workflow command, and listings MUST be
+bounded so a pathological input cannot flood the job log. This requirement
+governs the diagnostics the detector composes. It does not extend to the engine
+subprocess's own standard output and standard error, which the detector forwards
+verbatim so harness lifecycle output and engine errors reach the job log in real
+time; hosts MUST NOT treat forwarded engine output as detector-attested text.
 
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
@@ -364,8 +369,8 @@ provided (not merely because it equals the fallback text). The detector MUST
 record the resolved workflow
 name and description, whether each fell back to its built-in default, and the
 source and byte length of any applied custom prompt (`flag`, `file`, `env`, or
-`none`) on the `prompt_built` run-log event and on a single stderr diagnostic
-line, so a dropped custom prompt or missing workflow context is diagnosable.
+`none`) on a single stderr diagnostic line, so a dropped custom prompt or
+missing workflow context is diagnosable.
 
 **TD-22a**: When the model is not set explicitly (via the `--model` flag or engine configuration), the detector MUST resolve the model for the selected engine from environment variables, in the following precedence:
 

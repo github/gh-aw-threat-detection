@@ -155,13 +155,17 @@ func run() (code int) {
 	model = engine.ResolveModel(engineID, model)
 
 	// Announce the resolved run configuration on stderr so the job log records
-	// which detector build, engine, and model produced the verdict.
+	// which detector build, engine, and model produced the verdict. The engine ID
+	// is echoed before engine.New validates it, and Canonical only lowercases, so
+	// an arbitrary --engine value reaches this line; it is sanitized alongside the
+	// model and version so none can split the line or forge a workflow command.
 	modelDesc := model
 	if modelDesc == "" {
 		modelDesc = "(none; using engine default)"
 	}
 	fmt.Fprintf(os.Stderr, "[threat-detect] run start: version=%s engine=%s model=%s retries=%d\n",
-		detector.Version, engine.Canonical(engineID), sanitizeLogValue(modelDesc), retries)
+		sanitizeLogValue(detector.Version), sanitizeLogValue(engine.Canonical(engineID)),
+		sanitizeLogValue(modelDesc), retries)
 
 	// Determine artifacts directory from positional args
 	args := flag.Args()

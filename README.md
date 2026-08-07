@@ -124,16 +124,22 @@ prompt metadata (byte count, resolved workflow name/description, custom-prompt
 provenance, framework-scaffolding detection), each detection attempt and whether
 it recorded a verdict, the engine subprocess invocation and argv, any
 `::warning::`/`::error::` annotations for degraded inputs, and the terminal status
-line. The rendered prompt itself is never echoed. Untrusted values are escaped to
-a single physical line and listings are bounded, so neither a model-authored
-string nor a hostile filename can forge a workflow command or flood the job log.
+line. The rendered prompt itself is never echoed.
+
+Untrusted values interpolated into these detector-authored lines are escaped to a
+single physical line and listings are bounded, so neither a model-authored string
+nor a hostile filename can forge a workflow command or flood the job log. The
+engine subprocess's own stdout/stderr are a separate stream: they are forwarded
+verbatim (so harness output and engine errors appear in real time) and are not
+detector-attested.
 
 ```text
 [threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
 [threat-detect] artifacts loaded: dir=/tmp/gh-aw/threat-detection prompt_bytes=4096 agent_output_bytes=812 patch_files=1 all_primary_inputs_missing=false
 [threat-detect] artifact inventory (3 entries):
-[threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=prompt consumed=true
-[threat-detect] prompt built: prompt_bytes=9241 framework_scaffolding_detected=true framework_scaffolding_markers=<system>
+[threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true
+[threat-detect]   comment-memory/notes.md bytes=128 kind=file consumed=false
+[threat-detect] prompt built: prompt_bytes=9241 framework_scaffolding_detected=true framework_scaffolding_markers=<github-context>, <safe-output-tools>
 [threat-detect] detection attempt 1 of 2
 [threat-detect] attempt 1 recorded a verdict via the threat_detection_result tool
 THREAT_DETECTION_STATUS: reason=result_recorded exit=0

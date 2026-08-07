@@ -87,3 +87,19 @@ func TestLogEngineInvoke_EscapesArgv(t *testing.T) {
 		t.Errorf("stderr %q should quote and escape argv elements", stderr)
 	}
 }
+
+func TestLogEngineInvoke_QuotesCommand(t *testing.T) {
+	// The process name can come from GH_AW_NODE_BIN, so a newline in that
+	// configuration must not split the diagnostic or forge a workflow command.
+	stderr := captureEngineInvoke(t, "claude", "definitely-not-real\n::error::forged", nil, "")
+
+	if strings.Contains(stderr, "\n::error::forged") {
+		t.Errorf("command must not open a workflow-command line:\n%q", stderr)
+	}
+	if !strings.Contains(stderr, `command="definitely-not-real\n::error::forged (binary not found in PATH)"`) {
+		t.Errorf("command should be quoted with escapes in place, got:\n%q", stderr)
+	}
+	if strings.Count(stderr, "\n") != 2 {
+		t.Errorf("stderr should be exactly two physical lines, got %q", stderr)
+	}
+}

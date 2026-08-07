@@ -475,6 +475,13 @@ jobs:
           output_root = pathlib.Path(__import__('os').environ['REPLAY_OUTPUT'])
           output = output_root / 'original-result.json'
           candidates = list(root.rglob('detection.log')) + list(root.rglob('*.log'))
+
+          # Retain the source run's captured detection log alongside the replay's
+          # own log (per usage-spec U-27), so the two can be compared without
+          # re-downloading the original run's artifacts.
+          if candidates:
+              (output_root / 'original-detection.log').write_bytes(candidates[0].read_bytes())
+
           # Diagnostic-only: parses the *original* gh-aw run's log, which may
           # carry the legacy marker wrapped in Markdown emphasis (**/__/*/_).
           marker = re.compile(r'THREAT_DETECTION_RESULT:\s*(\{.*\})')
@@ -585,6 +592,7 @@ jobs:
             ${{ runner.temp }}/gh-aw-replay/output/result.json
             ${{ runner.temp }}/gh-aw-replay/output/comparison.json
             ${{ runner.temp }}/gh-aw-replay/output/original-result.json
+            ${{ runner.temp }}/gh-aw-replay/output/original-detection.log
             ${{ runner.temp }}/gh-aw-replay/output/replay.log
             ${{ runner.temp }}/gh-aw-replay/output/awf-replay-config.json
           if-no-files-found: ignore

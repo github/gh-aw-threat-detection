@@ -541,13 +541,18 @@ func logEngineInvoke(engineID, name string, args []string, model string) {
 	}
 
 	// Note when the actual process differs from the engine (harness wrapper),
-	// so "node" in the command does not obscure which engine is running.
+	// so "node" in the command does not obscure which engine is running. The
+	// process name can come from GH_AW_NODE_BIN (and its resolved path from
+	// PATH lookup), so the composed description is quoted with %q for the same
+	// reason as the model: a newline or control sequence in that configuration
+	// would otherwise split the line or forge a workflow command.
 	command := name
 	if resolvedPath != "" {
 		command = fmt.Sprintf("%s (%s)", name, resolvedPath)
 	} else {
 		command = fmt.Sprintf("%s (binary not found in PATH)", name)
 	}
+	command = fmt.Sprintf("%q", command)
 
 	// Describe the model on stderr so the job log makes clear which model each
 	// engine was asked for. An empty model means no override was passed and the
