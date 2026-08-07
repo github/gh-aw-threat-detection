@@ -2,11 +2,11 @@ package engine
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // Preflight check statuses. They are deliberately coarse so a reader can scan
@@ -165,6 +165,17 @@ func Preflight(engineID, model string) []PreflightCheck {
 		checks = append(checks, dirCheck(name))
 	}
 
+	// Sanitize centrally rather than in each producer. Almost every detail is
+	// environment-derived one way or another — the model comes from a model env
+	// var, the harness path from RUNNER_TEMP, binary paths from PATH — so
+	// relying on each producer to remember is how a control character
+	// eventually reaches a renderer and forges a log line. Doing it once here,
+	// at the only exit from this package's collection, makes that impossible by
+	// construction.
+	for i := range checks {
+		checks[i].Name = sanitizeDetail(checks[i].Name)
+		checks[i].Detail = sanitizeDetail(checks[i].Detail)
+	}
 	return checks
 }
 
@@ -190,17 +201,19 @@ func lookPathCheck(name, command string) PreflightCheck {
 // envCheck reports whether an environment variable is set. A secret variable
 // reports only its length: enough to distinguish "set but empty" and an
 // obviously truncated value from a plausible credential, without disclosing it.
-// A value consisting only of whitespace is reported as unset because every
-// consumer trims it.
+// The length is counted in runes, not bytes, so the reported figure matches
+// what an operator comparing against the credential they configured would
+// count. A value consisting only of whitespace is reported as unset because
+// every consumer trims it.
 func envCheck(v engineEnvVar) PreflightCheck {
 	value := os.Getenv(v.name)
 	if strings.TrimSpace(value) == "" {
 		return PreflightCheck{Name: v.name, Status: PreflightUnset}
 	}
 	if v.secret {
-		return PreflightCheck{Name: v.name, Status: PreflightSet, Detail: fmt.Sprintf("%d characters", len(value))}
+		return PreflightCheck{Name: v.name, Status: PreflightSet, Detail: fmt.Sprintf("%d characters", utf8.RuneCountInString(value))}
 	}
-	return PreflightCheck{Name: v.name, Status: PreflightSet, Detail: sanitizeDetail(value)}
+	return PreflightCheck{Name: v.name, Status: PreflightSet, Detail: value}
 }
 
 // proxyCheck reports a proxy variable with any embedded credentials removed.
@@ -209,7 +222,7 @@ func proxyCheck(name string) PreflightCheck {
 	if value == "" {
 		return PreflightCheck{Name: name, Status: PreflightUnset}
 	}
-	return PreflightCheck{Name: name, Status: PreflightSet, Detail: sanitizeDetail(redactURLCredentials(value))}
+	return PreflightCheck{Name: name, Status: PreflightSet, Detail: redactURLCredentials(value)}
 }
 
 // dirCheck reports a directory-valued environment variable and whether the
@@ -220,26 +233,48 @@ func dirCheck(name string) PreflightCheck {
 	if value == "" {
 		return PreflightCheck{Name: name, Status: PreflightUnset}
 	}
-	detail := sanitizeDetail(value)
 	if info, err := os.Stat(value); err != nil || !info.IsDir() {
-		return PreflightCheck{Name: name, Status: PreflightMissing, Detail: detail + " (not a readable directory)"}
+		return PreflightCheck{Name: name, Status: PreflightMissing, Detail: value + " (not a readable directory)"}
 	}
-	return PreflightCheck{Name: name, Status: PreflightSet, Detail: detail}
+	return PreflightCheck{Name: name, Status: PreflightSet, Detail: value}
 }
 
-// redactURLCredentials replaces the userinfo component of a URL with the
-// literal "redacted" so a proxy configured as https://user:password@proxy:3128
-// can be reported without leaking the password. A placeholder word is used
-// rather than a mask like "***" because URL encoding would escape the
-// punctuation and render the detail unreadable. Values that do not parse as a
-// URL are returned as-is; they carry no userinfo to redact.
+// redactURLCredentials removes the userinfo component from a proxy URL so a
+// value like https://user:password@proxy:3128 can be reported without leaking
+// the password. A readable placeholder is substituted rather than a mask like
+// "***", which URL encoding would escape into unintelligible text.
+//
+// The redaction is textual rather than delegated to url.Parse, because
+// url.Parse does not recognize userinfo in the scheme-less forms operators
+// routinely use: it reads "alice:hunter2@proxy:3128" as scheme "alice" with an
+// opaque body, leaving User nil and the password intact, and rejects
+// "alice@proxy:3128" outright. Scanning the authority ourselves covers every
+// shape, and a value that merely resembles one loses nothing but an "@".
 func redactURLCredentials(value string) string {
-	u, err := url.Parse(value)
-	if err != nil || u.User == nil {
+	// Locate the authority: after "scheme://", after a leading "//", or at the
+	// start for a bare "user:pass@host:port".
+	authStart := 0
+	if i := strings.Index(value, "://"); i >= 0 {
+		authStart = i + len("://")
+	} else if strings.HasPrefix(value, "//") {
+		authStart = 2
+	}
+
+	// The authority ends at the first path, query, or fragment delimiter; an
+	// "@" past that point belongs to the path and is not a credential.
+	authEnd := len(value)
+	if i := strings.IndexAny(value[authStart:], "/?#"); i >= 0 {
+		authEnd = authStart + i
+	}
+
+	// A host cannot contain "@", so the last one in the authority separates the
+	// userinfo — and using the last one keeps an "@" inside the credential
+	// itself from truncating the redaction.
+	at := strings.LastIndex(value[authStart:authEnd], "@")
+	if at < 0 {
 		return value
 	}
-	u.User = url.User("redacted")
-	return u.String()
+	return value[:authStart] + "redacted" + value[authStart+at:]
 }
 
 // sanitizeDetail confines an environment-derived value to a single physical log

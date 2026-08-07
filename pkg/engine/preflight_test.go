@@ -219,16 +219,105 @@ func TestFormatPreflightLines(t *testing.T) {
 }
 
 func TestRedactURLCredentials(t *testing.T) {
-	cases := []struct{ in, want string }{
-		// The placeholder must stay readable: URL-encoding a mask like "***"
-		// would render the detail unintelligible.
-		{"https://alice:hunter2@proxy:3128", "https://redacted@proxy:3128"},
-		{"http://proxy.internal:3128", "http://proxy.internal:3128"},
-		{"not a url at all", "not a url at all"},
+	cases := []struct{ name, in, want string }{
+		{"scheme with userinfo", "https://alice:hunter2@proxy:3128", "https://redacted@proxy:3128"},
+		// url.Parse reads this as scheme "alice" with an opaque body and no
+		// User, so a parser-based redaction would leak the password verbatim.
+		{"scheme-less userinfo", "alice:hunter2@proxy:3128", "redacted@proxy:3128"},
+		// url.Parse rejects this outright ("first path segment cannot contain
+		// colon"), which a parser-based redaction would pass through unchanged.
+		{"scheme-less single token", "token123@proxy:3128", "redacted@proxy:3128"},
+		{"protocol-relative", "//alice:hunter2@proxy:3128", "//redacted@proxy:3128"},
+		{"at inside credential", "https://alice:pa@ss@proxy:3128", "https://redacted@proxy:3128"},
+		{"with path", "http://alice:hunter2@proxy:3128/pac.txt", "http://redacted@proxy:3128/pac.txt"},
+		// An "@" after the authority belongs to the path, not to a credential.
+		{"at only in path", "http://proxy:3128/a@b", "http://proxy:3128/a@b"},
+		{"no credentials", "http://proxy.internal:3128", "http://proxy.internal:3128"},
+		{"not a url", "not a url at all", "not a url at all"},
 	}
 	for _, tc := range cases {
-		if got := redactURLCredentials(tc.in); got != tc.want {
-			t.Errorf("redactURLCredentials(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactURLCredentials(tc.in)
+			if got != tc.want {
+				t.Errorf("redactURLCredentials(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.Contains(got, "hunter2") || strings.Contains(got, "token123") {
+				t.Errorf("redactURLCredentials(%q) leaked a credential: %q", tc.in, got)
+			}
+		})
+	}
+}
+
+func TestPreflight_RedactsSchemeLessProxyCredentials(t *testing.T) {
+	t.Setenv("RUNNER_TEMP", t.TempDir())
+	t.Setenv("HTTP_PROXY", "alice:hunter2@proxy.internal:3128")
+
+	checks := Preflight("copilot", "")
+	got := findCheck(t, checks, "HTTP_PROXY")
+	if strings.Contains(got.Detail, "hunter2") {
+		t.Fatalf("scheme-less proxy password leaked: %q", got.Detail)
+	}
+	rendered := strings.Join(FormatPreflightLines(checks), "\n")
+	if strings.Contains(rendered, "hunter2") {
+		t.Fatalf("rendered preflight leaked the proxy password:\n%s", rendered)
+	}
+}
+
+func TestPreflight_SecretLengthCountsRunes(t *testing.T) {
+	t.Setenv("RUNNER_TEMP", t.TempDir())
+	// Five runes, but nine UTF-8 bytes. The diagnostic promises characters, so
+	// an operator comparing against the credential they configured must see 5.
+	t.Setenv("ANTHROPIC_API_KEY", "kéy😀z")
+
+	got := findCheck(t, Preflight("claude", ""), "ANTHROPIC_API_KEY")
+	if want := "5 characters"; got.Detail != want {
+		t.Errorf("detail = %q, want %q", got.Detail, want)
+	}
+}
+
+// Every detail is environment-derived one way or another, so sanitization must
+// happen for all of them rather than only the values whose producer remembered.
+func TestPreflight_SanitizesEveryEnvironmentDerivedDetail(t *testing.T) {
+	runnerTemp := t.TempDir()
+	forged := "x\n::error::forged"
+
+	cases := []struct {
+		name  string
+		env   map[string]string
+		check string
+	}{
+		// The model reaches preflight from the resolved value, which can come
+		// from COPILOT_MODEL / ANTHROPIC_MODEL / GH_AW_MODEL_DETECTION_*.
+		{"model", nil, "model"},
+		// The harness search message embeds RUNNER_TEMP.
+		{"harness", map[string]string{"RUNNER_TEMP": filepath.Join(runnerTemp, forged)}, "harness"},
+		// Binary paths are resolved against PATH.
+		{"engine_binary", map[string]string{"PATH": filepath.Join(runnerTemp, forged)}, "engine_binary"},
+		{"dir", map[string]string{"GITHUB_WORKSPACE": forged}, "GITHUB_WORKSPACE"},
+		{"proxy", map[string]string{"NO_PROXY": forged}, "NO_PROXY"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RUNNER_TEMP", runnerTemp)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			model := ""
+			if tc.check == "model" {
+				model = forged
+			}
+
+			checks := Preflight("copilot", model)
+			got := findCheck(t, checks, tc.check)
+			if strings.Contains(got.Detail, "\n") {
+				t.Errorf("%s detail contains a raw newline: %q", tc.check, got.Detail)
+			}
+			for _, line := range FormatPreflightLines(checks) {
+				if strings.Contains(line, "\n") {
+					t.Errorf("preflight line is not a single physical line: %q", line)
+				}
+			}
+		})
 	}
 }
