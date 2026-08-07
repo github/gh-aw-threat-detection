@@ -64,18 +64,22 @@ and runs it under AWF, replacing the script-generated container sibling.
 
 ## Turn Budget
 
-You have a strict turn budget. Run each shell command **once**. If a command
-times out or fails, record ❌ for that check and move on to the next one — never
-poll in a loop, re-run it in the background, or wait on it with `sleep`.
+You have a strict turn budget. Run each shell command **once** and do not poll
+it in a loop or re-run it in the background.
+
+A long-running command (such as `make test`) may exceed the shell tool's own
+timeout. In that case you may back it with a single background run and wait for
+it **once**, for at most 5 minutes total. If it has not finished by then, record
+❌ for that check and move on to the next requirement — do not keep waiting.
 
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
-2. Use bash to run `make build` in `${{ github.workspace }}` and verify it succeeds.
+2. Use bash to run `make test` in `${{ github.workspace }}` and verify it succeeds.
 3. Use bash to create a minimal artifacts directory under `/tmp/gh-aw/smoke-claude-standalone-${{ github.run_id }}` with:
    - `aw-prompts/prompt.txt`
    - `agent_output.json`
-4. Use bash to run `./bin/threat-detect --version` and verify it prints a version.
+4. Use bash to run `./bin/threat-detect --version`; if the binary does not exist, run `make build` first.
 5. Use bash to write a concise status file at `/tmp/gh-aw/agent/smoke-claude-standalone-${{ github.run_id }}.txt`.
 
 ## Output
