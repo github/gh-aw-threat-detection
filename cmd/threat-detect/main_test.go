@@ -285,55 +285,50 @@ func TestRunFailsClosedOnEmptyArtifactsDirectory(t *testing.T) {
 	}
 }
 
-func TestRunFailsClosedOnEmptyArtifactsDirectoryWithLogFile(t *testing.T) {
-	artifactsDir := t.TempDir() // deliberately empty.
+// TestRunReportsArtifactInventoryOnStderr verifies the recursive artifact
+// inventory (TD-17b) is surfaced in the job log, which is the only place it is
+// reported now that the separate JSONL run-log artifact is gone.
+func TestRunReportsArtifactInventoryOnStderr(t *testing.T) {
+	artifactsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(artifactsDir, "aw-prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"), []byte("analyze this"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
 	outputPath := filepath.Join(t.TempDir(), "result.json")
-	logPath := filepath.Join(t.TempDir(), "run.jsonl")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
 	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
 
-	code := runWithTestArgs(t, []string{
+	code, stderr := runWithTestArgsCapture(t, []string{
 		"threat-detect",
 		"-output", outputPath,
-		"-log-file", logPath,
 		artifactsDir,
 	}, map[string]string{
 		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 	})
 
-	if code != exitError {
-		t.Fatalf("run() exit code = %d, want %d (fail closed)", code, exitError)
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitSafe, stderr)
 	}
-	if _, err := os.Stat(copilotMarker); !os.IsNotExist(err) {
-		t.Fatalf("expected the engine to never run, but copilot marker exists (stat err = %v)", err)
-	}
-
-	records := readJSONLRecords(t, logPath)
-
-	degraded := 0
-	for _, rec := range records {
-		if rec["event"] == "artifact_degraded" {
-			degraded++
+	for _, want := range []string{
+		"[threat-detect] run start:",
+		"[threat-detect] artifacts loaded:",
+		"[threat-detect] artifact inventory (2 entries):",
+		"aw-prompts/prompt.txt",
+		"agent_output.json",
+		"[threat-detect] prompt built:",
+		"[threat-detect] detection attempt 1 of 2",
+		"THREAT_DETECTION_STATUS: reason=result_recorded exit=0",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q, got:\n%s", want, stderr)
 		}
-	}
-	if degraded < 2 {
-		t.Fatalf("expected at least 2 artifact_degraded records (prompt + agent_output), got %d: %#v", degraded, records)
-	}
-
-	if findRecord(records, "artifacts_all_primary_inputs_missing") == nil {
-		t.Fatalf("missing artifacts_all_primary_inputs_missing record: %#v", records)
-	}
-
-	status := findRecord(records, "status")
-	if status == nil {
-		t.Fatalf("missing status record: %#v", records)
-	}
-	if status["reason"] != reasonConfigError {
-		t.Errorf("status reason = %v, want %s", status["reason"], reasonConfigError)
-	}
-	if exit, ok := status["exit"].(float64); !ok || int(exit) != exitError {
-		t.Errorf("status exit = %v, want %d", status["exit"], exitError)
 	}
 }
 

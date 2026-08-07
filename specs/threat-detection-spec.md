@@ -194,9 +194,8 @@ detection with the inputs that were staged. In strict mode
 MUST emit each finding as an error and terminate as a configuration error
 (`config_error`, exit `2`) before invoking the engine. Findings about other
 artifacts (for example an unreadable `comment-memory` directory, per TD-18a)
-remain advisory warnings in both modes. When structured run logging is enabled,
-each finding MUST be recorded with the artifact it concerns and whether it is a
-required input. The detector MUST apply this same mode selection everywhere it
+remain advisory warnings in both modes. Each finding MUST identify the artifact
+it concerns and whether it is a required input. The detector MUST apply this same mode selection everywhere it
 consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
 
 **TD-18a**: The detector MUST discover comment-memory markdown files
@@ -235,18 +234,22 @@ deliver this identification to the engine even when a custom prompt template
 
 **TD-20**: The detector MUST support writing the result to a file via the `--output` flag.
 
-**TD-20a**: The detector MUST support writing a structured run log in JSON Lines
-(JSONL) format to a file via the `--log-file` flag (also configurable through the
-`THREAT_DETECTION_LOG_FILE` environment variable). When `--output` is set and no
-log path is explicitly configured, the detector MUST write the run log as
-`detection-runlog.jsonl` in the result file's directory. When enabled, the
-detector MUST write one JSON object per line, each containing at least the `time`,
-`level`, and `event` keys, and MUST record a terminal `status` event whose
-`reason` and `exit` fields carry the same reason string and exit code as the
-stderr status line. The `artifacts_loaded` event MUST include the artifact
-inventory defined by TD-17b. The run log is an additive observability sink: it
-MUST NOT alter the result JSON contract (TD-08) or the exit codes (TD-21). A
-failure to open the log file MUST be treated as a configuration error.
+**TD-20a**: The detector MUST NOT write diagnostics to any destination other than
+standard output, standard error, and the result file (TD-20). It MUST NOT produce
+a separate run-log artifact. Every diagnostic the detector emits MUST therefore be
+observable in the host's captured job log, and MUST be written to standard error
+so it cannot corrupt the result JSON on standard output (TD-19).
+
+The detector MUST report on standard error, at minimum: the resolved run
+configuration (detector version, engine, model, retry budget); the artifact
+inventory defined by TD-17b; the prompt metadata of TD-20c; each degraded-input finding of TD-18c with the
+artifact it concerns and whether it is a required input; each detection
+attempt and whether it recorded a verdict; the engine subprocess invocation; and
+the terminal `THREAT_DETECTION_STATUS:` line (TD-21a). Untrusted values echoed
+into these diagnostics — model-authored text, artifact paths, and configuration
+values — MUST be escaped so that each is confined to a single physical output
+line and cannot emit a host workflow command, and listings MUST be bounded so a
+pathological input cannot flood the job log.
 
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
@@ -276,11 +279,11 @@ surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
 **TD-20c**: The detector MUST NOT write to the GitHub Actions step summary. The
-artifact inventory defined by TD-17b is surfaced through the run log (TD-20a)
-only, and the conclusion verdict through the run log and the `conclude`
-diagnostics (TD-20d). The rendered prompt itself is not surfaced: the run log
-records only its metadata (byte count, resolved workflow name/description,
-custom-prompt provenance, scaffolding detection).
+artifact inventory defined by TD-17b is surfaced on standard error (TD-20a) only,
+and the conclusion verdict through the `conclude` diagnostics (TD-20d). The
+rendered prompt itself MUST NOT be surfaced: the detector reports only its
+metadata (byte count, resolved workflow name/description, custom-prompt
+provenance, scaffolding detection).
 
 **TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
 section to standard output that is sufficient, on its own, to explain the
@@ -299,9 +302,9 @@ but when it is bounded the output MUST indicate that it was truncated and MUST
 NOT report a bounded prefix as though it were the whole input. Untrusted values
 echoed into the diagnostics (model-authored reasons, artifact filenames, and
 detection-log lines) MUST be escaped so that each is confined to a single
-physical output line and cannot emit a host workflow command. When `--log-file`
-is set, `conclude` MUST mirror these diagnostics and the final conclusion into
-the JSONL run log (TD-20a).
+physical output line and cannot emit a host workflow command. These diagnostics
+are the sole record of the conclusion; `conclude` MUST NOT write them to any
+separate log artifact (TD-20a).
 
 **TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
 actual security finding, so reviewers do not treat a detection outage as a

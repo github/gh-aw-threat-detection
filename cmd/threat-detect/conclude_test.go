@@ -791,52 +791,6 @@ func TestConcludeDetectionLogOverride(t *testing.T) {
 	}
 }
 
-// TestConcludeRunLog verifies the conclusion is mirrored into the JSONL run log
-// when --log-file is set.
-func TestConcludeRunLog(t *testing.T) {
-	dir := t.TempDir()
-	resultFile := filepath.Join(dir, "detection_result.json")
-	if err := os.WriteFile(resultFile, []byte(threatVerdict), 0o600); err != nil {
-		t.Fatalf("WriteFile error = %v", err)
-	}
-	logPath := filepath.Join(dir, "run.jsonl")
-
-	t.Setenv("RUN_DETECTION", "true")
-	t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", "false")
-	t.Setenv("DETECTION_AGENTIC_EXECUTION_OUTCOME", "success")
-	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
-	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
-
-	if code := runConclude([]string{"--result-file", resultFile, "--log-file", logPath}); code != concludeExitFail {
-		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
-	}
-
-	records := readJSONLRecords(t, logPath)
-	start := findRecord(records, "conclude_start")
-	if start == nil {
-		t.Fatal("missing conclude_start record")
-	}
-	if start["run_detection"] != "true" || start["execution_outcome"] != "success" || start["result_file"] != resultFile {
-		t.Errorf("conclude_start fields = %v", start)
-	}
-
-	verdict := findRecord(records, "conclude_verdict")
-	if verdict == nil {
-		t.Fatal("missing conclude_verdict record")
-	}
-	if verdict["prompt_injection"] != true || verdict["secret_leak"] != false || verdict["has_threats"] != true {
-		t.Errorf("conclude_verdict fields = %v", verdict)
-	}
-
-	outcome := findRecord(records, "conclude_outcome")
-	if outcome == nil {
-		t.Fatal("missing conclude_outcome record")
-	}
-	if outcome["conclusion"] != "failure" || outcome["reason"] != "threat_detected" || outcome["level"] != "error" {
-		t.Errorf("conclude_outcome fields = %v", outcome)
-	}
-}
-
 // TestSanitizeLogValue verifies untrusted values cannot break out of their log
 // line. An embedded newline would otherwise let a model-authored reason or an
 // artifact filename emit a line of its own beginning with "::", which the
@@ -965,81 +919,6 @@ func TestConcludeTruncatedDetectionLogStats(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("stdout missing %q:\n%s", want, got)
 		}
-	}
-}
-
-// TestConcludeRejectsLogFileCollisions verifies --log-file (opened O_TRUNC) is
-// refused when it aliases an input this command reads: truncating the result
-// file would erase the verdict, and truncating the detection log would erase
-// the failure diagnostics.
-func TestConcludeRejectsLogFileCollisions(t *testing.T) {
-	t.Run("collides with result file", func(t *testing.T) {
-		dir := t.TempDir()
-		resultFile := filepath.Join(dir, "detection_result.json")
-		if err := os.WriteFile(resultFile, []byte(safeVerdict), 0o600); err != nil {
-			t.Fatalf("WriteFile error = %v", err)
-		}
-		t.Setenv("RUN_DETECTION", "true")
-		t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
-		t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
-
-		if code := runConclude([]string{"--result-file", resultFile, "--log-file", resultFile}); code != concludeExitFail {
-			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
-		}
-		// The verdict must survive: rejection happens before the log is opened.
-		data, err := os.ReadFile(resultFile)
-		if err != nil {
-			t.Fatalf("ReadFile error = %v", err)
-		}
-		if string(data) != safeVerdict {
-			t.Errorf("result file was modified: %q", string(data))
-		}
-	})
-
-	t.Run("collides with detection log", func(t *testing.T) {
-		dir := t.TempDir()
-		resultFile := filepath.Join(dir, "detection_result.json")
-		logPath := filepath.Join(dir, defaultDetectionLogName)
-		if err := os.WriteFile(logPath, []byte("THREAT_DETECTION_STATUS: reason=engine_error exit=2\n"), 0o600); err != nil {
-			t.Fatalf("WriteFile error = %v", err)
-		}
-		t.Setenv("RUN_DETECTION", "true")
-		t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
-		t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
-
-		// The default detection-log path must participate in the check even
-		// though --detection-log was not passed explicitly.
-		if code := runConclude([]string{"--result-file", resultFile, "--log-file", logPath}); code != concludeExitFail {
-			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
-		}
-		data, err := os.ReadFile(logPath)
-		if err != nil {
-			t.Fatalf("ReadFile error = %v", err)
-		}
-		if len(data) == 0 {
-			t.Error("detection log was truncated")
-		}
-	})
-}
-
-// TestConcludeUnopenableLogFileIsConfigError verifies that failing to open an
-// explicitly requested --log-file fails the step (TD-20a) rather than silently
-// concluding without the required JSONL mirroring.
-func TestConcludeUnopenableLogFileIsConfigError(t *testing.T) {
-	dir := t.TempDir()
-	resultFile := writeResultFixture(t, safeVerdict)
-	// A directory cannot be opened for writing.
-	logPath := filepath.Join(dir, "logdir")
-	if err := os.Mkdir(logPath, 0o755); err != nil {
-		t.Fatalf("Mkdir error = %v", err)
-	}
-
-	t.Setenv("RUN_DETECTION", "true")
-	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
-	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
-
-	if code := runConclude([]string{"--result-file", resultFile, "--log-file", logPath}); code != concludeExitFail {
-		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
 	}
 }
 

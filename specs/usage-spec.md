@@ -123,8 +123,8 @@ MUST copy all three prompt artifacts emitted by the guarded agent job:
 `prompt-import-tree.json` records runtime-import provenance. The detector uses
 both to distinguish trusted instructions from untrusted runtime content. If
 either analysis artifact is absent, unreadable, or empty, the detector MUST
-continue with degraded analysis and MUST emit an `ERR_VALIDATION` warning to the job log and a
-`prompt_analysis_degraded` warning event to the structured run log when enabled.
+continue with degraded analysis and MUST emit an `ERR_VALIDATION` warning to the
+job log.
 
 The detector consumes the prompt artifacts, agent output, activation metadata,
 and root `aw-*.patch` / `aw-*.bundle` files. It inventories all other files
@@ -150,13 +150,12 @@ engine CLI.
 verdict payload and MUST read it from the location it configured (stdout, or the
 `--output` path, or the `detection_result.json` sink used by `conclude`).
 
-**U-09**: The host SHOULD retain the structured JSONL run log for observability
-(per TD-20a). The host MAY configure its path via `--log-file` (or
-`THREAT_DETECTION_LOG_FILE`); otherwise, when `--output` is set, the detector
-writes `detection-runlog.jsonl` in the result file's directory. The host MUST NOT
-point `--log-file` and `--output` at the same path. The detector does not write
-to the GitHub Actions step summary; the recursive artifact inventory is
-available only in the JSONL run log (per TD-20c).
+**U-09**: The host SHOULD capture the detector's standard error into its job log
+and retain it for observability: apart from the result file, it is the detector's
+only diagnostic output (per TD-20a). The detector does not produce a separate
+run-log artifact and does not write to the GitHub Actions step summary; the
+recursive artifact inventory, the prompt metadata, the per-attempt trace, and the
+terminal status line are available on standard error only (per TD-20c).
 
 ### 3.1 Flags
 
@@ -170,7 +169,6 @@ versions.
 | `--model <name>` | Override the engine model (see U-13) |
 | `--prompt-template <path>` | Override the embedded default prompt |
 | `--output <path>` | Write the JSON result to a file instead of stdout |
-| `--log-file <path>` | Write structured JSONL run logs (defaults beside `--output` to `detection-runlog.jsonl`) |
 | `--retries <n>` | Retries for malformed detection outputs (default `1`) |
 | `--version` | Print version and exit |
 
@@ -247,8 +245,7 @@ unusable — a recursive listing of the result directory plus detection-log stat
 and any `THREAT_DETECTION_*` marker lines. A conforming host SHOULD surface this
 output in its job log so a detection run can be triaged without downloading
 artifacts, and MAY pass `--detection-log <path>` when the detection run's log is
-not stored beside the result file. A host MAY pass `--log-file <path>` to mirror
-the conclusion into a JSONL run log.
+not stored beside the result file. `conclude` writes no separate log artifact.
 
 **U-19**: A conforming host MAY control conclusion behavior through these
 environment inputs consumed by `conclude`:
@@ -317,9 +314,9 @@ require the newest stable release MUST re-pin explicitly.
 **U-27**: A host MAY re-run detection against artifacts from a prior run for
 diagnostics. When it does, it MUST normalize the downloaded artifacts into the
 input contract of Section 3 before invoking the detector, and SHOULD retain the
-detector's `detection-runlog.jsonl` run log (per TD-20a) and structured result
-for comparison. When the source detection artifact contains a run log, the replay
-host SHOULD retain it separately from the replay run log.
+detector's captured standard error (per TD-20a) and structured result for
+comparison. When the source detection artifact contains a captured log, the
+replay host SHOULD retain it separately from the replay log.
 
 **U-28**: Replay MUST NOT require credentials beyond those already needed to read
 the source run's artifacts and to authenticate the selected engine.

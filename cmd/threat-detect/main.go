@@ -29,7 +29,6 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
-	"github.com/github/gh-aw-threat-detection/pkg/runlog"
 )
 
 const (
@@ -41,6 +40,10 @@ const (
 	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
 	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
 	promptAnalysisValidationCode   = "ERR_VALIDATION"
+
+	// maxInventoryEntries bounds the artifact inventory printed to stderr so a
+	// pathological artifacts directory cannot flood the job log.
+	maxInventoryEntries = 200
 )
 
 // statusPrefix is the marker for the single machine-readable status line
@@ -97,16 +100,9 @@ func run() (code int) {
 	// reason is set at each terminal point; the deferred emitter writes the
 	// single status line. An empty reason (e.g. --version) emits nothing.
 	reason := ""
-	// logger, when non-nil, mirrors the run's key events (including the terminal
-	// status) to a JSONL log file. It is nil until --log-file is resolved.
-	var logger *runlog.Logger
 	defer func() {
 		if reason != "" {
 			emitStatus(reason, code)
-			logger.Info("status", map[string]any{"reason": reason, "exit": code})
-		}
-		if err := logger.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error closing log file: %v\n", err)
 		}
 	}()
 
@@ -115,7 +111,6 @@ func run() (code int) {
 		model               string
 		promptFile          string
 		outputJSON          string
-		logFile             string
 		workflowName        string
 		workflowDescription string
 		customPrompt        string
@@ -133,7 +128,6 @@ func run() (code int) {
 	flag.StringVar(&model, "model", "", "Model to use for detection")
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
-	flag.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
 	flag.StringVar(&workflowName, "workflow-name", "", "Workflow name for the prompt (overrides WORKFLOW_NAME)")
 	flag.StringVar(&workflowDescription, "workflow-description", "", "Workflow description for the prompt (overrides WORKFLOW_DESCRIPTION)")
 	flag.StringVar(&customPrompt, "custom-prompt", "", "Additional detection instructions appended to the prompt (overrides CUSTOM_PROMPT)")
@@ -160,42 +154,14 @@ func run() (code int) {
 	// standalone detector honors the model gh-aw configured for detection.
 	model = engine.ResolveModel(engineID, model)
 
-	// File-based integrations expect diagnostics to survive beside the result.
-	// An explicit flag or environment variable still takes precedence.
-	if logFile == "" && outputJSON != "" {
-		dir, _ := filepath.Split(outputJSON)
-		logFile = dir + "detection-runlog.jsonl"
+	// Announce the resolved run configuration on stderr so the job log records
+	// which detector build, engine, and model produced the verdict.
+	modelDesc := model
+	if modelDesc == "" {
+		modelDesc = "(none; using engine default)"
 	}
-
-	// Reject collisions among the run's independently-written destinations
-	// (--log-file, --output): each is opened and written on its own, so
-	// aliasing them would interleave or clobber their content.
-	if err := rejectPathCollisions(
-		namedPath{"--log-file", logFile},
-		namedPath{"--output", outputJSON},
-	); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		reason = reasonConfigError
-		return exitError
-	}
-
-	// Open the JSONL run log when configured or derived. A failure here is a
-	// config error because file-based integrations require the diagnostic sink.
-	if logFile != "" {
-		l, err := runlog.Open(logFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error opening log file: %v\n", err)
-			reason = reasonConfigError
-			return exitError
-		}
-		logger = l
-	}
-	logger.Info("run_start", map[string]any{
-		"version": detector.Version,
-		"engine":  engine.Canonical(engineID),
-		"model":   model,
-		"retries": retries,
-	})
+	fmt.Fprintf(os.Stderr, "[threat-detect] run start: version=%s engine=%s model=%s retries=%d\n",
+		detector.Version, engine.Canonical(engineID), sanitizeLogValue(modelDesc), retries)
 
 	// Determine artifacts directory from positional args
 	args := flag.Args()
@@ -211,18 +177,10 @@ func run() (code int) {
 	arts, err := artifacts.Load(artifactsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading artifacts: %v\n", err)
-		logger.Error("artifacts_load_failed", map[string]any{"artifacts_dir": artifactsDir, "error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
-	logger.Info("artifacts_loaded", map[string]any{
-		"artifacts_dir":              artifactsDir,
-		"inventory":                  arts.Inventory,
-		"prompt_bytes":               arts.PromptFileSize,
-		"agent_output_bytes":         arts.AgentOutputFileSize,
-		"patch_files":                len(arts.PatchFiles),
-		"all_primary_inputs_missing": arts.AllPrimaryInputsMissing,
-	})
+	reportArtifacts(artifactsDir, arts)
 	// Degraded inputs (missing/empty prompt or agent output, an expected but
 	// absent patch, an unreadable comment-memory directory, ...) are surfaced
 	// as GitHub Actions annotations so they are visible even when this binary
@@ -245,11 +203,12 @@ func run() (code int) {
 			command = "error"
 		}
 		fmt.Fprintf(os.Stderr, "::%s::%s\n", command, escapeWorkflowData(w.Message))
-		logger.Error("artifact_degraded", map[string]any{
-			"field":          w.Field,
-			"message":        w.Message,
-			"required_input": w.RequiredInput,
-		})
+		// The annotation text alone does not say whether the finding concerns an
+		// artifact the host was required to stage — in warn mode both kinds are
+		// emitted as "::warning::". Record that classification alongside it so
+		// TD-18c stays diagnosable from the job log.
+		fmt.Fprintf(os.Stderr, "[threat-detect] artifact degraded: field=%s required_input=%t\n",
+			sanitizeLogValue(w.Field), w.RequiredInput)
 	}
 
 	// All primary inputs missing simultaneously means detection would silently
@@ -257,14 +216,12 @@ func run() (code int) {
 	// a security control. Fail closed instead of proceeding.
 	if arts.AllPrimaryInputsMissing {
 		fmt.Fprintf(os.Stderr, "Error: prompt, agent output, and patch/bundle files are all missing or empty in %s; refusing to run detection on empty input.\n", artifactsDir)
-		logger.Error("artifacts_all_primary_inputs_missing", map[string]any{"artifacts_dir": artifactsDir})
 		reason = reasonConfigError
 		return exitError
 	}
 
 	if !warnMode && arts.HasRequiredInputWarnings() {
 		fmt.Fprintf(os.Stderr, "Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.\n", artifactsDir)
-		logger.Error("artifacts_required_inputs_degraded", map[string]any{"artifacts_dir": artifactsDir})
 		reason = reasonConfigError
 		return exitError
 	}
@@ -305,7 +262,6 @@ func run() (code int) {
 		data, err := os.ReadFile(customPromptFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading custom prompt file: %v\n", err)
-			logger.Error("custom_prompt_read_failed", map[string]any{"path": customPromptFile, "error": err.Error()})
 			reason = reasonConfigError
 			return exitError
 		}
@@ -314,7 +270,7 @@ func run() (code int) {
 	}
 
 	// Surface the resolved workflow context on stderr so a dropped CUSTOM_PROMPT
-	// or missing workflow name/description is diagnosable from the run log alone,
+	// or missing workflow name/description is diagnosable from the job log alone,
 	// not silently absorbed into the prompt.
 	fmt.Fprintf(os.Stderr,
 		"Prompt context: workflow_name=%q (defaulted=%t) workflow_description=%q (defaulted=%t) custom_prompt_applied=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
@@ -336,29 +292,27 @@ func run() (code int) {
 	prompt, promptAnalysis, err := detector.BuildPromptWithAnalysis(arts, promptTemplate)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)
-		logger.Error("prompt_build_failed", map[string]any{"error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
-	warnDegradedPromptAnalysis(promptAnalysis, logger)
-	logger.Info("prompt_built", map[string]any{
-		"prompt_bytes":                   len(prompt),
-		"workflow_name":                  arts.WorkflowName,
-		"workflow_description":           arts.WorkflowDescription,
-		"workflow_name_defaulted":        nameDefaulted,
-		"workflow_description_defaulted": descriptionDefaulted,
-		"custom_prompt_applied":          arts.CustomPrompt != "",
-		"custom_prompt_source":           customPromptSource,
-		"custom_prompt_bytes":            len(arts.CustomPrompt),
-		"framework_scaffolding_detected": promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.Detected,
-		"framework_scaffolding_markers":  scaffoldingMarkers(promptAnalysis),
-	})
+	warnDegradedPromptAnalysis(promptAnalysis)
+
+	// The rendered prompt itself is never echoed; only its metadata, so a
+	// truncated or scaffolding-free prompt is diagnosable from the job log.
+	scaffoldingDesc := "(none)"
+	if markers := scaffoldingMarkers(promptAnalysis); len(markers) > 0 {
+		scaffoldingDesc = sanitizeLogValue(strings.Join(markers, ", "))
+	}
+	fmt.Fprintf(os.Stderr,
+		"[threat-detect] prompt built: prompt_bytes=%d framework_scaffolding_detected=%t framework_scaffolding_markers=%s\n",
+		len(prompt),
+		promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.Detected,
+		scaffoldingDesc)
 
 	// Create engine
 	eng, err := engine.New(engineID, model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
-		logger.Error("engine_create_failed", map[string]any{"error": err.Error()})
 		reason = reasonConfigError
 		return exitError
 	}
@@ -376,7 +330,7 @@ func run() (code int) {
 	os.Remove(sinkPath)
 	defer os.Remove(sinkPath)
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries, logger)
+	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
 		switch {
@@ -387,21 +341,42 @@ func run() (code int) {
 		default:
 			reason = reasonInvalidReportExhausted
 		}
-		logger.Error("detection_failed", map[string]any{"reason": reason, "error": err.Error()})
 		return exitError
 	}
-	logger.Info("verdict", map[string]any{
-		"prompt_injection": result.PromptInjection,
-		"secret_leak":      result.SecretLeak,
-		"malicious_patch":  result.MaliciousPatch,
-		"reasons":          result.Reasons,
-		"has_threats":      result.HasThreats(),
-	})
 
 	var resultReason string
 	code, resultReason = writeResult(result, outputJSON)
 	reason = resultReason
 	return code
+}
+
+// reportArtifacts prints the loaded-artifact summary and the recursive inventory
+// (per TD-17b) to stderr, so the job log alone shows exactly what detection
+// consumed. Inventory paths originate from the caller-controlled artifacts
+// directory, so each is sanitized and confined to one physical line; the listing
+// is bounded so a pathological directory cannot flood the job log.
+func reportArtifacts(artifactsDir string, arts *artifacts.Artifacts) {
+	fmt.Fprintf(os.Stderr,
+		"[threat-detect] artifacts loaded: dir=%s prompt_bytes=%d agent_output_bytes=%d patch_files=%d all_primary_inputs_missing=%t\n",
+		sanitizeLogValue(artifactsDir), arts.PromptFileSize, arts.AgentOutputFileSize,
+		len(arts.PatchFiles), arts.AllPrimaryInputsMissing)
+
+	if len(arts.Inventory) == 0 {
+		fmt.Fprintf(os.Stderr, "[threat-detect] artifact inventory: (empty)\n")
+		return
+	}
+	shown := arts.Inventory
+	if len(shown) > maxInventoryEntries {
+		shown = shown[:maxInventoryEntries]
+	}
+	fmt.Fprintf(os.Stderr, "[threat-detect] artifact inventory (%d entries):\n", len(arts.Inventory))
+	for _, entry := range shown {
+		fmt.Fprintf(os.Stderr, "[threat-detect]   %s bytes=%d kind=%s consumed=%t\n",
+			sanitizeLogValue(entry.Path), entry.Size, sanitizeLogValue(entry.Kind), entry.Consumed)
+	}
+	if len(shown) < len(arts.Inventory) {
+		fmt.Fprintf(os.Stderr, "[threat-detect]   ... %d more entry(ies) omitted\n", len(arts.Inventory)-len(shown))
+	}
 }
 
 // scaffoldingMarkers returns the framework markers found in the detected
@@ -413,7 +388,7 @@ func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
 	return analysis.Scaffolding.Markers
 }
 
-func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis, logger *runlog.Logger) {
+func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 	var unavailable []string
 	if analysis == nil || analysis.PromptTemplate == "" {
 		unavailable = append(unavailable, "aw-prompts/prompt-template.txt")
@@ -431,13 +406,9 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis, logger *runlo
 		promptAnalysisValidationCode,
 		strings.Join(unavailable, ", "),
 	)
-	logger.Warning("prompt_analysis_degraded", map[string]any{
-		"error_code":            promptAnalysisValidationCode,
-		"unavailable_artifacts": unavailable,
-	})
 }
 
-func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int, logger *runlog.Logger) (*detector.Result, error) {
+func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
 	if sinkPath == "" {
 		return nil, fmt.Errorf("result sink path is required for detection")
 	}
@@ -448,21 +419,21 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	currentPrompt := prompt
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		logger.Info("attempt_start", map[string]any{"attempt": i + 1, "attempts": attempts})
+		fmt.Fprintf(os.Stderr, "[threat-detect] detection attempt %d of %d\n", i+1, attempts)
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
-		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath, Logger: logger}); err != nil {
+		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
 			return nil, fmt.Errorf("%w: %w", errEngineExecution, err)
 		}
 		// The verdict must be reported in-session through the
 		// threat_detection_result tool, which records it to the sink.
 		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
-			logger.Info("attempt_recorded", map[string]any{"attempt": i + 1})
+			fmt.Fprintf(os.Stderr, "[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool\n", i+1)
 			return result, nil
 		}
 		lastErr = err
-		logger.Info("attempt_no_verdict", map[string]any{"attempt": i + 1, "error": err.Error()})
+		fmt.Fprintf(os.Stderr, "[threat-detect] attempt %d recorded no usable verdict: %s\n", i+1, sanitizeLogValue(err.Error()))
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
