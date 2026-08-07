@@ -132,3 +132,61 @@ func TestValidateReportFields_BoundsReasons(t *testing.T) {
 		t.Fatalf("unexpected rejection: %s", msg)
 	}
 }
+
+// TestWriteResultFile_RejectsUnreadableResult verifies the write/read symmetry
+// required by TD-10b: a result that would be rejected on read must be rejected
+// on write, and must not leave a file behind. Without this, a caller that
+// bypassed the report-time validation could persist a result file that only
+// fails much later, at conclude time, as a misleading parse error.
+func TestWriteResultFile_RejectsUnreadableResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *Result
+	}{
+		{"over-long reason", &Result{PromptInjection: true, Reasons: []string{strings.Repeat("x", MaxReasonRunes+1)}}},
+		{"blank reason", &Result{PromptInjection: true, Reasons: []string{"   "}}},
+		{"empty reason", &Result{PromptInjection: true, Reasons: []string{""}}},
+		{"too many reasons", &Result{PromptInjection: true, Reasons: make([]string, MaxReasons+1)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "detection_result.json")
+			if err := WriteResultFile(path, tt.result); err == nil {
+				t.Fatal("expected write to be rejected")
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("rejected write must not leave a result file behind (stat err = %v)", err)
+			}
+			// The atomic-write temp file must be cleaned up too.
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("ReadDir error = %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("rejected write left %d file(s) behind: %v", len(entries), entries)
+			}
+		})
+	}
+}
+
+// TestWriteResultFile_AcceptsBoundaryResult verifies the symmetry does not
+// over-reject: a result exactly at the documented limits must round-trip.
+func TestWriteResultFile_AcceptsBoundaryResult(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "detection_result.json")
+	reasons := make([]string, MaxReasons)
+	for i := range reasons {
+		reasons[i] = strings.Repeat("y", MaxReasonRunes)
+	}
+	if err := WriteResultFile(path, &Result{SecretLeak: true, Reasons: reasons}); err != nil {
+		t.Fatalf("result at the documented limits must be writable: %v", err)
+	}
+	got, err := ReadResultFile(path)
+	if err != nil {
+		t.Fatalf("result at the documented limits must be readable: %v", err)
+	}
+	if len(got.Reasons) != MaxReasons {
+		t.Fatalf("reasons = %d, want %d", len(got.Reasons), MaxReasons)
+	}
+}

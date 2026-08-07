@@ -121,6 +121,13 @@ func validateRawResult(raw map[string]any, label string) error {
 
 // WriteResultFile atomically writes r as canonical THREAT_DETECTION_RESULT JSON
 // to path (temp file in the same dir + rename), with 0o600 permissions.
+//
+// The marshaled bytes are validated against the same rules ReadResultFile
+// applies before any file is created, so a result that would not survive being
+// read back is rejected at the source rather than persisted as an unreadable
+// file. Validating the canonical JSON — rather than the in-memory struct —
+// makes the guarantee exact: what is checked is byte-for-byte what a reader
+// would parse.
 func WriteResultFile(path string, r *Result) error {
 	if r == nil {
 		return fmt.Errorf("cannot write nil result")
@@ -133,6 +140,12 @@ func WriteResultFile(path string, r *Result) error {
 	data, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling result: %w", err)
+	}
+	if int64(len(data)) > MaxResultFileBytes {
+		return fmt.Errorf("refusing to write result: encoded result is %d bytes, exceeding the maximum of %d", len(data), MaxResultFileBytes)
+	}
+	if _, err := ParseStructuredResult(data); err != nil {
+		return fmt.Errorf("refusing to write result that could not be read back: %w", err)
 	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".threat-detect-result-*.tmp")
