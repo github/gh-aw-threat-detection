@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
 
 // parseKV reads a name=value file (as written to $GITHUB_OUTPUT / $GITHUB_ENV)
@@ -1086,5 +1088,72 @@ func TestConcludeToolingFailureLogsEngineFailure(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "This is a tooling failure, not a security finding.") {
 		t.Errorf("job log missing tooling-failure disclaimer; got:\n%s", stdout.String())
+	}
+}
+
+// TestConcludeThreatMessageSanitizesReasons verifies that model-authored reason
+// text cannot inject control characters into the ::error:: annotation. The
+// reasons list is open text, so it is escaped the same way reportVerdict
+// escapes it before being folded into the workflow command.
+func TestConcludeThreatMessageSanitizesReasons(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t,
+		`{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["esc\u001b[31m tab\there"]}`)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	errorLine := ""
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "::error::") {
+			errorLine = line
+		}
+	}
+	if errorLine == "" {
+		t.Fatalf("expected ::error:: command, got: %q", stdout.String())
+	}
+	if strings.ContainsAny(errorLine, "\x1b\t") {
+		t.Fatalf("control characters must be escaped in the annotation, got: %q", errorLine)
+	}
+	if !strings.Contains(errorLine, `esc\x1b[31m tab\there`) {
+		t.Fatalf("expected escaped reason text, got: %q", errorLine)
+	}
+}
+
+// TestConcludeRejectsOversizeResultFile verifies that an oversized result file
+// is reported as a parse error and fails closed, instead of being read into
+// memory and echoed in full into the job log.
+func TestConcludeRejectsOversizeResultFile(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t,
+		`{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":["`+
+			strings.Repeat("x", detector.MaxResultFileBytes)+`"]}`)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, errCodeParse) {
+		t.Fatalf("expected %s, got: %q", errCodeParse, got)
+	}
+	if len(got) > 1<<16 {
+		t.Fatalf("oversize result file must not be echoed into the job log; got %d bytes", len(got))
+	}
+	if outputs := parseKV(t, filepath.Join(dir, "out")); outputs["reason"] != detector.ReasonParseError {
+		t.Fatalf("reason = %q, want %q", outputs["reason"], detector.ReasonParseError)
 	}
 }

@@ -7,6 +7,25 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
+)
+
+// Bounds on the free-text portion of the result contract. The three boolean
+// fields are fully constrained by their type, but `reasons` is model-authored
+// open text that flows into job logs, workflow commands, and the run log, so it
+// is bounded on both the reporting and the reading side.
+const (
+	// MaxReasons is the maximum number of entries allowed in `reasons`. Three
+	// threat categories never need more than a handful of explanations.
+	MaxReasons = 20
+	// MaxReasonRunes is the maximum length of a single reason. Reasons are
+	// human-readable explanations, not transcripts or embedded artifacts.
+	MaxReasonRunes = 1000
+	// MaxResultFileBytes caps how much of a result file is read before parsing.
+	// It is far above any schema-valid result (MaxReasons × MaxReasonRunes plus
+	// JSON overhead) yet bounds memory for a corrupt or hostile file.
+	MaxResultFileBytes = 1 << 20 // 1 MiB
 )
 
 // Result represents the structured output of threat detection analysis.
@@ -82,9 +101,19 @@ func validateRawResult(raw map[string]any, label string) error {
 	if !ok {
 		return fmt.Errorf("invalid type for %q: expected array, got %T (%v)", "reasons", reasons, reasons)
 	}
+	if len(reasonsArr) > MaxReasons {
+		return fmt.Errorf("too many entries in %q: got %d, maximum is %d", "reasons", len(reasonsArr), MaxReasons)
+	}
 	for i, reason := range reasonsArr {
-		if _, ok := reason.(string); !ok {
+		text, ok := reason.(string)
+		if !ok {
 			return fmt.Errorf("invalid type for %q[%d]: expected string, got %T (%v)", "reasons", i, reason, reason)
+		}
+		if strings.TrimSpace(text) == "" {
+			return fmt.Errorf("invalid value for %q[%d]: reason must not be empty or whitespace-only", "reasons", i)
+		}
+		if n := utf8.RuneCountInString(text); n > MaxReasonRunes {
+			return fmt.Errorf("invalid value for %q[%d]: reason is %d characters, maximum is %d", "reasons", i, n, MaxReasonRunes)
 		}
 	}
 	return nil
@@ -133,11 +162,22 @@ func WriteResultFile(path string, r *Result) error {
 }
 
 // ReadResultFile reads path and parses it with ParseStructuredResult, returning
-// a validated *Result. Returns an error if the file is missing, empty, or invalid.
+// a validated *Result. Returns an error if the file is missing, empty, larger
+// than MaxResultFileBytes, or invalid.
 func ReadResultFile(path string) (*Result, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
+	}
+	defer f.Close()
+	// Read one byte past the cap so an oversized file is rejected rather than
+	// silently truncated into a parse error that hides the real cause.
+	data, err := io.ReadAll(io.LimitReader(f, MaxResultFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > MaxResultFileBytes {
+		return nil, fmt.Errorf("result file %q exceeds the maximum size of %d bytes", path, MaxResultFileBytes)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, fmt.Errorf("result file %q is empty", path)

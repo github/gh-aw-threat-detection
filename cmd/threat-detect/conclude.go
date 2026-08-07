@@ -295,7 +295,14 @@ func (c *concluder) conclude(resultFile string) int {
 		}
 		message := fmt.Sprintf("%s: ❌ Security threats detected: %s", errCodeValidation, strings.Join(threats, ", "))
 		if len(result.Reasons) > 0 {
-			message += "\nReasons: " + strings.Join(result.Reasons, "; ")
+			// Reasons are model-authored open text; sanitize and bound them the
+			// same way reportVerdict does before folding them into the workflow
+			// command and the run log.
+			safe := make([]string, 0, len(result.Reasons))
+			for _, reason := range result.Reasons {
+				safe = append(safe, sanitizeLogValue(truncateRunes(reason, maxEchoedLineRunes)))
+			}
+			message += "\nReasons: " + strings.Join(safe, "; ")
 		}
 		return c.fail(result, detector.ReasonThreatDetected, message)
 	}

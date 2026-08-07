@@ -334,6 +334,16 @@ explicitly treated as untrusted runtime data.
 }
 ```
 
+The three booleans are fully constrained by the schema: all are required, no
+other fields are accepted, and a result that adds, omits, or mistypes a field is
+rejected. `reasons` is model-authored free text and is bounded as well — at most
+20 entries, each non-blank and at most 1000 characters — and the whole result
+file is capped at 1 MiB before it is parsed. The same bounds apply when the model
+reports a result and when the file is read back, so a recorded result can never
+fail validation later. A rejected report is returned to the model as a
+correctable tool error; an oversized or malformed result file is a parse error
+that fails the detection closed.
+
 ### Replay workflow
 
 Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, free-form replay log, replay result, and original-result comparison. Detectors that support structured logging also produce `detection-runlog.jsonl`; when available, the source run's structured log is retained separately as `original-detection-runlog.jsonl`.
