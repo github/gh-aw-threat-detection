@@ -97,7 +97,7 @@ func TestRunCLIEnvWithSinkSuppressesKilledError(t *testing.T) {
 		t.Fatalf("WriteResultFile() error = %v", err)
 	}
 	// A command that fails (false) but with a valid sink should be treated as success.
-	out, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", "echo hi; exit 1"}, "", nil, sink)
+	out, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", "echo hi; exit 1"}, "", nil, sink, cliDiag{})
 	if err != nil {
 		t.Fatalf("expected nil error when sink is valid, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRunCLIEnvWithSinkSuppressesKilledError(t *testing.T) {
 
 func TestRunCLIEnvWithSinkSurfacesErrorWithoutSink(t *testing.T) {
 	sink := filepath.Join(t.TempDir(), "missing.json")
-	_, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", "exit 1"}, "", nil, sink)
+	_, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", "exit 1"}, "", nil, sink, cliDiag{})
 	if err == nil {
 		t.Fatal("expected error when no valid sink result exists")
 	}
@@ -119,7 +119,7 @@ func TestRunCLIEnvWithSinkSurfacesErrorWithoutSink(t *testing.T) {
 // failure is diagnosable rather than an opaque exit code.
 func TestRunCLIEnvWithSinkIncludesStdoutOnFailure(t *testing.T) {
 	sink := filepath.Join(t.TempDir(), "missing.json")
-	_, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", `echo '{"type":"error","error":{"message":"model not found: claude-bogus"}}'; exit 1`}, "", nil, sink)
+	_, err := runCLIEnvWithSink(context.Background(), "sh", []string{"-c", `echo '{"type":"error","error":{"message":"model not found: claude-bogus"}}'; exit 1`}, "", nil, sink, cliDiag{})
 	if err == nil {
 		t.Fatal("expected error when no valid sink result exists")
 	}

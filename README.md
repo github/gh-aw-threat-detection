@@ -63,7 +63,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
-- `--step-summary` — Path to append the artifact inventory table and the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section, as a collapsible block) in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`. Best effort: a failed write warns and never fails detection
+- `--step-summary` — Path to append the artifact inventory table, the engine preflight (environment) block, and the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section, as a collapsible block) in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`. Best effort: a failed write warns and never fails detection
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -124,19 +124,44 @@ line, created fresh (truncating any existing file) with `0600` permissions. Ever
 record starts with `time` (RFC 3339), `level`
 (`info`/`error`), and `event`, followed by event-specific fields. Emitted
 events include `run_start`, `artifacts_loaded`, `artifact_degraded`,
-`prompt_built`,
+`prompt_built`, `engine_preflight`, `engine_invoke`, `engine_complete`,
 `attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
 `detection_failed`, and a terminal `status` record carrying the same `reason`
-and `exit` code as the stderr status line. The verdict JSON contract
+and `exit` code as the stderr status line (plus the run's `duration_ms`). The
+verdict JSON contract
 (`--output`) is unchanged; the log file is an additive observability sink.
 `--log-file` and `--output` must not resolve to the same file — a collision is
 rejected as a configuration error to avoid corrupting both outputs.
 
 ```jsonl
 {"time":"2026-07-14T18:00:00Z","level":"info","event":"run_start","engine":"copilot","model":"","retries":1,"version":"1.2.3"}
+{"time":"2026-07-14T18:00:01Z","level":"info","event":"engine_preflight","checks":[{"name":"engine","status":"ok","detail":"copilot"},{"name":"COPILOT_GITHUB_TOKEN","status":"set","detail":"93 characters"}],"engine":"copilot"}
+{"time":"2026-07-14T18:00:03Z","level":"info","event":"engine_complete","duration_ms":2100,"engine":"copilot","exit_code":-1,"name":"copilot","outcome":"terminated_early","stderr_bytes":0,"stdout_bytes":4096,"verdict_recorded":true}
 {"time":"2026-07-14T18:00:03Z","level":"info","event":"verdict","has_threats":false,"malicious_patch":false,"prompt_injection":false,"reasons":[],"secret_leak":false}
-{"time":"2026-07-14T18:00:03Z","level":"info","event":"status","exit":0,"reason":"result_recorded"}
+{"time":"2026-07-14T18:00:03Z","level":"info","event":"status","duration_ms":3120,"exit":0,"reason":"result_recorded"}
 ```
+
+#### Engine diagnostics
+
+Every run prints an engine preflight to stderr (and to the job step summary as a
+collapsible **Threat Detection Environment** block) before the engine starts,
+followed by a completion line once it ends:
+
+```
+[threat-detect] preflight: engine=ok (copilot)
+[threat-detect] preflight: harness=ok (/home/runner/work/_temp/gh-aw/actions/copilot_harness.cjs)
+[threat-detect] preflight: engine_binary=ok (/usr/local/bin/copilot)
+[threat-detect] preflight: COPILOT_GITHUB_TOKEN=set (93 characters)
+[threat-detect] preflight: HTTPS_PROXY=set (http://172.30.0.10:3128)
+[threat-detect] engine invoke: engine=copilot model="claude-sonnet-4.5" command=node (/usr/bin/node) args=12
+[threat-detect] engine complete: engine=copilot command=node outcome=terminated_early exit=-1 duration=2.1s stdout=4096B stderr=0B verdict_recorded=true
+```
+
+Preflight never prints a credential value — secrets are reported only as
+`set`/`unset` with a character count, and credentials embedded in proxy URLs are
+redacted. It is diagnostics only and never fails the run. `outcome` is `ok`,
+`failed`, or `terminated_early` (the engine was deliberately killed once it
+recorded its verdict, which is the normal successful path).
 
 #### Concluding a run (`conclude`)
 

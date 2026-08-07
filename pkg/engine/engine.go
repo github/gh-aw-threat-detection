@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/runlog"
@@ -130,6 +131,7 @@ type copilotEngine struct {
 }
 
 func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error) {
+	diag := cliDiag{engineID: "copilot", logger: opts.Logger}
 	env := copilotEnv(e.model)
 	env = append(env, copilotHarnessAwfConfigEnv()...)
 	toolEnv, cleanup, err := maybeProvisionResultTool(opts.ResultSinkPath)
@@ -143,12 +145,12 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 		logEngineInvoke(opts.Logger, "copilot", nodeCommand(), append([]string{harnessPath, copilotBinary()}, copilotArgs("<prompt-file>")...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
-		}, "", env, opts.ResultSinkPath)
+		}, "", env, opts.ResultSinkPath, diag)
 	}
 	logEngineInvoke(opts.Logger, "copilot", "copilot", copilotDirectArgs("<prompt-file>"), e.model)
 	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 		return "copilot", copilotDirectArgs(promptPath)
-	}, prompt, env, opts.ResultSinkPath)
+	}, prompt, env, opts.ResultSinkPath, diag)
 }
 
 // claudeEngine implements Engine using the Claude CLI.
@@ -157,6 +159,7 @@ type claudeEngine struct {
 }
 
 func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error) {
+	diag := cliDiag{engineID: "claude", logger: opts.Logger}
 	toolEnv, cleanup, err := maybeProvisionResultTool(opts.ResultSinkPath)
 	if err != nil {
 		return "", err
@@ -168,11 +171,11 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		logEngineInvoke(opts.Logger, "claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableBashTool)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableBashTool)...)
-		}, "", toolEnv, opts.ResultSinkPath)
+		}, "", toolEnv, opts.ResultSinkPath, diag)
 	}
 	args := claudeArgs(e.model, enableBashTool)
 	logEngineInvoke(opts.Logger, "claude", "claude", args, e.model)
-	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath, diag)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -181,6 +184,7 @@ type codexEngine struct {
 }
 
 func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error) {
+	diag := cliDiag{engineID: "codex", logger: opts.Logger}
 	toolEnv, cleanup, err := maybeProvisionResultTool(opts.ResultSinkPath)
 	if err != nil {
 		return "", err
@@ -192,12 +196,12 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		logEngineInvoke(opts.Logger, "codex", nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs(promptPath, e.model, provider)...)
-		}, "", toolEnv, opts.ResultSinkPath)
+		}, "", toolEnv, opts.ResultSinkPath, diag)
 	}
 	// Codex embeds the prompt as a positional argument; pass a placeholder here
 	// so the logged args do not expose the detection prompt.
 	logEngineInvoke(opts.Logger, "codex", "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
-	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath, diag)
 }
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
@@ -401,6 +405,16 @@ func codexHarnessArgs(promptPath, model, provider string) []string {
 	return args
 }
 
+// cliDiag carries the diagnostic identity of an engine invocation so the
+// completion record can name the engine the user selected and reach the
+// structured run log. The zero value disables the run-log record; the stderr
+// line is always emitted because the job log is the only diagnostic sink that
+// is always available.
+type cliDiag struct {
+	engineID string
+	logger   *runlog.Logger
+}
+
 // runCLI executes a CLI command, passing the prompt via stdin, and returns its
 // stdout output. Using stdin avoids OS argument length limits and prevents the
 // prompt content from appearing in process listings.
@@ -408,7 +422,7 @@ func runCLI(ctx context.Context, name string, args []string, stdinData string) (
 	return runCLIEnv(ctx, name, args, stdinData, nil)
 }
 
-func runCLIWithPromptFile(ctx context.Context, prompt string, commandBuilder func(string) (string, []string), stdinData string, env []string, sinkPath string) (output string, err error) {
+func runCLIWithPromptFile(ctx context.Context, prompt string, commandBuilder func(string) (string, []string), stdinData string, env []string, sinkPath string, diag cliDiag) (output string, err error) {
 	promptFile, err := os.CreateTemp("", "threat-detect-prompt-*.txt")
 	if err != nil {
 		return "", fmt.Errorf("creating temporary prompt file: %w", err)
@@ -427,18 +441,18 @@ func runCLIWithPromptFile(ctx context.Context, prompt string, commandBuilder fun
 		return "", fmt.Errorf("closing temporary prompt file: %w", err)
 	}
 	name, args := commandBuilder(promptPath)
-	return runCLIEnvWithSink(ctx, name, args, stdinData, env, sinkPath)
+	return runCLIEnvWithSink(ctx, name, args, stdinData, env, sinkPath, diag)
 }
 
 func runCLIEnv(ctx context.Context, name string, args []string, stdinData string, env []string) (string, error) {
-	return runCLIEnvWithSink(ctx, name, args, stdinData, env, "")
+	return runCLIEnvWithSink(ctx, name, args, stdinData, env, "", cliDiag{})
 }
 
 // runCLIEnvWithSink runs the CLI command and, when sinkPath is non-empty, watches
 // the sink file and cancels the subprocess as soon as a valid result is recorded.
 // A subprocess error is suppressed when a valid sink result exists, because the
 // process was intentionally killed once the verdict was reported.
-func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinData string, env []string, sinkPath string) (string, error) {
+func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinData string, env []string, sinkPath string, diag cliDiag) (string, error) {
 	if sinkPath != "" {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithCancel(ctx)
@@ -468,20 +482,104 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 	cmd.Stdout = io.MultiWriter(&stdout, os.Stderr)
 	cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
 
-	if err := cmd.Run(); err != nil {
-		if sinkPath != "" {
-			if _, sinkErr := detector.ReadResultFile(sinkPath); sinkErr == nil {
-				// The verdict was recorded; the process was intentionally killed.
-				return stdout.String(), nil
-			}
+	started := time.Now()
+	runErr := cmd.Run()
+	elapsed := time.Since(started)
+
+	// Whether the verdict landed decides how a non-zero exit is interpreted, so
+	// resolve it once and reuse it for both the diagnostics and the return value.
+	verdictRecorded := false
+	if sinkPath != "" {
+		_, sinkErr := detector.ReadResultFile(sinkPath)
+		verdictRecorded = sinkErr == nil
+	}
+
+	logEngineComplete(diag, name, engineCompletion{
+		elapsed:         elapsed,
+		exitCode:        processExitCode(cmd),
+		stdoutBytes:     stdout.Len(),
+		stderrBytes:     stderr.Len(),
+		verdictRecorded: verdictRecorded,
+		err:             runErr,
+	})
+
+	if runErr != nil {
+		// The verdict was recorded; the process was intentionally killed.
+		if verdictRecorded {
+			return stdout.String(), nil
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
 			return "", engineExitError(name, exitErr.ExitCode(), stdout.String(), stderr.String())
 		}
-		return "", fmt.Errorf("failed to execute %s: %w", name, err)
+		return "", fmt.Errorf("failed to execute %s: %w", name, runErr)
 	}
 
 	return stdout.String(), nil
+}
+
+// processExitCode reports the subprocess exit code, or -1 when the process
+// never started or was terminated by a signal (which includes the deliberate
+// kill performed once the verdict is recorded).
+func processExitCode(cmd *exec.Cmd) int {
+	if cmd.ProcessState == nil {
+		return -1
+	}
+	return cmd.ProcessState.ExitCode()
+}
+
+// engineCompletion is the observed outcome of one engine subprocess.
+type engineCompletion struct {
+	elapsed         time.Duration
+	exitCode        int
+	stdoutBytes     int
+	stderrBytes     int
+	verdictRecorded bool
+	err             error
+}
+
+// logEngineComplete records how the engine subprocess ended, to both stderr and
+// the structured run log. It is the counterpart of logEngineInvoke: without it,
+// an engine that exits silently, hangs until the job timeout, or dies instantly
+// on an auth failure are indistinguishable in the job log, because each simply
+// produces no output after the invoke line.
+//
+// A subprocess killed after recording its verdict is expected, not a failure,
+// so it is reported as terminated_early rather than as an error.
+func logEngineComplete(diag cliDiag, name string, c engineCompletion) {
+	terminatedEarly := c.err != nil && c.verdictRecorded
+	outcome := "ok"
+	switch {
+	case terminatedEarly:
+		outcome = "terminated_early"
+	case c.err != nil:
+		outcome = "failed"
+	}
+
+	engineID := diag.engineID
+	if engineID == "" {
+		engineID = "unknown"
+	}
+
+	fmt.Fprintf(engineStderr(),
+		"[threat-detect] engine complete: engine=%s command=%s outcome=%s exit=%d duration=%s stdout=%dB stderr=%dB verdict_recorded=%t\n",
+		engineID, name, outcome, c.exitCode, c.elapsed.Round(time.Millisecond), c.stdoutBytes, c.stderrBytes, c.verdictRecorded)
+
+	fields := map[string]any{
+		"engine":           engineID,
+		"name":             name,
+		"outcome":          outcome,
+		"exit_code":        c.exitCode,
+		"duration_ms":      c.elapsed.Milliseconds(),
+		"stdout_bytes":     c.stdoutBytes,
+		"stderr_bytes":     c.stderrBytes,
+		"verdict_recorded": c.verdictRecorded,
+	}
+	// Only a genuine failure carries an error: the deliberate kill after a
+	// recorded verdict would otherwise fill the log with "signal: killed".
+	if c.err != nil && !terminatedEarly {
+		fields["error"] = c.err.Error()
+	}
+	diag.logger.Info("engine_complete", fields)
 }
 
 // maxEngineOutputInError bounds how much captured engine output is embedded in a
@@ -522,10 +620,19 @@ func tailTruncate(s string, max int) string {
 	return "...(truncated)... " + s[len(s)-max:]
 }
 
-// engineInvokeStderr is the destination for the human-readable engine-invoke
-// line. It is a package variable so tests can capture the emitted output; in
-// production it is os.Stderr, matching the GitHub Actions job log.
-var engineInvokeStderr io.Writer = os.Stderr
+// engineInvokeStderr overrides the destination for the human-readable engine
+// diagnostic lines. It is nil in production, where the lines resolve to
+// os.Stderr at emit time (so a caller that replaces os.Stderr, as the CLI tests
+// do, still captures them); tests set it directly to assert on the output.
+var engineInvokeStderr io.Writer
+
+// engineStderr resolves the destination for engine diagnostic lines.
+func engineStderr() io.Writer {
+	if engineInvokeStderr != nil {
+		return engineInvokeStderr
+	}
+	return os.Stderr
+}
 
 // logEngineInvoke logs the engine subprocess invocation details to both the
 // structured run log and stderr. It is called immediately before the engine
@@ -568,7 +675,7 @@ func logEngineInvoke(logger *runlog.Logger, engineID, name string, args []string
 
 	// Emit to stderr so the message appears in the GitHub Actions job log even
 	// when the engine subprocess produces no output of its own.
-	fmt.Fprintf(engineInvokeStderr, "[threat-detect] engine invoke: engine=%s model=%s command=%s args=%d\n", engineID, modelDesc, command, len(args))
+	fmt.Fprintf(engineStderr(), "[threat-detect] engine invoke: engine=%s model=%s command=%s args=%d\n", engineID, modelDesc, command, len(args))
 
 	fields := map[string]any{
 		"engine":     engineID,

@@ -248,6 +248,34 @@ inventory defined by TD-17b. The run log is an additive observability sink: it
 MUST NOT alter the result JSON contract (TD-08) or the exit codes (TD-21). A
 failure to open the log file MUST be treated as a configuration error.
 
+**TD-20j**: Before invoking the engine, the detector MUST emit engine preflight
+diagnostics describing the environment the engine will run in: the resolved
+engine and model, whether a `gh-aw` harness wrapper was found, the resolved
+engine binary (or its absence from `PATH`), the presence of the engine's
+credential and endpoint environment variables, the egress proxy configuration,
+and the runner directories. Preflight is diagnostics only: it MUST NOT gate or
+fail the run, because the authoritative answer to whether the engine can run is
+the engine subprocess itself. Preflight output MUST NOT disclose a secret value
+— a credential variable is reported only as present or absent together with its
+character length — and MUST redact credentials embedded in proxy URLs.
+Environment-derived values echoed into preflight output MUST be escaped so each
+is confined to a single physical output line and cannot emit a host workflow
+command. The diagnostics MUST be written to stderr, recorded in the run log
+(TD-20a) as an `engine_preflight` event when enabled, and appended to the step
+summary as a collapsible block when one is configured; a failure to write the
+step summary MUST NOT fail the run.
+
+**TD-20k**: After each engine subprocess ends, the detector MUST emit an engine
+completion record to stderr and, when the run log is enabled (TD-20a), as an
+`engine_complete` event. It MUST report the elapsed duration, the process exit
+code, the captured stdout and stderr byte counts, and whether a verdict was
+recorded to the result sink. A subprocess terminated because the verdict had
+already been recorded MUST be reported as an expected early termination rather
+than as an error, so the deliberate kill is not mistaken for an engine failure.
+The terminal `status` event MUST additionally carry the run's wall-clock
+`duration_ms`; the stderr status line's token set is unchanged so the host
+contract in TD-20b continues to parse.
+
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
 contract (`conclusion`, `reason`, `success`) consumed by the parent orchestrator.

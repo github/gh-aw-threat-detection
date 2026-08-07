@@ -472,3 +472,101 @@ func TestRunWarnsOnUnwritableStepSummary(t *testing.T) {
 		t.Fatalf("expected run to continue after step summary failure: %#v", records)
 	}
 }
+
+func TestRunEmitsEngineDiagnostics(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	logPath := filepath.Join(t.TempDir(), "run.jsonl")
+	summaryPath := filepath.Join(t.TempDir(), "summary.md")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	const token = "ghp_notarealtokenvalue"
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-log-file", logPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                 fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GITHUB_STEP_SUMMARY":  summaryPath,
+		"COPILOT_GITHUB_TOKEN": token,
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+
+	// Preflight lines land in the job log ...
+	for _, want := range []string{
+		"[threat-detect] preflight: engine=ok (copilot)",
+		"[threat-detect] preflight: COPILOT_GITHUB_TOKEN=set",
+		"[threat-detect] engine complete: ",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	// The reported binary must be the one actually invoked, otherwise preflight
+	// would vouch for a binary the run never uses.
+	if want := "preflight: engine_binary=ok (" + filepath.Join(fakeBinDir, "copilot") + ")"; !strings.Contains(stderr, want) {
+		t.Errorf("stderr missing %q:\n%s", want, stderr)
+	}
+	// ... but never carry the credential itself.
+	if strings.Contains(stderr, token) {
+		t.Fatal("stderr leaked the credential value")
+	}
+
+	records := readJSONLRecords(t, logPath)
+
+	preflight := findRecord(records, "engine_preflight")
+	if preflight == nil {
+		t.Fatalf("missing engine_preflight record: %#v", records)
+	}
+	if preflight["engine"] != "copilot" {
+		t.Errorf("engine_preflight engine = %v, want copilot", preflight["engine"])
+	}
+	checks, ok := preflight["checks"].([]any)
+	if !ok || len(checks) == 0 {
+		t.Fatalf("engine_preflight checks = %#v, want a non-empty list", preflight["checks"])
+	}
+
+	complete := findRecord(records, "engine_complete")
+	if complete == nil {
+		t.Fatalf("missing engine_complete record: %#v", records)
+	}
+	if complete["verdict_recorded"] != true {
+		t.Errorf("engine_complete verdict_recorded = %v, want true", complete["verdict_recorded"])
+	}
+	if _, ok := complete["duration_ms"].(float64); !ok {
+		t.Errorf("engine_complete duration_ms = %#v, want a number", complete["duration_ms"])
+	}
+
+	// Attempt and status records carry timings so a slow run is diagnosable.
+	attempt := findRecord(records, "attempt_recorded")
+	if attempt == nil {
+		t.Fatalf("missing attempt_recorded record: %#v", records)
+	}
+	if _, ok := attempt["duration_ms"].(float64); !ok {
+		t.Errorf("attempt_recorded duration_ms = %#v, want a number", attempt["duration_ms"])
+	}
+	status := findRecord(records, "status")
+	if status == nil {
+		t.Fatalf("missing status record: %#v", records)
+	}
+	if _, ok := status["duration_ms"].(float64); !ok {
+		t.Errorf("status duration_ms = %#v, want a number", status["duration_ms"])
+	}
+
+	summary, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("reading step summary: %v", err)
+	}
+	if !strings.Contains(string(summary), "<summary>Threat Detection Environment</summary>") {
+		t.Errorf("step summary missing the environment block:\n%s", summary)
+	}
+	if strings.Contains(string(summary), token) {
+		t.Fatal("step summary leaked the credential value")
+	}
+}

@@ -3,8 +3,10 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/github/gh-aw-threat-detection/pkg/runlog"
 )
@@ -104,5 +106,121 @@ func TestLogEngineInvoke_EscapesControlCharacters(t *testing.T) {
 	// The structured field preserves the exact value (JSON handles escaping).
 	if got := record["model"]; got != malicious {
 		t.Errorf("record model = %q, want %q", got, malicious)
+	}
+}
+
+// captureEngineComplete runs logEngineComplete, redirecting the stderr line
+// into a buffer and the structured record into an in-memory JSONL logger.
+func captureEngineComplete(t *testing.T, diagEngineID, name string, c engineCompletion) (string, map[string]any) {
+	t.Helper()
+
+	var stderr bytes.Buffer
+	prev := engineInvokeStderr
+	engineInvokeStderr = &stderr
+	t.Cleanup(func() { engineInvokeStderr = prev })
+
+	var jsonl bytes.Buffer
+	logger := runlog.New(&jsonl)
+
+	logEngineComplete(cliDiag{engineID: diagEngineID, logger: logger}, name, c)
+
+	var record map[string]any
+	if line := strings.TrimSpace(jsonl.String()); line != "" {
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decoding engine_complete record: %v (line: %q)", err, line)
+		}
+	}
+	return stderr.String(), record
+}
+
+func TestLogEngineComplete_Success(t *testing.T) {
+	stderr, record := captureEngineComplete(t, "copilot", "node", engineCompletion{
+		elapsed:     1500 * time.Millisecond,
+		exitCode:    0,
+		stdoutBytes: 120,
+		stderrBytes: 34,
+	})
+
+	for _, want := range []string{
+		"[threat-detect] engine complete: ",
+		"engine=copilot", "command=node", "outcome=ok", "exit=0",
+		"duration=1.5s", "stdout=120B", "stderr=34B", "verdict_recorded=false",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q missing %q", stderr, want)
+		}
+	}
+
+	if got := record["event"]; got != "engine_complete" {
+		t.Errorf("event = %v, want engine_complete", got)
+	}
+	if got := record["duration_ms"]; got != float64(1500) {
+		t.Errorf("duration_ms = %v, want 1500", got)
+	}
+	if got := record["outcome"]; got != "ok" {
+		t.Errorf("outcome = %v, want ok", got)
+	}
+	if _, ok := record["error"]; ok {
+		t.Errorf("record should omit error on success, got %v", record["error"])
+	}
+}
+
+func TestLogEngineComplete_TerminatedEarlyIsNotAnError(t *testing.T) {
+	// The subprocess is deliberately killed once the verdict lands, so the
+	// resulting "signal: killed" must not be reported as a failure.
+	stderr, record := captureEngineComplete(t, "claude", "claude", engineCompletion{
+		elapsed:         2 * time.Second,
+		exitCode:        -1,
+		verdictRecorded: true,
+		err:             errors.New("signal: killed"),
+	})
+
+	if !strings.Contains(stderr, "outcome=terminated_early") {
+		t.Errorf("stderr %q missing outcome=terminated_early", stderr)
+	}
+	if !strings.Contains(stderr, "verdict_recorded=true") {
+		t.Errorf("stderr %q missing verdict_recorded=true", stderr)
+	}
+	if got := record["outcome"]; got != "terminated_early" {
+		t.Errorf("outcome = %v, want terminated_early", got)
+	}
+	if _, ok := record["error"]; ok {
+		t.Errorf("record should omit error when terminated early, got %v", record["error"])
+	}
+	if got := record["verdict_recorded"]; got != true {
+		t.Errorf("verdict_recorded = %v, want true", got)
+	}
+}
+
+func TestLogEngineComplete_Failure(t *testing.T) {
+	stderr, record := captureEngineComplete(t, "codex", "codex", engineCompletion{
+		elapsed:  10 * time.Millisecond,
+		exitCode: 1,
+		err:      errors.New("exit status 1"),
+	})
+
+	if !strings.Contains(stderr, "outcome=failed") {
+		t.Errorf("stderr %q missing outcome=failed", stderr)
+	}
+	if got := record["error"]; got != "exit status 1" {
+		t.Errorf("error = %v, want exit status 1", got)
+	}
+	if got := record["exit_code"]; got != float64(1) {
+		t.Errorf("exit_code = %v, want 1", got)
+	}
+}
+
+func TestLogEngineComplete_NilLoggerAndUnknownEngine(t *testing.T) {
+	var stderr bytes.Buffer
+	prev := engineInvokeStderr
+	engineInvokeStderr = &stderr
+	t.Cleanup(func() { engineInvokeStderr = prev })
+
+	// A nil logger must still produce the job-log line: the stderr diagnostic
+	// is the only sink guaranteed to exist.
+	logEngineComplete(cliDiag{}, "sh", engineCompletion{elapsed: time.Second})
+
+	if !strings.Contains(stderr.String(), "engine=unknown") {
+		t.Errorf("stderr %q missing engine=unknown", stderr.String())
 	}
 }

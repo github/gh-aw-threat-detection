@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
@@ -92,6 +93,7 @@ func main() {
 }
 
 func run() (code int) {
+	started := time.Now()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -104,7 +106,15 @@ func run() (code int) {
 	defer func() {
 		if reason != "" {
 			emitStatus(reason, code)
-			logger.Info("status", map[string]any{"reason": reason, "exit": code})
+			// The stderr status line's token set is part of the host contract
+			// (conclude parses reason=), so the wall-clock duration is recorded
+			// only in the run log, where it distinguishes an instant auth
+			// failure from an engine that ran to a timeout.
+			logger.Info("status", map[string]any{
+				"reason":      reason,
+				"exit":        code,
+				"duration_ms": time.Since(started).Milliseconds(),
+			})
 		}
 		if err := logger.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error closing log file: %v\n", err)
@@ -388,6 +398,25 @@ func run() (code int) {
 		return exitError
 	}
 
+	// Describe the environment the engine is about to run in (resolved binary,
+	// gh-aw harness, credential presence, egress routing) before it starts.
+	// These are the inputs that decide whether the engine can run at all, and
+	// an engine that fails on any of them typically reports only an opaque 401
+	// or connection error — or nothing at all. They are diagnostics only and
+	// never gate the run.
+	preflight := engine.Preflight(engineID, model)
+	for _, line := range engine.FormatPreflightLines(preflight) {
+		fmt.Fprintln(os.Stderr, line)
+	}
+	logger.Info("engine_preflight", map[string]any{
+		"engine": engine.Canonical(engineID),
+		"checks": preflight,
+	})
+	if err := detector.AppendStepSummary(stepSummary, engine.FormatPreflightSummary(preflight)); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to write preflight step summary: %v\n", err)
+		logger.Error("step_summary_write_failed", map[string]any{"stage": "preflight", "error": err.Error()})
+	}
+
 	// Provision an out-of-band result sink for the in-session reporting tool.
 	sinkFile, err := os.CreateTemp("", "threat-detect-result-*.json")
 	if err != nil {
@@ -474,6 +503,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	var lastErr error
 	for i := 0; i < attempts; i++ {
 		logger.Info("attempt_start", map[string]any{"attempt": i + 1, "attempts": attempts})
+		attemptStarted := time.Now()
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
 		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath, Logger: logger}); err != nil {
@@ -483,11 +513,18 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		// threat_detection_result tool, which records it to the sink.
 		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
-			logger.Info("attempt_recorded", map[string]any{"attempt": i + 1})
+			logger.Info("attempt_recorded", map[string]any{
+				"attempt":     i + 1,
+				"duration_ms": time.Since(attemptStarted).Milliseconds(),
+			})
 			return result, nil
 		}
 		lastErr = err
-		logger.Info("attempt_no_verdict", map[string]any{"attempt": i + 1, "error": err.Error()})
+		logger.Info("attempt_no_verdict", map[string]any{
+			"attempt":     i + 1,
+			"duration_ms": time.Since(attemptStarted).Milliseconds(),
+			"error":       err.Error(),
+		})
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
