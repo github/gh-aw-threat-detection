@@ -2,7 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"html"
 	"net/url"
 	"os"
 	"os/exec"
@@ -279,24 +278,4 @@ func FormatPreflightLines(checks []PreflightCheck) []string {
 		lines = append(lines, line)
 	}
 	return lines
-}
-
-// FormatPreflightSummary renders the checks as a collapsible step-summary
-// block. Details are HTML-escaped and rendered in a table so a value containing
-// Markdown cannot restructure the job summary.
-func FormatPreflightSummary(checks []PreflightCheck) string {
-	var b strings.Builder
-	b.WriteString("<details>\n<summary>Threat Detection Environment</summary>\n\n")
-	b.WriteString("| Check | Status | Detail |\n")
-	b.WriteString("| --- | --- | --- |\n")
-	for _, c := range checks {
-		detail := ""
-		if c.Detail != "" {
-			detail = "<code>" + html.EscapeString(c.Detail) + "</code>"
-		}
-		fmt.Fprintf(&b, "| %s | %s | %s |\n",
-			html.EscapeString(c.Name), html.EscapeString(c.Status), strings.ReplaceAll(detail, "|", "&#124;"))
-	}
-	b.WriteString("\n</details>\n\n")
-	return b.String()
 }

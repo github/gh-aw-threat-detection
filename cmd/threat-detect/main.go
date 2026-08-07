@@ -31,7 +31,6 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
 	"github.com/github/gh-aw-threat-detection/pkg/runlog"
-	"github.com/github/gh-aw-threat-detection/pkg/stepsummary"
 )
 
 const (
@@ -127,7 +126,6 @@ func run() (code int) {
 		promptFile          string
 		outputJSON          string
 		logFile             string
-		stepSummary         string
 		workflowName        string
 		workflowDescription string
 		customPrompt        string
@@ -146,7 +144,6 @@ func run() (code int) {
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
 	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
 	flag.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
-	flag.StringVar(&stepSummary, "step-summary", os.Getenv("GITHUB_STEP_SUMMARY"), "Path to append the rendered prompt to the job step summary (defaults to env GITHUB_STEP_SUMMARY)")
 	flag.StringVar(&workflowName, "workflow-name", "", "Workflow name for the prompt (overrides WORKFLOW_NAME)")
 	flag.StringVar(&workflowDescription, "workflow-description", "", "Workflow description for the prompt (overrides WORKFLOW_DESCRIPTION)")
 	flag.StringVar(&customPrompt, "custom-prompt", "", "Additional detection instructions appended to the prompt (overrides CUSTOM_PROMPT)")
@@ -181,12 +178,11 @@ func run() (code int) {
 	}
 
 	// Reject collisions among the run's independently-written destinations
-	// (--log-file, --output, --step-summary): each is opened and written on
-	// its own, so aliasing any two would interleave or clobber their content.
+	// (--log-file, --output): each is opened and written on its own, so
+	// aliasing them would interleave or clobber their content.
 	if err := rejectPathCollisions(
 		namedPath{"--log-file", logFile},
 		namedPath{"--output", outputJSON},
-		namedPath{"--step-summary", stepSummary},
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		reason = reasonConfigError
@@ -237,17 +233,6 @@ func run() (code int) {
 		"patch_files":                len(arts.PatchFiles),
 		"all_primary_inputs_missing": arts.AllPrimaryInputsMissing,
 	})
-	// The step summary is a best-effort diagnostic, so a failed write must not
-	// abort detection. Under AWF the inherited GITHUB_STEP_SUMMARY can name a
-	// runner path that is not mounted inside the sandbox; treating that as a
-	// configuration error would fail the whole detection job for an
-	// observability artifact. This mirrors the prompt summary (TD-20g) and the
-	// verdict summary (TD-20h), which are already best-effort.
-	if err := stepsummary.WriteArtifactInventory(stepSummary, arts.Inventory); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to write artifact inventory summary: %v\n", err)
-		logger.Error("artifact_inventory_summary_failed", map[string]any{"error": err.Error()})
-	}
-
 	// Degraded inputs (missing/empty prompt or agent output, an expected but
 	// absent patch, an unreadable comment-memory directory, ...) are surfaced
 	// as GitHub Actions annotations so they are visible even when this binary
@@ -379,16 +364,6 @@ func run() (code int) {
 		"framework_scaffolding_markers":  scaffoldingMarkers(promptAnalysis),
 	})
 
-	// Surface the prompt actually rendered by threat-detect (including the
-	// resolved prompt-analysis section and engine/model/retries) to the job
-	// step summary. gh-aw's own prompt-rendering step summary reflects a
-	// template threat-detect never receives, so this is the only summary that
-	// reflects what was actually sent to the engine.
-	if err := detector.AppendStepSummary(stepSummary, detector.FormatPromptSummary(engine.Canonical(engineID), model, retries, prompt)); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to write prompt step summary: %v\n", err)
-		logger.Error("step_summary_write_failed", map[string]any{"stage": "prompt", "error": err.Error()})
-	}
-
 	// Create engine
 	eng, err := engine.New(engineID, model)
 	if err != nil {
@@ -412,10 +387,6 @@ func run() (code int) {
 		"engine": engine.Canonical(engineID),
 		"checks": preflight,
 	})
-	if err := detector.AppendStepSummary(stepSummary, engine.FormatPreflightSummary(preflight)); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to write preflight step summary: %v\n", err)
-		logger.Error("step_summary_write_failed", map[string]any{"stage": "preflight", "error": err.Error()})
-	}
 
 	// Provision an out-of-band result sink for the in-session reporting tool.
 	sinkFile, err := os.CreateTemp("", "threat-detect-result-*.json")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +50,6 @@ func TestRunWritesJSONLLog(t *testing.T) {
 	}
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
-	summaryPath := filepath.Join(t.TempDir(), "summary.md")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["agentic detection"]}`
 	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
@@ -60,8 +60,7 @@ func TestRunWritesJSONLLog(t *testing.T) {
 		"-log-file", logPath,
 		artifactsDir,
 	}, map[string]string{
-		"PATH":                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"GITHUB_STEP_SUMMARY": summaryPath,
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 	})
 
 	if code != exitThreat {
@@ -103,14 +102,6 @@ func TestRunWritesJSONLLog(t *testing.T) {
 	}
 	if experimentEntry["consumed"] != false {
 		t.Errorf("inventory entry = %#v, want unconsumed experiment", experimentEntry)
-	}
-
-	summary, err := os.ReadFile(summaryPath)
-	if err != nil {
-		t.Fatalf("reading step summary: %v", err)
-	}
-	if !strings.Contains(string(summary), "| <code>experiments/assignment.json</code> | 2 | file | No |") {
-		t.Errorf("step summary missing experiment inventory:\n%s", summary)
 	}
 
 	verdict := findRecord(records, "verdict")
@@ -310,50 +301,6 @@ func TestRunRejectsLogFileCollidingWithOutput(t *testing.T) {
 	}
 }
 
-func TestRunRejectsStepSummaryCollidingWithOutput(t *testing.T) {
-	artifactsDir := t.TempDir()
-	shared := filepath.Join(t.TempDir(), "same.json")
-
-	code, stderr := runWithTestArgsCapture(t, []string{
-		"threat-detect",
-		"-output", shared,
-		"-step-summary", shared,
-		artifactsDir,
-	}, nil)
-
-	if code != exitError {
-		t.Fatalf("run() exit code = %d, want %d", code, exitError)
-	}
-	if !strings.Contains(stderr, "--step-summary") || !strings.Contains(stderr, "must not point to the same file") {
-		t.Fatalf("stderr missing collision error, got:\n%s", stderr)
-	}
-	if _, err := os.Stat(shared); !os.IsNotExist(err) {
-		t.Fatalf("expected no file to be written, stat err = %v", err)
-	}
-}
-
-func TestRunRejectsStepSummaryCollidingWithLogFile(t *testing.T) {
-	artifactsDir := t.TempDir()
-	shared := filepath.Join(t.TempDir(), "same.jsonl")
-
-	code, stderr := runWithTestArgsCapture(t, []string{
-		"threat-detect",
-		"-log-file", shared,
-		"-step-summary", shared,
-		artifactsDir,
-	}, nil)
-
-	if code != exitError {
-		t.Fatalf("run() exit code = %d, want %d", code, exitError)
-	}
-	if !strings.Contains(stderr, "--step-summary") || !strings.Contains(stderr, "--log-file") {
-		t.Fatalf("stderr missing collision error mentioning both flags, got:\n%s", stderr)
-	}
-	if _, err := os.Stat(shared); !os.IsNotExist(err) {
-		t.Fatalf("expected no file to be written, stat err = %v", err)
-	}
-}
-
 func TestRunRejectsDefaultLogCollidingThroughDanglingOutputSymlink(t *testing.T) {
 	artifactsDir := t.TempDir()
 	outputDir := t.TempDir()
@@ -432,53 +379,11 @@ func TestRunRejectsUnopenableLogFile(t *testing.T) {
 	}
 }
 
-// An unwritable step summary is a best-effort diagnostic failure (TD-20c): it
-// must warn and let detection continue, not abort as a configuration error.
-// Under AWF the inherited GITHUB_STEP_SUMMARY path is outside the sandbox.
-func TestRunWarnsOnUnwritableStepSummary(t *testing.T) {
-	artifactsDir := t.TempDir()
-	writeMinimalArtifacts(t, artifactsDir)
-	logPath := filepath.Join(t.TempDir(), "run.jsonl")
-	summaryPath := filepath.Join(t.TempDir(), "missing-dir", "summary.md")
-	// This test runs past the step-summary write into the engine invocation, so
-	// the engine must be stubbed. Without a fake copilot on PATH the run would
-	// execute whatever real `copilot` the host provides — which, on a runner
-	// with working engine credentials, starts a live agentic session and hangs
-	// until the package test timeout.
-	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
-	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
-
-	code, stderr := runWithTestArgsCapture(t, []string{
-		"threat-detect",
-		"-log-file", logPath,
-		artifactsDir,
-	}, map[string]string{
-		"GITHUB_STEP_SUMMARY": summaryPath,
-		"PATH":                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-	})
-
-	if code == exitError && strings.Contains(stderr, "reason=config_error") {
-		t.Fatalf("step summary failure must not be a config error, got:\n%s", stderr)
-	}
-	if !strings.Contains(stderr, "Warning: failed to write artifact inventory summary") {
-		t.Fatalf("stderr missing summary warning, got:\n%s", stderr)
-	}
-	records := readJSONLRecords(t, logPath)
-	if findRecord(records, "artifact_inventory_summary_failed") == nil {
-		t.Fatalf("missing artifact_inventory_summary_failed record: %#v", records)
-	}
-	// Detection proceeded past the summary write to the engine invocation.
-	if findRecord(records, "prompt_built") == nil {
-		t.Fatalf("expected run to continue after step summary failure: %#v", records)
-	}
-}
-
 func TestRunEmitsEngineDiagnostics(t *testing.T) {
 	artifactsDir := t.TempDir()
 	writeMinimalArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	logPath := filepath.Join(t.TempDir(), "run.jsonl")
-	summaryPath := filepath.Join(t.TempDir(), "summary.md")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
 	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
@@ -491,7 +396,6 @@ func TestRunEmitsEngineDiagnostics(t *testing.T) {
 		artifactsDir,
 	}, map[string]string{
 		"PATH":                 fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"GITHUB_STEP_SUMMARY":  summaryPath,
 		"COPILOT_GITHUB_TOKEN": token,
 	})
 	if code != exitSafe {
@@ -531,6 +435,10 @@ func TestRunEmitsEngineDiagnostics(t *testing.T) {
 	if !ok || len(checks) == 0 {
 		t.Fatalf("engine_preflight checks = %#v, want a non-empty list", preflight["checks"])
 	}
+	// The run log must not carry the credential either.
+	if strings.Contains(fmt.Sprint(preflight["checks"]), token) {
+		t.Fatal("engine_preflight leaked the credential value")
+	}
 
 	complete := findRecord(records, "engine_complete")
 	if complete == nil {
@@ -557,16 +465,5 @@ func TestRunEmitsEngineDiagnostics(t *testing.T) {
 	}
 	if _, ok := status["duration_ms"].(float64); !ok {
 		t.Errorf("status duration_ms = %#v, want a number", status["duration_ms"])
-	}
-
-	summary, err := os.ReadFile(summaryPath)
-	if err != nil {
-		t.Fatalf("reading step summary: %v", err)
-	}
-	if !strings.Contains(string(summary), "<summary>Threat Detection Environment</summary>") {
-		t.Errorf("step summary missing the environment block:\n%s", summary)
-	}
-	if strings.Contains(string(summary), token) {
-		t.Fatal("step summary leaked the credential value")
 	}
 }

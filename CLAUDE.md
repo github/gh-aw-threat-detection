@@ -117,15 +117,14 @@ The detector reads the verdict exclusively from the out-of-band result sink. The
 └── comment-memory/*.md           # optional, inventoried only
 ```
 
-All files are recursively inventoried in the JSONL run log and Actions step
-summary. The prompt consumes only an allowlisted, size-bounded subset of
+All files are recursively inventoried in the JSONL run log. The prompt consumes only an allowlisted, size-bounded subset of
 `aw_info.json`; unknown fields are ignored and all included values are untrusted.
 
 ## Detection Flow
 
 - `pkg/detector/detector.go` (`BuildPrompt`) renders `prompts/threat_detection.md` with placeholders substituted from artifacts and `BuildPromptAnalysis` (untrusted-input breakdown).
 - The engine CLI is invoked from `PATH` via `pkg/engine/engine.go` (`copilot`, `claude`, and `codex` use engine-specific prompt-passing paths; `runCLIWithPromptFile` is used by Copilot).
-- Before the engine starts, `engine.Preflight` (`pkg/engine/preflight.go`) reports the resolved binary, harness, credential presence (never values), proxy routing, and runner dirs to stderr, the run log (`engine_preflight`), and the step summary. It never gates the run.
+- Before the engine starts, `engine.Preflight` (`pkg/engine/preflight.go`) reports the resolved binary, harness, credential presence (never values), proxy routing, and runner dirs to stderr and the run log (`engine_preflight`). It never gates the run.
 - The engine reports its verdict in-session by calling the `threat_detection_result` tool, which writes JSON to an out-of-band result sink (`pkg/engine/tool.go`); the sink is the sole source of the verdict, and the subprocess is cancelled as soon as a valid result is written. Each subprocess ends with an `engine_complete` record (duration, exit code, output sizes, verdict-recorded).
 - If no sink result is written, a one-shot self-correction prompt is built (`pkg/detector/correction.go`) and retried (`--retries`, default 1); retry exhaustion is an infrastructure error. The engine transcript is never parsed for the result.
 

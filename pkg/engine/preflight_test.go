@@ -65,8 +65,8 @@ func TestPreflight_SecretValuesAreNeverEchoed(t *testing.T) {
 		t.Errorf("detail = %q, want %q", got.Detail, want)
 	}
 
-	// The rendered forms must not leak it either.
-	rendered := strings.Join(FormatPreflightLines(checks), "\n") + FormatPreflightSummary(checks)
+	// The rendered job-log lines must not leak it either.
+	rendered := strings.Join(FormatPreflightLines(checks), "\n")
 	if strings.Contains(rendered, token) {
 		t.Fatalf("rendered preflight leaked the secret value:\n%s", rendered)
 	}
@@ -215,25 +215,6 @@ func TestFormatPreflightLines(t *testing.T) {
 	}
 	if want := "[threat-detect] preflight: GITHUB_TOKEN=unset"; lines[1] != want {
 		t.Errorf("line 1 = %q, want %q", lines[1], want)
-	}
-}
-
-func TestFormatPreflightSummary_EscapesMarkup(t *testing.T) {
-	summary := FormatPreflightSummary([]PreflightCheck{
-		{Name: "HTTPS_PROXY", Status: PreflightSet, Detail: "<script>|x</script>"},
-	})
-	if !strings.HasPrefix(summary, "<details>\n<summary>Threat Detection Environment</summary>") {
-		t.Errorf("summary should be a collapsible block, got %q", summary)
-	}
-	if strings.Contains(summary, "<script>") {
-		t.Errorf("summary should escape HTML: %q", summary)
-	}
-	// A pipe inside a detail would otherwise split the Markdown table cell.
-	if strings.Contains(summary, "|x") {
-		t.Errorf("summary should escape table pipes: %q", summary)
-	}
-	if !strings.HasSuffix(summary, "</details>\n\n") {
-		t.Errorf("summary should close the details block, got %q", summary)
 	}
 }
 

@@ -55,7 +55,7 @@ threat-detect [flags] <artifacts-dir>
 
 **Flags:**
 - `--engine` — AI engine to use (`copilot`, `claude`, `codex`). Default: `copilot`
-- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`). The value is forwarded to the engine CLI verbatim and may be a model alias (`gh-aw` defaults the detection model to the `detection` alias when none is configured); aliases are resolved by the AWF API proxy, not by the detector
+- `--model` — Model override for the engine. When unset, the detector resolves the model from `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE,CODEX}`, then the engine CLI's native model env var (`COPILOT_MODEL`, `ANTHROPIC_MODEL`). The value is forwarded to the engine CLI verbatim and may be a model alias (`gh-aw` defaults the detection model to the `detection` alias when none is configured); aliases are resolved by the AWF API proxy, not by the detector. Alias resolution is not guaranteed to land on a priced model — if the proxy steers to a model with no AI-credits pricing it rejects the request and the engine fails, so hosts that need a deterministic detection pass should configure a concrete model (see [AW Smoke Workflows](#aw-smoke-workflows))
 - `--prompt-template` — Path to custom prompt template
 - `--workflow-name` — Workflow name for the prompt. Overrides `WORKFLOW_NAME`
 - `--workflow-description` — Workflow description for the prompt. Overrides `WORKFLOW_DESCRIPTION`
@@ -63,7 +63,6 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
-- `--step-summary` — Path to append the artifact inventory table, the engine preflight (environment) block, and the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section, as a collapsible block) in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`. Best effort: a failed write warns and never fails detection
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -86,7 +85,8 @@ invocation. The model reports its verdict by running the command exactly once:
 threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reason "..."
 ```
 
-The command validates the input synchronously: on bad input it prints
+The three boolean flags accept both the space-separated form shown above and the
+`--prompt-injection=true` form. The command validates the input synchronously: on bad input it prints
 `THREAT_DETECTION_RESULT_ERROR:` and exits non-zero without recording anything,
 so the model can correct it in-session; on valid input it atomically records the
 canonical JSON verdict to the sink (first valid write wins, idempotent) and
@@ -143,8 +143,7 @@ rejected as a configuration error to avoid corrupting both outputs.
 
 #### Engine diagnostics
 
-Every run prints an engine preflight to stderr (and to the job step summary as a
-collapsible **Threat Detection Environment** block) before the engine starts,
+Every run prints an engine preflight to stderr before the engine starts,
 followed by a completion line once it ends:
 
 ```
@@ -198,24 +197,10 @@ host-side reason:
 | `config_error` | `agent_failure` |
 | absent / unrecognized / log unreadable | `agent_failure` ("Detection result file not found at: <path>") |
 
-`conclude` also accepts `--step-summary <path>` (defaulting to
-`GITHUB_STEP_SUMMARY`) to append a collapsible verdict block to the job step
-summary: per-field booleans (`prompt_injection`, `secret_leak`,
-`malicious_patch`), the reasons list, the resolved `conclusion`
-(`success`/`warning`/`failure`/`skipped`), and the reason code.
-
-Tooling failures are rendered distinctly from real security findings, matching
-`gh-aw`'s own output so automated scanners can tell them apart:
-
-| host-side `reason` | marker | block title |
-|---|---|---|
-| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Threat Detection Verdict |
-| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure |
-| absent (`success`, `skipped`) | none | Threat Detection Verdict |
-
-An engine failure block states plainly that the analysis engine could not
-complete and that this is a tooling failure, not a security finding; the same
-line is echoed into the job log.
+Tooling failures are reported distinctly from real security findings so
+reviewers can tell them apart: an `agent_failure`/`parse_error` outcome states
+plainly in the job log that the analysis engine could not complete and that this
+is a tooling failure, not a security finding.
 
 `conclude` writes a verbose, self-contained diagnostic section to the job log:
 banners framing the section, the environment inputs and resolved paths, and the
@@ -358,10 +343,7 @@ engine runs. Findings about other artifacts stay advisory warnings in both
 modes.
 
 Every file below the artifacts directory is recorded with its size and consumed
-status in the JSONL `artifacts_loaded` event and, when a step summary path is
-configured (`--step-summary`, defaulting to `GITHUB_STEP_SUMMARY`), in the
-Actions step summary. A step summary that cannot be written is reported as a
-warning and never fails detection. Only an allowlisted, size-bounded subset of
+status in the JSONL `artifacts_loaded` event. Only an allowlisted, size-bounded subset of
 `aw_info.json` is added to the detection prompt, and all of its values are
 explicitly treated as untrusted runtime data.
 
@@ -458,6 +440,27 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-codex-standalone.md`
 
 Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
+
+**Codex detection model pin.** The Codex smokes pin the detection model explicitly:
+
+```yaml
+safe-outputs:
+  threat-detection:
+    engine:
+      runtime:
+        id: codex
+      provider:
+        model: gpt-5.4-mini
+```
+
+Without this, `gh-aw` passes its default `detection` model alias to `codex exec`. The
+alias is resolved by the AWF API proxy's token steering, which can land on an
+unpriced preview model; the proxy then rejects the request with
+`unknown_model_ai_credits` and every Codex attempt exits non-zero, failing the
+detection job with `reason=engine_error exit=2`. Copilot and Claude do not hit
+this because `gh-aw` does not set `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE}` for
+them. Pinning a concrete, priced OpenAI model keeps the pass cheap and
+deterministic.
 
 ### Detection-only Workflow
 

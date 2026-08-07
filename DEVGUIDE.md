@@ -96,7 +96,7 @@ The detector operates on an artifacts directory. The current expected shape is d
 - optional `comment-memory/*.md` (inventoried only)
 
 Every non-directory entry is recursively inventoried with its size and consumed
-status for the run log and GitHub Actions step summary.
+status for the run log.
 
 When changing artifact handling, review:
 

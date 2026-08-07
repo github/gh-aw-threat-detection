@@ -87,12 +87,10 @@ func runConclude(args []string) int {
 	fs.SetOutput(os.Stderr)
 	var (
 		resultFile   string
-		stepSummary  string
 		detectionLog string
 		logFile      string
 	)
 	fs.StringVar(&resultFile, "result-file", defaultConcludeResultFile, "Path to the structured detection_result.json verdict file")
-	fs.StringVar(&stepSummary, "step-summary", os.Getenv("GITHUB_STEP_SUMMARY"), "Path to append the verdict to the job step summary (defaults to env GITHUB_STEP_SUMMARY)")
 	fs.StringVar(&detectionLog, "detection-log", "", "Path to the detection run's captured log, consulted to refine agent_failure/parse_error and to render diagnostics when the result file is missing (default: <result-file dir>/detection.log)")
 	fs.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
 	if err := fs.Parse(args); err != nil {
@@ -109,12 +107,10 @@ func runConclude(args []string) int {
 	githubEnv := os.Getenv("GITHUB_ENV")
 
 	// Reject collisions among the run's independently-written destinations:
-	// --step-summary must not alias the structured result file (which would be
-	// overwritten with Markdown after being read) or the GitHub Actions command
-	// files (which the runner may reject outright if polluted with Markdown).
+	// the structured result file must not alias the GitHub Actions command
+	// files, which the runner may reject outright if polluted with JSON.
 	if err := rejectPathCollisions(
 		namedPath{"--result-file", resultFile},
-		namedPath{"--step-summary", stepSummary},
 		namedPath{"$GITHUB_OUTPUT", githubOutput},
 		namedPath{"$GITHUB_ENV", githubEnv},
 	); err != nil {
@@ -174,7 +170,6 @@ func runConclude(args []string) int {
 		executionOutcome: os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
 		githubOutput:     githubOutput,
 		githubEnv:        githubEnv,
-		stepSummary:      stepSummary,
 		detectionLog:     detectionLog,
 		logger:           logger,
 		stdout:           os.Stdout,
@@ -193,7 +188,6 @@ type concluder struct {
 
 	githubOutput string // path of $GITHUB_OUTPUT (may be empty)
 	githubEnv    string // path of $GITHUB_ENV (may be empty)
-	stepSummary  string // path of $GITHUB_STEP_SUMMARY (may be empty)
 	detectionLog string // detection run log path; empty derives the sibling default
 	logger       *runlog.Logger
 	stdout       io.Writer
@@ -242,7 +236,6 @@ func (c *concluder) conclude(resultFile string) int {
 		c.setOutput("success", "true")
 		c.setOutput("reason", "")
 		c.exportVariable("GH_AW_DETECTION_REASON", "")
-		c.writeVerdictSummary(nil, "skipped", "")
 		c.info("✅ Detection skipped — no threats to evaluate.")
 		c.logger.Info("conclude_outcome", map[string]any{
 			"conclusion": "skipped",
@@ -313,7 +306,6 @@ func (c *concluder) conclude(resultFile string) int {
 	c.setOutput("success", "true")
 	c.setOutput("reason", "")
 	c.exportVariable("GH_AW_DETECTION_REASON", "")
-	c.writeVerdictSummary(result, "success", "")
 	c.logger.Info("conclude_outcome", map[string]any{
 		"conclusion": "success",
 		"reason":     "",
@@ -638,7 +630,6 @@ func (c *concluder) fail(result *detector.Result, reason, message string) int {
 		c.setOutput("conclusion", "warning")
 		c.exportVariable("GH_AW_DETECTION_CONCLUSION", "warning")
 		c.setOutput("success", "false")
-		c.writeVerdictSummary(result, "warning", reason)
 		c.logger.Error("conclude_outcome", map[string]any{
 			"conclusion": "warning",
 			"reason":     reason,
@@ -652,7 +643,6 @@ func (c *concluder) fail(result *detector.Result, reason, message string) int {
 	c.setOutput("conclusion", "failure")
 	c.exportVariable("GH_AW_DETECTION_CONCLUSION", "failure")
 	c.setOutput("success", "false")
-	c.writeVerdictSummary(result, "failure", reason)
 	c.logger.Error("conclude_outcome", map[string]any{
 		"conclusion": "failure",
 		"reason":     reason,
@@ -661,15 +651,6 @@ func (c *concluder) fail(result *detector.Result, reason, message string) int {
 		"message":    message,
 	})
 	return concludeExitFail
-}
-
-// writeVerdictSummary appends the verdict block to the job step summary,
-// logging (but not failing on) any write error since the summary is a
-// best-effort diagnostic aid, not part of the conclude contract.
-func (c *concluder) writeVerdictSummary(result *detector.Result, conclusion, reasonCode string) {
-	if err := detector.AppendStepSummary(c.stepSummary, detector.FormatVerdictSummary(result, conclusion, reasonCode)); err != nil {
-		fmt.Fprintf(os.Stderr, "conclude: failed to write step summary: %v\n", err)
-	}
 }
 
 // setOutput appends a step output to $GITHUB_OUTPUT. Values are single-line
