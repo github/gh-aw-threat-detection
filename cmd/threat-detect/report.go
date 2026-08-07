@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
@@ -49,7 +51,7 @@ func runReport(args []string) int {
 	fs.Var(&reasons, "reason", "Reason explaining a detected threat (repeatable)")
 	fs.StringVar(&resultFile, "result-file", os.Getenv("THREAT_DETECTION_RESULT_FILE"), "Path to the result sink file (defaults to env THREAT_DETECTION_RESULT_FILE)")
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(normalizeBoolFlagArgs(args)); err != nil {
 		reportError(err.Error())
 		return reportExitInvalid
 	}
@@ -57,7 +59,7 @@ func runReport(args []string) int {
 	// All three boolean flags are required and must be explicitly provided.
 	provided := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { provided[f.Name] = true })
-	for _, name := range []string{"prompt-injection", "secret-leak", "malicious-patch"} {
+	for _, name := range boolReportFlags {
 		if !provided[name] {
 			reportError(fmt.Sprintf("missing required flag --%s (must be true or false)", name))
 			return reportExitInvalid
@@ -95,6 +97,44 @@ func runReport(args []string) int {
 
 	fmt.Println("THREAT_DETECTION_RESULT_RECORDED: analysis complete; stop now and produce no further output.")
 	return reportExitOK
+}
+
+// boolReportFlags are the boolean flags of the report-result subcommand.
+var boolReportFlags = []string{"prompt-injection", "secret-leak", "malicious-patch"}
+
+// normalizeBoolFlagArgs rewrites space-separated boolean flag values
+// (`--prompt-injection true`) into the `--prompt-injection=true` form that Go's
+// flag package requires. The documented tool invocation uses the space-separated
+// form, which flag would otherwise parse as a bare `true` boolean flag followed
+// by a positional argument that silently terminates parsing.
+func normalizeBoolFlagArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		name := strings.TrimLeft(arg, "-")
+		if name != arg && isBoolReportFlag(name) && i+1 < len(args) {
+			if value, err := strconv.ParseBool(args[i+1]); err == nil {
+				out = append(out, arg+"="+strconv.FormatBool(value))
+				i++
+				continue
+			}
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+func isBoolReportFlag(name string) bool {
+	for _, candidate := range boolReportFlags {
+		if name == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 // reportError prints a bounded, actionable error to both stdout (so it is visible

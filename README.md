@@ -86,7 +86,8 @@ invocation. The model reports its verdict by running the command exactly once:
 threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reason "..."
 ```
 
-The command validates the input synchronously: on bad input it prints
+The three boolean flags accept both the space-separated form shown above and the
+`--prompt-injection=true` form. The command validates the input synchronously: on bad input it prints
 `THREAT_DETECTION_RESULT_ERROR:` and exits non-zero without recording anything,
 so the model can correct it in-session; on valid input it atomically records the
 canonical JSON verdict to the sink (first valid write wins, idempotent) and
