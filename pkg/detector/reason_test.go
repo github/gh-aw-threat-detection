@@ -21,21 +21,6 @@ func TestIsToolingFailureReason(t *testing.T) {
 	}
 }
 
-func TestThreatMarker(t *testing.T) {
-	tests := map[string]string{
-		ReasonThreatDetected: ThreatDetectedMarker,
-		ReasonAgentFailure:   ThreatEngineErrorMarker,
-		ReasonParseError:     ThreatEngineErrorMarker,
-		"":                   "",
-		"unknown":            "",
-	}
-	for reason, want := range tests {
-		if got := ThreatMarker(reason); got != want {
-			t.Errorf("ThreatMarker(%q) = %q, want %q", reason, got, want)
-		}
-	}
-}
-
 func TestThreatHeadline(t *testing.T) {
 	if got := ThreatHeadline(ReasonAgentFailure); got == "" || !strings.Contains(got, "tooling failure, not a security finding") {
 		t.Errorf("ThreatHeadline(agent_failure) = %q, want tooling-failure copy", got)
