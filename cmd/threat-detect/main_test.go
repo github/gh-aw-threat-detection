@@ -827,3 +827,44 @@ func TestRunStartLineEscapesEngineID(t *testing.T) {
 		}
 	}
 }
+
+// TestRunAcceptsAndIgnoresStepSummaryFlag verifies the removed --step-summary
+// option is still parsed and dropped (TD-20c) so hosts that still pass it do not
+// abort detection with a flag error.
+func TestRunAcceptsAndIgnoresStepSummaryFlag(t *testing.T) {
+	artifactsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(artifactsDir, "aw-prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"), []byte("analyze this"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	summaryPath := filepath.Join(t.TempDir(), "step-summary.md")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-step-summary", summaryPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "ignoring deprecated --step-summary") {
+		t.Errorf("stderr missing the ignored --step-summary notice, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(summaryPath); !os.IsNotExist(err) {
+		t.Errorf("expected no step summary to be written to %s, stat err = %v", summaryPath, err)
+	}
+}

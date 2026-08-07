@@ -170,6 +170,7 @@ versions.
 | `--prompt-template <path>` | Override the embedded default prompt |
 | `--output <path>` | Write the JSON result to a file instead of stdout |
 | `--retries <n>` | Retries for malformed detection outputs (default `1`) |
+| `--step-summary <path>` | Deprecated and ignored; accepted only for compatibility with hosts that still pass it (per TD-20c) |
 | `--version` | Print version and exit |
 
 ---
