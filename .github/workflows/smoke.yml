@@ -2,21 +2,6 @@ name: Smoke
 
 on:
   workflow_dispatch:
-    inputs:
-      scope:
-        description: >-
-          Which smokes to dispatch: the reproducible pinned smokes only
-          (standard), both the pinned and the latest-detector smokes
-          (standard+latest), or only the latest-detector smokes (latest). The
-          latest smokes test the newest detector build as last regenerated per
-          the update-workflow-versions skill.
-        required: false
-        default: standard
-        type: choice
-        options:
-          - standard
-          - standard+latest
-          - latest
 
 permissions:
   actions: write
@@ -26,8 +11,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch standard smoke workflows
-        if: ${{ inputs.scope == 'standard' || inputs.scope == 'standard+latest' }}
+      - name: Dispatch smoke workflows
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -53,33 +37,6 @@ jobs:
 
           if [ "${#failures[@]}" -gt 0 ]; then
             printf 'Failed to dispatch %d workflow(s):\n' "${#failures[@]}" >&2
-            printf '  %s\n' "${failures[@]}" >&2
-            exit 1
-          fi
-      - name: Dispatch latest smoke workflows
-        if: ${{ inputs.scope == 'latest' || inputs.scope == 'standard+latest' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          REF: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          latest=(
-            smoke-copilot-standalone-latest.lock.yml
-            smoke-claude-standalone-latest.lock.yml
-            smoke-codex-standalone-latest.lock.yml
-          )
-          failures=()
-          for workflow in "${latest[@]}"; do
-            if gh workflow run "$workflow" --repo "$REPO" --ref "$REF"; then
-              echo "Dispatched $workflow"
-            else
-              echo "Failed to dispatch $workflow" >&2
-              failures+=("$workflow")
-            fi
-          done
-          if [ "${#failures[@]}" -gt 0 ]; then
-            printf 'Failed to dispatch %d latest workflow(s):\n' "${#failures[@]}" >&2
             printf '  %s\n' "${failures[@]}" >&2
             exit 1
           fi

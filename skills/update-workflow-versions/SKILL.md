@@ -1,6 +1,6 @@
 ---
 name: update-workflow-versions
-description: How to manually regenerate the compiled agentic workflow .lock.yml files when the gh-aw Version Check workflow reports version drift (standard, standalone smoke, and standalone latest workflows).
+description: How to manually regenerate the compiled agentic workflow .lock.yml files when the gh-aw Version Check workflow reports version drift (standard and standalone smoke workflows).
 ---
 
 # Updating Agentic Workflow Versions
@@ -20,32 +20,29 @@ recompile locally and opens a PR.
 
 Each agentic workflow source (`.github/workflows/*.md`) is compiled by the
 `gh-aw` compiler into a committed `*.lock.yml`. The version baked into a lock is
-whatever compiler produced it, and the workflows fall into three categories that
-track **different** target versions:
+whatever compiler produced it, and the workflows fall into two categories that
+track **different** gh-aw versions:
 
-| Category | Lock filename pattern | gh-aw version | detector version |
-|----------|-----------------------|---------------|------------------|
-| standard | anything else, e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release | n/a (gh-aw's built-in default) |
-| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** | n/a (gh-aw's built-in default) |
-| standalone latest | `*-standalone-latest.lock.yml` | latest `github/gh-aw` (pre)release | latest `github/gh-aw-threat-detection` (pre)release |
+| Category | Lock filename pattern | gh-aw version |
+|----------|-----------------------|---------------|
+| standard | anything else, e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release |
+| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** |
 
-The **standalone latest** locks are special: their detector version is *not* the
-gh-aw built-in constant. They are compiled by a gh-aw whose
-`constants.DefaultThreatDetectVersion` has been patched to the newest detector
-release, so they exercise the newest detector through the real gh-aw + AWF path.
-Running a plain `gh aw compile` over a `*-standalone-latest.md` would revert that
-patch — for those you must build a patched compiler from source (step 3 below).
+**Only the gh-aw version needs bumping.** The detector version is *not* pinned in
+the locks: gh-aw emits the literal `latest` to
+`install_threat_detect_binary.sh`, which resolves it at runtime from
+`GET /repos/github/gh-aw-threat-detection/releases/latest` — the newest
+**non-prerelease** release. Promoting a detector release is therefore enough to
+put it into the smokes; no recompile is required.
 
-## 1. Determine the target versions
+## 1. Determine the target gh-aw versions
 
 The drift issue lists them. To confirm or resolve them yourself (any method
 works — `gh`, `curl`, or the GitHub Releases UI). Newest = most recent by publish
-date whose tag looks like `v<digit>...`; ignore drafts and rolling refs such as
-the detector's `main`:
+date whose tag looks like `v<digit>...`; ignore drafts:
 
 - **stable gh-aw** — newest **non-prerelease** `github/gh-aw` release.
 - **latest gh-aw** — newest `github/gh-aw` release **or** prerelease.
-- **latest detector** — newest `github/gh-aw-threat-detection` release **or** prerelease.
 
 For example, with `gh` available:
 
@@ -59,67 +56,82 @@ gh api repos/github/gh-aw/releases --paginate \
 gh api repos/github/gh-aw/releases --paginate \
   --jq '.[] | select(.draft == false) | select(.tag_name | test("^v[0-9]")) | [.published_at, .tag_name] | @tsv' \
   | sort | tail -n1 | cut -f2
-
-# latest detector (newest release or prerelease):
-gh api repos/github/gh-aw-threat-detection/releases --paginate \
-  --jq '.[] | select(.draft == false) | select(.tag_name | test("^v[0-9]")) | [.published_at, .tag_name] | @tsv' \
-  | sort | tail -n1 | cut -f2
 ```
 
-In the steps below, refer to these as `<TARGET_GH_AW_STABLE>`,
-`<TARGET_GH_AW_LATEST>`, and `<TARGET_DETECTOR>`.
+In the steps below, refer to these as `<TARGET_GH_AW_STABLE>` and
+`<TARGET_GH_AW_LATEST>`.
 
-## 2. Recompile standard and standalone smoke locks
+## 2. Recompile the locks
 
-These use the plain `gh aw` compiler pinned to the target gh-aw tag. Use the
-**stable** tag for standard workflows and the **latest** tag for `*-standalone.md`
-smokes.
+Use the **stable** tag for standard workflows and the **latest** tag for
+`*-standalone.md` smokes. The released `gh aw` extension is the simplest route:
 
 ```bash
-# standard workflows (everything that is not a *-standalone*.md):
+# standard workflows (everything that is not a *-standalone.md):
 gh extension install github/gh-aw --pin <TARGET_GH_AW_STABLE>
 gh aw compile --action-mode action --action-tag <TARGET_GH_AW_STABLE> --no-check-update \
   <the affected standard .md files>
 
-# standalone smoke workflows (*-standalone.md, not *-standalone-latest.md):
+# standalone smoke workflows:
 gh extension install github/gh-aw --pin <TARGET_GH_AW_LATEST> --force
 gh aw compile --action-mode action --action-tag <TARGET_GH_AW_LATEST> --no-check-update \
   .github/workflows/*-standalone.md
 ```
 
-## 3. Recompile the standalone latest locks
+### Building the compiler from source instead
 
-The `*-standalone-latest.md` files must be compiled by a gh-aw built from source
-at the latest gh-aw tag with the detector constant patched to the target detector
-release. A plain `gh aw compile` would revert that patch, so build the compiler
-yourself:
+If `gh extension install` is unavailable (no `gh` auth, offline, etc.), build
+gh-aw from source — but you **must** set both version ldflags:
 
 ```bash
-git clone --depth 1 --branch <TARGET_GH_AW_LATEST> https://github.com/github/gh-aw /tmp/gh-aw-src
-sed -i -E 's/(DefaultThreatDetectVersion Version = )"[^"]*"/\1"<TARGET_DETECTOR>"/' \
-  /tmp/gh-aw-src/pkg/constants/version_constants.go
-( cd /tmp/gh-aw-src && go build -o /tmp/gh-aw ./cmd/gh-aw )
-/tmp/gh-aw compile --action-mode action --action-tag <TARGET_GH_AW_LATEST> --no-check-update \
-  .github/workflows/*-standalone-latest.md
+git clone --depth 1 --branch <TAG> https://github.com/github/gh-aw /tmp/gh-aw-src
+( cd /tmp/gh-aw-src && go build -ldflags "-X main.version=<TAG> -X main.isRelease=true" -o /tmp/gh-aw ./cmd/gh-aw )
 ```
 
-## 4. Verify and open a PR
+> [!IMPORTANT]
+> `-X main.isRelease=true` is not optional. `cmd/gh-aw/main.go` defaults
+> `isRelease` to `"false"` and passes it to `workflow.SetIsRelease()`, which
+> normalizes the emitted `compiler_version` / `GH_AW_VERSION` to `dev` and skips
+> release-only generation. Locks compiled without it look superficially fine but
+> carry `dev` at runtime.
+
+Verify before compiling:
+
+```bash
+/tmp/gh-aw version   # must print the target tag, not "dev"
+```
+
+## 3. Verify and open a PR
 
 1. Sanity-check that only the intended version bumps changed:
    ```bash
    git status --short -- .github/workflows
    git diff -- .github/workflows
    ```
-   Confirm each regenerated lock now carries the target `compiler_version` (and,
-   for `*-standalone-latest`, the target `install_threat_detect_binary.sh`
-   detector version). Re-running the **gh-aw Version Check** workflow after the PR
-   merges should report no drift.
+   Confirm each regenerated lock carries the target version in **both** places —
+   they must not say `dev`:
+   ```bash
+   grep -o '"compiler_version":"[^"]*"' .github/workflows/*.lock.yml
+   grep -n 'GH_AW_VERSION:' .github/workflows/*.lock.yml
+   ```
+   Re-running the **gh-aw Version Check** workflow after the PR merges should
+   report no drift.
 2. Commit only the regenerated `*.lock.yml` files (and any intended `.md`
-   changes). Open a PR describing the version bumps.
+   changes). The compiler also refreshes `.github/aw/actions-lock.json` and may
+   touch `.gitattributes` — that churn is expected. Open a PR describing the
+   version bumps.
 3. **Pushing workflow-file changes requires a token with the `workflows`
    permission.** The built-in `GITHUB_TOKEN` (github-actions[bot]) is rejected
    for changes under `.github/workflows/`, so this regeneration is done by a
    maintainer / agent whose credentials carry that permission — not by an
    automated push in the version-check workflow.
-4. After merging, dispatch the affected smoke workflows (top-level **Smoke**
-   workflow) to confirm the new versions run green.
+4. After merging, dispatch the top-level **Smoke** workflow to confirm the new
+   versions run green.
+
+## Testing an unpromoted detector prerelease
+
+The smokes only ever see **promoted** detector releases. To exercise a
+prerelease under AWF before promoting it, set the `GH_AW_THREAT_DETECTION_VERSION`
+repository variable to the prerelease tag and dispatch
+`.github/workflows/detection-only.yml`, which runs the same AWF detection job
+body against local fixtures. Unset the variable afterwards.

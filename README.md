@@ -416,7 +416,7 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-claude-standalone.md`
 - `.github/workflows/smoke-codex-standalone.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually with a `scope` input — `standard` (the three pinned `*-standalone` smokes), `standard+latest` (also their `*-standalone-latest` counterparts), or `latest` (only the latest smokes). The matching `.lock.yml` files are the compiled AW workflows. The `*-standalone` variants set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform (pinned to a promoted release tag), runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. Each also has a `smoke-<engine>-standalone-latest.md` counterpart that tests the newest detector build — see [Testing the Latest Detector Under AWF](#testing-the-latest-detector-under-awf).
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three at once. The matching `.lock.yml` files are the compiled AW workflows. They set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform, runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. The detector version they install is resolved at run time — see [Detector Version Selection](#detector-version-selection).
 
 **Codex detection model pin.** The Codex smokes pin the detection model explicitly:
 
@@ -443,39 +443,38 @@ deterministic.
 
 `.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `smoke-copilot-standalone` smoke workflow — it installs the released `threat-detect` binary, runs `threat-detect --engine copilot --output detection_result.json` under AWF, and concludes from the structured `detection_result.json` via `conclude_threat_detection.sh` — while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
 
-### Testing the Latest Detector Under AWF
+### Detector Version Selection
 
-Production gh-aw **hard-pins** the `threat-detect` binary version as a compile-time Go constant (`constants.DefaultThreatDetectVersion`). That makes the scheduled `*-standalone` smokes faithful to production, but they can never exercise a newer detector build — bumping the version requires a new gh-aw release. There is no frontmatter, repo-variable, or custom-step hook to override it.
+The smoke workflows do **not** pin a detector version. gh-aw emits the literal `latest` to `install_threat_detect_binary.sh`, which resolves it at run time via `GET /repos/github/gh-aw-threat-detection/releases/latest` — the newest **non-prerelease** release. Promoting a detector release is therefore all it takes to put that build in front of the smokes; no recompile, no new gh-aw release.
 
-To close that gap without maintaining a parallel non-AWF code path, the repo keeps a **latest** counterpart of each smoke — `smoke-<engine>-standalone-latest.{md,lock.yml}` — whose `.lock.yml` is compiled by a gh-aw whose detector constant has been patched to the newest detector build. Everything else matches production, so detection still runs through the *real* native gh-aw + AWF path.
+> [!NOTE]
+> This repo previously carried a `smoke-<engine>-standalone-latest` counterpart of each smoke, compiled by a gh-aw whose `constants.DefaultThreatDetectVersion` had been patched to the newest detector build. That existed only because the constant used to be a hard-pinned tag that could not be moved without a new gh-aw release. gh-aw v0.86.x changed the default to `latest`, so those variants — and the patched-compiler build step they required — were removed.
 
-The compiled workflow locks fall into three version categories:
+Because `releases/latest` ignores prereleases, an **unpromoted** prerelease is never picked up automatically. To exercise one under AWF before promoting it, set the `GH_AW_THREAT_DETECTION_VERSION` repository variable to the prerelease tag and dispatch `.github/workflows/detection-only.yml`, then unset it.
 
-| Category | Lock filename pattern | gh-aw version | detector version |
-|----------|-----------------------|---------------|------------------|
-| standard | e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release | gh-aw's built-in default |
-| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** | gh-aw's built-in default |
-| standalone latest | `*-standalone-latest.lock.yml` | latest `github/gh-aw` (pre)release | latest `github/gh-aw-threat-detection` (pre)release |
+### Keeping the Compiled Locks Current
 
-**Keeping the locks current.** The `.github/workflows/gh-aw-version-check.yml` workflow runs daily (and on demand). It is **read-only** — it builds and compiles nothing. It reads the versions already baked into each `.lock.yml`, compares them against the targets for that category, and, when any lock is stale, opens (or updates) a single tracking issue listing every workflow that needs regenerating and the target versions. When everything is in sync it closes that issue.
+The compiled workflow locks fall into two version categories:
 
-Regenerating the locks is a **separate, manual, human-reviewed step** because pushing changes under `.github/workflows/` requires a token with the `workflows` permission, which the built-in `GITHUB_TOKEN` lacks. Follow the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill: recompile the affected sources with the target gh-aw version (building a detector-patched compiler from source for the `*-standalone-latest` locks), then open a PR.
+| Category | Lock filename pattern | gh-aw version |
+|----------|-----------------------|---------------|
+| standard | e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release |
+| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** |
 
-The `smoke-<engine>-standalone-latest` workflows themselves are **dispatch-only** plus a `push` trigger scoped to their own `.lock.yml` on `main`: merging a regeneration PR updates a lock, which triggers that engine's latest smoke automatically. They never run on a schedule, so the pinned `*-standalone` smokes' steady-state behaviour is unchanged.
+The `.github/workflows/gh-aw-version-check.yml` workflow runs daily (and on demand). It is **read-only** — it builds and compiles nothing. It reads the `compiler_version` already baked into each `.lock.yml`, compares it against the target for that category, and, when any lock is stale, opens (or updates) a single tracking issue listing every workflow that needs regenerating and the target versions. When everything is in sync it closes that issue.
+
+Regenerating the locks is a **separate, manual, human-reviewed step** because pushing changes under `.github/workflows/` requires a token with the `workflows` permission, which the built-in `GITHUB_TOKEN` lacks. Follow the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill: recompile the affected sources with the target gh-aw version, then open a PR.
 
 **Tag → test → promote loop:**
 
-1. Cut a release tag (`create-release-tag.yml`); `release.yml` publishes a version-tagged **prerelease** with the recorded asset sha256. The next `gh-aw-version-check.yml` run (or a manual dispatch) flags that the latest locks are behind the new detector tag.
-2. Regenerate the latest locks per the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill and open a PR.
-3. Review and merge the PR, then confirm every `smoke-<engine>-standalone-latest` run is green.
-4. Promote with `promote-release.yml`; it re-verifies the asset sha256 and marks the release **Latest** (stable). The pinned `*-standalone` smokes continue to run against the promoted tag.
-
-You can also start the latest smokes from the top-level **Smoke** workflow by dispatching it with `scope: latest` (or `scope: standard+latest` to run both alongside the pinned smokes).
+1. Cut a release tag (`create-release-tag.yml`); `release.yml` publishes a version-tagged **prerelease** with the recorded asset sha256.
+2. Optionally exercise the prerelease under AWF via `detection-only.yml` and the `GH_AW_THREAT_DETECTION_VERSION` variable, as described above.
+3. Promote with `promote-release.yml`; it re-verifies the asset sha256 and marks the release **Latest** (stable). The smokes pick up the promoted tag on their next run with no recompile.
 
 > [!NOTE]
 > `gh-aw-version-check.yml` only needs `contents: read` and `issues: write` — it detects drift and files an issue, but never pushes. Regenerating the `*.lock.yml` files (via the `update-workflow-versions` skill) is done by a maintainer/agent whose credentials carry the `workflows` permission.
 >
-> The `smoke-<engine>-standalone-latest.lock.yml` files must **not** be regenerated by a plain `gh aw compile` — running the normal compiler over their `.md` would revert the patched detector version. Build a detector-patched compiler from source as the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill describes.
+> If you build the gh-aw compiler from source rather than installing the released extension, you must pass **both** `-X main.version=<TAG>` and `-X main.isRelease=true`. Without the latter, gh-aw normalizes the emitted `compiler_version` / `GH_AW_VERSION` to `dev` and skips release-only generation.
 
 | Secret | Required for | Notes |
 |--------|--------------|-------|
@@ -491,7 +490,7 @@ Optional Actions variables:
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. When `--model` is not passed, the detector reads the variable matching the selected engine; if it is unset, it falls back to the engine CLI's native model env var (`COPILOT_MODEL` for copilot, `ANTHROPIC_MODEL` for claude). |
-| `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml` (defaults to the latest promoted release when unset). The scheduled `*-standalone` smoke workflows instead pin a specific promoted tag at compile time for reproducibility, and the `*-standalone-latest` variants pin whatever they were last regenerated against — the newest gh-aw / detector version release, prerelease or stable (see the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill). |
+| `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml` (defaults to the latest promoted release when unset). Set it to a prerelease tag to exercise an unpromoted build under AWF. The `*-standalone` smoke workflows ignore this variable — they resolve the newest promoted release at run time (see [Detector Version Selection](#detector-version-selection)). |
 
 ### Build
 

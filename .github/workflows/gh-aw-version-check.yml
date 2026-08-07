@@ -5,8 +5,11 @@ name: gh-aw Version Check
 #
 #   * standard workflows        -> latest STABLE github/gh-aw release
 #   * standalone smoke workflows-> latest github/gh-aw release OR prerelease
-#   * standalone latest workflows-> latest github/gh-aw (pre)release
-#                                   AND latest github/gh-aw-threat-detection (pre)release
+#
+# Only the gh-aw compiler version is checked. The detector version is no longer
+# baked into a lock: gh-aw resolves `latest` at runtime from the detector's
+# releases/latest endpoint, so it always tracks the newest promoted release
+# without a recompile.
 #
 # It does NOT build or compile anything. When drift is found it opens (or
 # updates) a single tracking issue listing every workflow that needs updating
@@ -76,8 +79,7 @@ jobs:
 
           gh_aw_stable="$(newest_tag "$GH_AW_REPO" false)"
           gh_aw_latest="$(newest_tag "$GH_AW_REPO" true)"
-          detector_latest="$(newest_tag "$DETECTOR_REPO" true)"
-          for pair in "gh-aw stable:$gh_aw_stable" "gh-aw latest:$gh_aw_latest" "detector latest:$detector_latest"; do
+          for pair in "gh-aw stable:$gh_aw_stable" "gh-aw latest:$gh_aw_latest"; do
             val="${pair#*:}"
             [ -n "$val" ] && [ "$val" != "null" ] || { echo "::error::could not resolve ${pair%%:*} version"; exit 1; }
           done
@@ -85,13 +87,10 @@ jobs:
           echo "Target versions:"
           echo "  gh-aw (stable)   : $gh_aw_stable"
           echo "  gh-aw (latest)   : $gh_aw_latest"
-          echo "  detector (latest): $detector_latest"
           echo
 
           # gh-aw compiler version baked into a lock file.
           lock_compiler_version() { grep -o '"compiler_version":"[^"]*"' "$1" | head -n1 | sed 's/.*:"//;s/"//'; }
-          # Detector version pinned by install_threat_detect_binary.sh.
-          lock_detector_version() { sed -nE 's/.*install_threat_detect_binary\.sh"[[:space:]]+([vV][0-9][^"[:space:]]*).*/\1/p' "$1" | head -n1; }
 
           drift_rows=""
           add_row() { drift_rows+="${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5}"$'\n'; }
@@ -104,9 +103,8 @@ jobs:
           for lock in "${lock_files[@]}"; do
             base="$(basename "$lock" .lock.yml)"
             case "$base" in
-              *-standalone-latest) category="standalone latest" ;;
-              *-standalone)        category="standalone smoke" ;;
-              *)                   category="standard" ;;
+              *-standalone) category="standalone smoke" ;;
+              *)            category="standard" ;;
             esac
 
             cur_ghaw="$(lock_compiler_version "$lock")"
@@ -120,17 +118,6 @@ jobs:
               echo "DRIFT  $base [$category] gh-aw $cur_ghaw -> $want_ghaw"
             else
               echo "ok     $base [$category] gh-aw $cur_ghaw"
-            fi
-
-            if [ "$category" = "standalone latest" ]; then
-              cur_det="$(lock_detector_version "$lock")"
-              [ -n "$cur_det" ] || { echo "::error::no install_threat_detect_binary.sh version in $lock"; exit 1; }
-              if [ "$cur_det" != "$detector_latest" ]; then
-                add_row "$base" "$category" "detector" "$cur_det" "$detector_latest"
-                echo "DRIFT  $base [$category] detector $cur_det -> $detector_latest"
-              else
-                echo "ok     $base [$category] detector $cur_det"
-              fi
             fi
           done
 
@@ -155,7 +142,6 @@ jobs:
             echo "|----------|--------|---------|"
             echo "| standard | latest **stable** \`${GH_AW_REPO}\` release | \`${gh_aw_stable}\` |"
             echo "| standalone smoke | latest \`${GH_AW_REPO}\` release **or prerelease** | \`${gh_aw_latest}\` |"
-            echo "| standalone latest | latest \`${GH_AW_REPO}\` (pre)release + latest \`${DETECTOR_REPO}\` (pre)release | gh-aw \`${gh_aw_latest}\`, detector \`${detector_latest}\` |"
             echo
             echo "### Workflows needing an update"
             echo
