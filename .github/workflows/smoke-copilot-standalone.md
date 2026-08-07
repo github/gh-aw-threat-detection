@@ -54,6 +54,17 @@ threat-detect path** (`features: gh-aw-detection: true`). gh-aw downloads the
 published `threat-detect` binary from the `github/gh-aw-threat-detection` releases
 and runs it under AWF, replacing the script-generated container sibling.
 
+## Turn Budget
+
+You have a strict turn budget. Run each shell command **once** and do not poll
+it in a loop or re-run it in the background.
+
+A long-running command (for example a full build or test run) may exceed the
+shell tool's own timeout. In that case you may back it with a single background
+run and wait for it **once**, for at most 5 minutes total. If it has not
+finished by then, record ❌ for that check and move on to the next
+requirement — do not keep waiting.
+
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
