@@ -276,9 +276,11 @@ surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
 **TD-20c**: The detector MUST NOT write to the GitHub Actions step summary. The
-artifact inventory defined by TD-17b, the rendered prompt, and the conclusion
-verdict are surfaced through the run log (TD-20a) and the `conclude`
-diagnostics (TD-20d) only.
+artifact inventory defined by TD-17b is surfaced through the run log (TD-20a)
+only, and the conclusion verdict through the run log and the `conclude`
+diagnostics (TD-20d). The rendered prompt itself is not surfaced: the run log
+records only its metadata (byte count, resolved workflow name/description,
+custom-prompt provenance, scaffolding detection).
 
 **TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
 section to standard output that is sufficient, on its own, to explain the
