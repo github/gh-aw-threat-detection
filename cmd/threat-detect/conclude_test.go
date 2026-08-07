@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
 
 // parseKV reads a name=value file (as written to $GITHUB_OUTPUT / $GITHUB_ENV)
@@ -365,67 +363,6 @@ func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
 				t.Errorf("GH_AW_DETECTION_CONCLUSION = %q, want %q", got, tt.wantConclusion)
 			}
 		})
-	}
-}
-
-func TestConcludeWritesVerdictStepSummary(t *testing.T) {
-	dir := t.TempDir()
-	stepSummaryPath := filepath.Join(dir, "step_summary.md")
-	resultFile := writeResultFixture(t, threatVerdict)
-
-	var stdout bytes.Buffer
-	c := &concluder{
-		runDetection: "true",
-		warnMode:     false,
-		githubOutput: filepath.Join(dir, "out"),
-		githubEnv:    filepath.Join(dir, "env"),
-		stepSummary:  stepSummaryPath,
-		stdout:       &stdout,
-	}
-	if code := c.run(resultFile); code != concludeExitFail {
-		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
-	}
-
-	data, err := os.ReadFile(stepSummaryPath)
-	if err != nil {
-		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
-	}
-	summary := string(data)
-	for _, want := range []string{
-		"<summary>Threat Detection Verdict</summary>",
-		"| Prompt Injection | true |",
-		"| Conclusion | failure |",
-		"| Reason Code | threat_detected |",
-		"jailbreak attempt",
-	} {
-		if !strings.Contains(summary, want) {
-			t.Errorf("step summary missing %q; got:\n%s", want, summary)
-		}
-	}
-}
-
-func TestConcludeSkippedWritesVerdictStepSummary(t *testing.T) {
-	dir := t.TempDir()
-	stepSummaryPath := filepath.Join(dir, "step_summary.md")
-
-	var stdout bytes.Buffer
-	c := &concluder{
-		runDetection: "false",
-		githubOutput: filepath.Join(dir, "out"),
-		githubEnv:    filepath.Join(dir, "env"),
-		stepSummary:  stepSummaryPath,
-		stdout:       &stdout,
-	}
-	if code := c.run(filepath.Join(dir, "detection_result.json")); code != concludeExitProceed {
-		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitProceed, stdout.String())
-	}
-
-	data, err := os.ReadFile(stepSummaryPath)
-	if err != nil {
-		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
-	}
-	if !strings.Contains(string(data), "| Conclusion | skipped |") {
-		t.Errorf("step summary missing skipped conclusion; got:\n%s", string(data))
 	}
 }
 
@@ -1106,15 +1043,16 @@ func TestConcludeUnopenableLogFileIsConfigError(t *testing.T) {
 	}
 }
 
-func TestRunConcludeRejectsStepSummaryCollidingWithResultFile(t *testing.T) {
+func TestRunConcludeRejectsResultFileCollidingWithGithubOutput(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := writeResultFixture(t, safeVerdict)
+	shared := resultFile
 
 	t.Setenv("RUN_DETECTION", "true")
-	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+	t.Setenv("GITHUB_OUTPUT", shared)
 	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
 
-	code := runConclude([]string{"--result-file", resultFile, "--step-summary", resultFile})
+	code := runConclude([]string{"--result-file", resultFile})
 	if code != concludeExitFail {
 		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
 	}
@@ -1129,27 +1067,10 @@ func TestRunConcludeRejectsStepSummaryCollidingWithResultFile(t *testing.T) {
 	}
 }
 
-func TestRunConcludeRejectsStepSummaryCollidingWithGithubOutput(t *testing.T) {
+// A missing verdict is a tooling failure, not a security finding: the job log
+// must say so plainly, matching gh-aw's engine-error rendering.
+func TestConcludeToolingFailureLogsEngineFailure(t *testing.T) {
 	dir := t.TempDir()
-	resultFile := writeResultFixture(t, safeVerdict)
-	shared := filepath.Join(dir, "shared")
-
-	t.Setenv("RUN_DETECTION", "true")
-	t.Setenv("GITHUB_OUTPUT", shared)
-	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
-
-	code := runConclude([]string{"--result-file", resultFile, "--step-summary", shared})
-	if code != concludeExitFail {
-		t.Fatalf("runConclude() = %d, want %d (fail closed on collision)", code, concludeExitFail)
-	}
-}
-
-// A missing verdict is a tooling failure, not a security finding: the step
-// summary must carry the engine-error marker (never the threat marker) and the
-// job log must say so plainly, matching gh-aw's engine-error rendering.
-func TestConcludeToolingFailureUsesEngineErrorMarker(t *testing.T) {
-	dir := t.TempDir()
-	stepSummaryPath := filepath.Join(dir, "step_summary.md")
 	resultFile := filepath.Join(dir, "detection_result.json")
 
 	var stdout bytes.Buffer
@@ -1158,61 +1079,12 @@ func TestConcludeToolingFailureUsesEngineErrorMarker(t *testing.T) {
 		warnMode:     true,
 		githubOutput: filepath.Join(dir, "out"),
 		githubEnv:    filepath.Join(dir, "env"),
-		stepSummary:  stepSummaryPath,
 		stdout:       &stdout,
 	}
 	if code := c.run(resultFile); code != concludeExitProceed {
 		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitProceed, stdout.String())
 	}
-
-	data, err := os.ReadFile(stepSummaryPath)
-	if err != nil {
-		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
-	}
-	summary := string(data)
-	if !strings.Contains(summary, detector.ThreatEngineErrorMarker) {
-		t.Errorf("step summary missing engine-error marker; got:\n%s", summary)
-	}
-	if strings.Contains(summary, detector.ThreatDetectedMarker) {
-		t.Errorf("step summary must not carry the threat marker for a tooling failure; got:\n%s", summary)
-	}
-	if !strings.Contains(summary, "<summary>Threat Detection Engine Failure</summary>") {
-		t.Errorf("step summary missing engine-failure title; got:\n%s", summary)
-	}
 	if !strings.Contains(stdout.String(), "This is a tooling failure, not a security finding.") {
 		t.Errorf("job log missing tooling-failure disclaimer; got:\n%s", stdout.String())
-	}
-}
-
-// A real threat verdict keeps the threat marker and must never be conflated
-// with an engine failure.
-func TestConcludeThreatVerdictUsesThreatMarker(t *testing.T) {
-	dir := t.TempDir()
-	stepSummaryPath := filepath.Join(dir, "step_summary.md")
-	resultFile := writeResultFixture(t, threatVerdict)
-
-	var stdout bytes.Buffer
-	c := &concluder{
-		runDetection: "true",
-		warnMode:     false,
-		githubOutput: filepath.Join(dir, "out"),
-		githubEnv:    filepath.Join(dir, "env"),
-		stepSummary:  stepSummaryPath,
-		stdout:       &stdout,
-	}
-	if code := c.run(resultFile); code != concludeExitFail {
-		t.Fatalf("exit code = %d, want %d (stdout: %s)", code, concludeExitFail, stdout.String())
-	}
-
-	data, err := os.ReadFile(stepSummaryPath)
-	if err != nil {
-		t.Fatalf("ReadFile(stepSummaryPath) error = %v", err)
-	}
-	summary := string(data)
-	if !strings.Contains(summary, detector.ThreatDetectedMarker) {
-		t.Errorf("step summary missing threat marker; got:\n%s", summary)
-	}
-	if strings.Contains(summary, detector.ThreatEngineErrorMarker) {
-		t.Errorf("step summary must not carry the engine-error marker for a real threat; got:\n%s", summary)
 	}
 }

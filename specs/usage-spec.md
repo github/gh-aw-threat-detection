@@ -154,11 +154,9 @@ verdict payload and MUST read it from the location it configured (stdout, or the
 (per TD-20a). The host MAY configure its path via `--log-file` (or
 `THREAT_DETECTION_LOG_FILE`); otherwise, when `--output` is set, the detector
 writes `detection-runlog.jsonl` in the result file's directory. The host MUST NOT
-point `--log-file` and `--output` at the same path. In GitHub Actions, the host
-SHOULD provide `GITHUB_STEP_SUMMARY` so the recursive artifact inventory is
-visible in the run summary (per TD-20c). When the detector runs sandboxed (for
-example under AWF), the host SHOULD point that path at a location writable
-inside the sandbox; an unwritable step summary is a warning, not a failure.
+point `--log-file` and `--output` at the same path. The detector does not write
+to the GitHub Actions step summary; the recursive artifact inventory is
+available only in the JSONL run log (per TD-20c).
 
 ### 3.1 Flags
 

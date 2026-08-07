@@ -116,8 +116,7 @@ The detector reads the verdict exclusively from the out-of-band result sink. The
 └── comment-memory/*.md           # optional, inventoried only
 ```
 
-All files are recursively inventoried in the JSONL run log and Actions step
-summary. The prompt consumes only an allowlisted, size-bounded subset of
+All files are recursively inventoried in the JSONL run log. The prompt consumes only an allowlisted, size-bounded subset of
 `aw_info.json`; unknown fields are ignored and all included values are untrusted.
 
 ## Detection Flow

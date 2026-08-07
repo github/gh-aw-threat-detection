@@ -18,17 +18,6 @@ const (
 	ReasonParseError = "parse_error"
 )
 
-// Markers embedded in rendered detection output so automated scanners can tell
-// an infrastructure failure apart from an actual security finding. They mirror
-// gh-aw's getThreatDetectedMarker/getThreatEngineErrorMarker exactly.
-const (
-	// ThreatDetectedMarker identifies output describing a real threat verdict.
-	ThreatDetectedMarker = "<!-- gh-aw-threat-detected -->"
-	// ThreatEngineErrorMarker identifies output describing a detection tooling
-	// failure rather than a security finding.
-	ThreatEngineErrorMarker = "<!-- gh-aw-threat-engine-error -->"
-)
-
 // IsToolingFailureReason reports whether reason indicates a tooling failure
 // rather than an actual security finding. Tooling failures (agent_failure,
 // parse_error) mean the detection engine itself crashed or could not produce a
@@ -43,23 +32,9 @@ func IsToolingFailureReason(reason string) bool {
 	}
 }
 
-// ThreatMarker returns the marker matching reason: the engine-error marker for
-// tooling failures, the threat marker for a recorded threat verdict, and an
-// empty string for outcomes that describe neither (success, skipped, or an
-// unrecognized reason).
-func ThreatMarker(reason string) string {
-	if IsToolingFailureReason(reason) {
-		return ThreatEngineErrorMarker
-	}
-	if strings.TrimSpace(reason) == ReasonThreatDetected {
-		return ThreatDetectedMarker
-	}
-	return ""
-}
-
-// ThreatHeadline returns the human-readable one-line headline for reason, used
-// as the step-summary disclosure title and echoed into the job log. It mirrors
-// gh-aw's engine-error and caution templates so both paths read identically.
+// ThreatHeadline returns the human-readable one-line headline for reason,
+// echoed into the job log. It mirrors gh-aw's engine-error and caution
+// templates so both paths read identically.
 func ThreatHeadline(reason string) string {
 	switch {
 	case IsToolingFailureReason(reason):

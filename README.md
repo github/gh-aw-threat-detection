@@ -63,7 +63,6 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
-- `--step-summary` — Path to append the artifact inventory table and the rendered prompt (engine/model/retries plus the prompt actually sent, including the resolved prompt-analysis section, as a collapsible block) in the job step summary. Defaults to `GITHUB_STEP_SUMMARY`. Best effort: a failed write warns and never fails detection
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -173,24 +172,10 @@ host-side reason:
 | `config_error` | `agent_failure` |
 | absent / unrecognized / log unreadable | `agent_failure` ("Detection result file not found at: <path>") |
 
-`conclude` also accepts `--step-summary <path>` (defaulting to
-`GITHUB_STEP_SUMMARY`) to append a collapsible verdict block to the job step
-summary: per-field booleans (`prompt_injection`, `secret_leak`,
-`malicious_patch`), the reasons list, the resolved `conclusion`
-(`success`/`warning`/`failure`/`skipped`), and the reason code.
-
-Tooling failures are rendered distinctly from real security findings, matching
-`gh-aw`'s own output so automated scanners can tell them apart:
-
-| host-side `reason` | marker | block title |
-|---|---|---|
-| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Threat Detection Verdict |
-| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure |
-| absent (`success`, `skipped`) | none | Threat Detection Verdict |
-
-An engine failure block states plainly that the analysis engine could not
-complete and that this is a tooling failure, not a security finding; the same
-line is echoed into the job log.
+Tooling failures are reported distinctly from real security findings so
+reviewers can tell them apart: an `agent_failure`/`parse_error` outcome states
+plainly in the job log that the analysis engine could not complete and that this
+is a tooling failure, not a security finding.
 
 `conclude` writes a verbose, self-contained diagnostic section to the job log:
 banners framing the section, the environment inputs and resolved paths, and the
@@ -333,10 +318,7 @@ engine runs. Findings about other artifacts stay advisory warnings in both
 modes.
 
 Every file below the artifacts directory is recorded with its size and consumed
-status in the JSONL `artifacts_loaded` event and, when a step summary path is
-configured (`--step-summary`, defaulting to `GITHUB_STEP_SUMMARY`), in the
-Actions step summary. A step summary that cannot be written is reported as a
-warning and never fails detection. Only an allowlisted, size-bounded subset of
+status in the JSONL `artifacts_loaded` event. Only an allowlisted, size-bounded subset of
 `aw_info.json` is added to the detection prompt, and all of its values are
 explicitly treated as untrusted runtime data.
 

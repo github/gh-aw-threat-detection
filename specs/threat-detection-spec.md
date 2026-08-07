@@ -275,11 +275,10 @@ per TD-18c) non-mandatory failures MUST
 surface as warnings without failing the job, except that `agent_failure` and
 `parse_error` MUST hard-fail when the detection execution step itself failed.
 
-**TD-20c**: When a step summary path is configured (the `--step-summary` flag,
-defaulting to the `GITHUB_STEP_SUMMARY` environment variable), the detector MUST
-append the artifact inventory defined by TD-17b as a Markdown table. A failure to
-write the step summary MUST NOT fail the run; it is a best-effort diagnostic aid
-and MUST be reported as a warning and recorded in the run log (TD-20a).
+**TD-20c**: The detector MUST NOT write to the GitHub Actions step summary. The
+artifact inventory defined by TD-17b, the rendered prompt, and the conclusion
+verdict are surfaced through the run log (TD-20a) and the `conclude`
+diagnostics (TD-20d) only.
 
 **TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
 section to standard output that is sufficient, on its own, to explain the
@@ -302,41 +301,17 @@ physical output line and cannot emit a host workflow command. When `--log-file`
 is set, `conclude` MUST mirror these diagnostics and the final conclusion into
 the JSONL run log (TD-20a).
 
-**TD-20g**: The detector MUST support appending the prompt it actually rendered
-(after template placeholder substitution and prompt-analysis embedding) to the job
-step summary via the `--step-summary` flag, defaulting to the `GITHUB_STEP_SUMMARY`
-environment variable. The appended block MUST be collapsible (rendered inside a
-`<details>` element, collapsed by default), MUST include the resolved engine,
-model, and retries configuration for the run, and MUST be bounded in size so a
-single run cannot exhaust the step summary's shared per-job budget. A failure to
-write the step summary MUST NOT fail the run; it is a best-effort diagnostic aid.
-
-**TD-20h**: The `conclude` subcommand MUST support appending a verdict block to the
-job step summary via its own `--step-summary` flag, defaulting to
-`GITHUB_STEP_SUMMARY`. The block MUST be collapsible and MUST include the
-per-category booleans (`prompt_injection`, `secret_leak`, `malicious_patch`), the
-`reasons` list, the resolved `conclusion`, and the reason code (when present). This
-block MUST be written for every terminal outcome, including `skipped` (RUN_DETECTION
-!= "true"), so the UI always shows what conclusion was reached even absent a
-verdict. A failure to write the step summary MUST NOT change the subcommand's exit
-code.
-
 **TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
-actual security finding, so automated scanners and reviewers do not treat a
-detection outage as a threat. A reason of `agent_failure` or `parse_error` is a
-tooling failure; `threat_detected` is a security finding. The verdict step-summary
-block (TD-20h) MUST carry the marker matching the reason and MUST be titled and
-introduced accordingly, and the job-log diagnostics (TD-20d) MUST state the same
-distinction:
+actual security finding, so reviewers do not treat a detection outage as a
+threat. A reason of `agent_failure` or `parse_error` is a tooling failure;
+`threat_detected` is a security finding. The job-log diagnostics (TD-20d) MUST
+state that distinction with the headline matching the reason:
 
-| host-side `reason` | marker | headline |
-|---|---|---|
-| `threat_detected` | `<!-- gh-aw-threat-detected -->` | Agentic threat detected — Manual review is REQUIRED before any follow-up automation. |
-| `agent_failure`, `parse_error` | `<!-- gh-aw-threat-engine-error -->` | Threat Detection Engine Failure — The analysis engine could not complete. This is a tooling failure, not a security finding. |
-| absent (`success`, `skipped`) | none | none |
-
-The markers mirror gh-aw's `getThreatDetectedMarker` / `getThreatEngineErrorMarker`
-so both the inline and standalone paths emit identical machine-readable output.
+| host-side `reason` | headline |
+|---|---|
+| `threat_detected` | Agentic threat detected — Manual review is REQUIRED before any follow-up automation. |
+| `agent_failure`, `parse_error` | Threat Detection Engine Failure — The analysis engine could not complete. This is a tooling failure, not a security finding. |
+| absent (`success`, `skipped`) | none |
 
 ### 8.3 Exit Codes
 
