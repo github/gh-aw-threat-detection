@@ -413,17 +413,11 @@ jobs:
           set -euo pipefail
           result_path="${REPLAY_OUTPUT}/result.json"
           log_path="${REPLAY_OUTPUT}/replay.log"
-          runlog_path="${REPLAY_OUTPUT}/detection-runlog.jsonl"
           if [ "$ENGINE" = "copilot" ] && [ -n "${GH_AW_COPILOT_TOKEN}" ]; then
             export GH_TOKEN="$GH_AW_COPILOT_TOKEN"
             export GITHUB_TOKEN="$GH_AW_COPILOT_TOKEN"
           fi
           args=(--engine "$ENGINE" --output "$result_path")
-          if "$DETECTOR_BIN" --help 2>&1 | grep -q -- "-log-file"; then
-            args+=(--log-file "$runlog_path")
-          else
-            echo "::warning::Selected detector does not support --log-file; structured replay diagnostics will not be available."
-          fi
           if [ -n "$MODEL" ]; then
             args+=(--model "$MODEL")
           fi
@@ -480,10 +474,14 @@ jobs:
           root = pathlib.Path(__import__('os').environ['REPLAY_DOWNLOADS']) / 'original-detection'
           output_root = pathlib.Path(__import__('os').environ['REPLAY_OUTPUT'])
           output = output_root / 'original-result.json'
-          runlogs = list(root.rglob('detection-runlog.jsonl'))
-          if runlogs:
-              (output_root / 'original-detection-runlog.jsonl').write_bytes(runlogs[0].read_bytes())
           candidates = list(root.rglob('detection.log')) + list(root.rglob('*.log'))
+
+          # Retain the source run's captured detection log alongside the replay's
+          # own log (per usage-spec U-27), so the two can be compared without
+          # re-downloading the original run's artifacts.
+          if candidates:
+              (output_root / 'original-detection.log').write_bytes(candidates[0].read_bytes())
+
           # Diagnostic-only: parses the *original* gh-aw run's log, which may
           # carry the legacy marker wrapped in Markdown emphasis (**/__/*/_).
           marker = re.compile(r'THREAT_DETECTION_RESULT:\s*(\{.*\})')
@@ -594,8 +592,7 @@ jobs:
             ${{ runner.temp }}/gh-aw-replay/output/result.json
             ${{ runner.temp }}/gh-aw-replay/output/comparison.json
             ${{ runner.temp }}/gh-aw-replay/output/original-result.json
-            ${{ runner.temp }}/gh-aw-replay/output/detection-runlog.jsonl
-            ${{ runner.temp }}/gh-aw-replay/output/original-detection-runlog.jsonl
+            ${{ runner.temp }}/gh-aw-replay/output/original-detection.log
             ${{ runner.temp }}/gh-aw-replay/output/replay.log
             ${{ runner.temp }}/gh-aw-replay/output/awf-replay-config.json
           if-no-files-found: ignore

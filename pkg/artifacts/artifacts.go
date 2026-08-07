@@ -40,7 +40,7 @@ const errCodeValidation = "ERR_VALIDATION"
 
 // ArtifactWarning records a single degraded-input finding: a human-readable
 // message (already prefixed with the ERR_VALIDATION error code) plus the
-// structured fields worth mirroring into the JSONL run log.
+// structured fields worth reporting individually.
 type ArtifactWarning struct {
 	// Message is the full warning text, ready to emit as
 	// "::warning::" + Message in a GitHub Actions annotation.
@@ -173,7 +173,7 @@ type Artifacts struct {
 	// unreadable comment-memory directory, or an expected-but-absent patch).
 	// Each entry's Message is prefixed with an error code such as
 	// ERR_VALIDATION. Callers are expected to surface each one as a GitHub
-	// Actions ::warning:: annotation and mirror it into the JSONL run log.
+	// Actions ::warning:: annotation.
 	Warnings []ArtifactWarning
 
 	// AllPrimaryInputsMissing is true when the prompt, agent output, and any

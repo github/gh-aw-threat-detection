@@ -13,7 +13,6 @@ import (
 	"unicode"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
-	"github.com/github/gh-aw-threat-detection/pkg/runlog"
 )
 
 // Exit codes for the conclude subcommand. These map directly onto whether the
@@ -40,7 +39,7 @@ const defaultConcludeResultFile = "/tmp/gh-aw/threat-detection/detection_result.
 // defaultDetectionLogName is the conventional filename for the detection run's
 // captured log, sitting alongside the result file. It is a plain-text capture
 // of the run's stderr (which includes the terminal THREAT_DETECTION_STATUS:
-// line emitted by emitStatus in main.go), not the JSONL --log-file trace. It is
+// line emitted by emitStatus in main.go). It is
 // consulted to refine the failure reason and to render diagnostics, but never
 // parsed for a verdict.
 const defaultDetectionLogName = "detection.log"
@@ -88,11 +87,9 @@ func runConclude(args []string) int {
 	var (
 		resultFile   string
 		detectionLog string
-		logFile      string
 	)
 	fs.StringVar(&resultFile, "result-file", defaultConcludeResultFile, "Path to the structured detection_result.json verdict file")
 	fs.StringVar(&detectionLog, "detection-log", "", "Path to the detection run's captured log, consulted to refine agent_failure/parse_error and to render diagnostics when the result file is missing (default: <result-file dir>/detection.log)")
-	fs.StringVar(&logFile, "log-file", os.Getenv("THREAT_DETECTION_LOG_FILE"), "Path to write JSONL run logs (env: THREAT_DETECTION_LOG_FILE)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return concludeExitProceed
@@ -118,51 +115,6 @@ func runConclude(args []string) int {
 		return concludeExitFail
 	}
 
-	// The JSONL log is opened with O_TRUNC, so it must not alias an input this
-	// command reads. Aliasing --result-file would erase the verdict (yielding a
-	// bogus parse_error) and aliasing the detection log would erase the failure
-	// diagnostics; both are configuration errors, checked before anything is
-	// opened. The detection-log path is resolved first so the default sibling
-	// path participates in the check.
-	resolvedDetectionLog := detectionLog
-	if resolvedDetectionLog == "" {
-		resolvedDetectionLog = filepath.Join(filepath.Dir(resultFile), defaultDetectionLogName)
-	}
-	if logFile != "" {
-		for _, other := range []struct{ path, flag string }{
-			{resultFile, "--result-file"},
-			{resolvedDetectionLog, "--detection-log"},
-		} {
-			same, err := samePath(logFile, other.path)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "conclude: error resolving log paths: %v\n", err)
-				return concludeExitFail
-			}
-			if same {
-				fmt.Fprintf(os.Stderr, "conclude: --log-file and %s must not point to the same file (%q)\n", other.flag, logFile)
-				return concludeExitFail
-			}
-		}
-	}
-
-	// A failure to open the requested JSONL log is a configuration error
-	// (TD-20a): the caller explicitly asked for logs, and concluding without
-	// them would report success while the required mirroring is absent.
-	var logger *runlog.Logger
-	if logFile != "" {
-		opened, err := runlog.Open(logFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "conclude: error opening log file: %v\n", err)
-			return concludeExitFail
-		}
-		logger = opened
-		defer func() {
-			if err := logger.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "conclude: failed to close log file: %v\n", err)
-			}
-		}()
-	}
-
 	c := &concluder{
 		runDetection:     os.Getenv("RUN_DETECTION"),
 		warnMode:         detectionContinueOnError(),
@@ -171,7 +123,6 @@ func runConclude(args []string) int {
 		githubOutput:     githubOutput,
 		githubEnv:        githubEnv,
 		detectionLog:     detectionLog,
-		logger:           logger,
 		stdout:           os.Stdout,
 	}
 	return c.run(resultFile)
@@ -189,7 +140,6 @@ type concluder struct {
 	githubOutput string // path of $GITHUB_OUTPUT (may be empty)
 	githubEnv    string // path of $GITHUB_ENV (may be empty)
 	detectionLog string // detection run log path; empty derives the sibling default
-	logger       *runlog.Logger
 	stdout       io.Writer
 }
 
@@ -217,14 +167,6 @@ func (c *concluder) conclude(resultFile string) int {
 	c.info(fmt.Sprintf("📁 Threat detection directory: %s", detectionDir))
 	c.info(fmt.Sprintf("📄 Detection log path: %s", detectionLog))
 	c.info(fmt.Sprintf("📄 Structured result path: %s", resultFile))
-	c.logger.Info("conclude_start", map[string]any{
-		"run_detection":     c.runDetection,
-		"continue_on_error": c.warnMode,
-		"execution_outcome": c.executionOutcome,
-		"detection_dir":     detectionDir,
-		"detection_log":     detectionLog,
-		"result_file":       resultFile,
-	})
 
 	// Step 1 — detection not required: skip without reading any verdict.
 	if c.runDetection != "true" {
@@ -237,12 +179,6 @@ func (c *concluder) conclude(resultFile string) int {
 		c.setOutput("reason", "")
 		c.exportVariable("GH_AW_DETECTION_REASON", "")
 		c.info("✅ Detection skipped — no threats to evaluate.")
-		c.logger.Info("conclude_outcome", map[string]any{
-			"conclusion": "skipped",
-			"reason":     "",
-			"success":    true,
-			"exit":       concludeExitProceed,
-		})
 		return concludeExitProceed
 	}
 
@@ -306,12 +242,6 @@ func (c *concluder) conclude(resultFile string) int {
 	c.setOutput("success", "true")
 	c.setOutput("reason", "")
 	c.exportVariable("GH_AW_DETECTION_REASON", "")
-	c.logger.Info("conclude_outcome", map[string]any{
-		"conclusion": "success",
-		"reason":     "",
-		"success":    true,
-		"exit":       concludeExitProceed,
-	})
 	return concludeExitProceed
 }
 
@@ -340,14 +270,6 @@ func (c *concluder) reportVerdict(result *detector.Result) {
 	} else {
 		c.info("   reasons          : (none)")
 	}
-	c.logger.Info("conclude_verdict", map[string]any{
-		"prompt_injection": result.PromptInjection,
-		"secret_leak":      result.SecretLeak,
-		"malicious_patch":  result.MaliciousPatch,
-		"reasons":          result.Reasons,
-		"has_threats":      result.HasThreats(),
-		"source":           "structured_result_file",
-	})
 }
 
 // listDirectory prints a recursive listing of dir so a missing or unusable
@@ -357,12 +279,10 @@ func (c *concluder) listDirectory(dir string) {
 	files, err := listFilesRecursively(dir)
 	if err != nil {
 		c.info(fmt.Sprintf("   ⚠️  Could not list files in %s: %v", dir, err))
-		c.logger.Info("conclude_directory_listing", map[string]any{"dir": dir, "error": err.Error()})
 		return
 	}
 	if len(files) == 0 {
 		c.info(fmt.Sprintf("   ⚠️  No files found in %s", dir))
-		c.logger.Info("conclude_directory_listing", map[string]any{"dir": dir, "count": 0, "files": []string{}})
 		return
 	}
 	shown := files
@@ -376,11 +296,6 @@ func (c *concluder) listDirectory(dir string) {
 	if len(shown) < len(files) {
 		c.info(fmt.Sprintf("     ... %d more file(s) omitted", len(files)-len(shown)))
 	}
-	c.logger.Info("conclude_directory_listing", map[string]any{
-		"dir":   dir,
-		"count": len(files),
-		"files": shown,
-	})
 }
 
 // reportDetectionLog prints size statistics for the detection log plus every
@@ -396,7 +311,6 @@ func (c *concluder) reportDetectionLog(path string) {
 		} else {
 			c.info(fmt.Sprintf("   ⚠️  Could not read detection log %s: %v", path, err))
 		}
-		c.logger.Info("conclude_detection_log", map[string]any{"path": path, "error": err.Error()})
 		return
 	}
 
@@ -437,15 +351,6 @@ func (c *concluder) reportDetectionLog(path string) {
 		}
 		matches = shown
 	}
-	c.logger.Info("conclude_detection_log", map[string]any{
-		"path":          path,
-		"bytes_total":   totalBytes,
-		"bytes_scanned": len(data),
-		"lines_scanned": len(lines),
-		"truncated":     truncated,
-		"marker_lines":  matches,
-		"marker_count":  len(matches),
-	})
 }
 
 func containsMarker(line string) bool {
@@ -630,26 +535,12 @@ func (c *concluder) fail(result *detector.Result, reason, message string) int {
 		c.setOutput("conclusion", "warning")
 		c.exportVariable("GH_AW_DETECTION_CONCLUSION", "warning")
 		c.setOutput("success", "false")
-		c.logger.Error("conclude_outcome", map[string]any{
-			"conclusion": "warning",
-			"reason":     reason,
-			"success":    false,
-			"exit":       concludeExitProceed,
-			"message":    message,
-		})
 		return concludeExitProceed
 	}
 	c.command("error", message)
 	c.setOutput("conclusion", "failure")
 	c.exportVariable("GH_AW_DETECTION_CONCLUSION", "failure")
 	c.setOutput("success", "false")
-	c.logger.Error("conclude_outcome", map[string]any{
-		"conclusion": "failure",
-		"reason":     reason,
-		"success":    false,
-		"exit":       concludeExitFail,
-		"message":    message,
-	})
 	return concludeExitFail
 }
 

@@ -62,7 +62,6 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt` — Additional detection instructions appended to the prompt. Overrides `CUSTOM_PROMPT`
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
-- `--log-file` — Path to write structured JSONL run logs (one JSON object per line). Env: `THREAT_DETECTION_LOG_FILE`; defaults to `detection-runlog.jsonl` beside `--output`
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--version` — Print version and exit
 
@@ -114,28 +113,36 @@ the step, so warn-mode workflows proceed exactly as they do under `gh-aw`'s nati
 engine (which treats a missing verdict as a recoverable `parse_error`). Only genuine
 engine/config failures surface as a step failure. See spec TD-21a.
 
-#### JSONL run logs (`--log-file`)
+#### Diagnostics
 
-Pass `--log-file <path>` (or set `THREAT_DETECTION_LOG_FILE`) to choose where to
-record a structured trace of the run. When `--output` is set without an explicit
-log path, the detector writes `detection-runlog.jsonl` in the output file's
-directory. The log uses [JSON Lines](https://jsonlines.org/): one JSON object per
-line, created fresh (truncating any existing file) with `0600` permissions. Every
-record starts with `time` (RFC 3339), `level`
-(`info`/`error`), and `event`, followed by event-specific fields. Emitted
-events include `run_start`, `artifacts_loaded`, `artifact_degraded`,
-`prompt_built`,
-`attempt_start`/`attempt_recorded`/`attempt_no_verdict`, `verdict`,
-`detection_failed`, and a terminal `status` record carrying the same `reason`
-and `exit` code as the stderr status line. The verdict JSON contract
-(`--output`) is unchanged; the log file is an additive observability sink.
-`--log-file` and `--output` must not resolve to the same file — a collision is
-rejected as a configuration error to avoid corrupting both outputs.
+The detector writes no log artifact of its own. Apart from the result JSON, every
+diagnostic goes to stderr, so capturing the step's output (for example
+`threat-detect ... 2>&1 | tee detection.log`) preserves the full trace. Reported
+on stderr are the resolved run configuration (version, engine, model, retries),
+the recursive artifact inventory with per-file size and consumed status, the
+prompt metadata (byte count, resolved workflow name/description, custom-prompt
+provenance, framework-scaffolding detection), each detection attempt and whether
+it recorded a verdict, the engine subprocess invocation and argv, any
+`::warning::`/`::error::` annotations for degraded inputs, and the terminal status
+line. The rendered prompt itself is never echoed.
 
-```jsonl
-{"time":"2026-07-14T18:00:00Z","level":"info","event":"run_start","engine":"copilot","model":"","retries":1,"version":"1.2.3"}
-{"time":"2026-07-14T18:00:03Z","level":"info","event":"verdict","has_threats":false,"malicious_patch":false,"prompt_injection":false,"reasons":[],"secret_leak":false}
-{"time":"2026-07-14T18:00:03Z","level":"info","event":"status","exit":0,"reason":"result_recorded"}
+Untrusted values interpolated into these detector-authored lines are escaped to a
+single physical line and listings are bounded, so neither a model-authored string
+nor a hostile filename can forge a workflow command or flood the job log. The
+engine subprocess's own stdout/stderr are a separate stream: they are forwarded
+verbatim (so harness output and engine errors appear in real time) and are not
+detector-attested.
+
+```text
+[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
+[threat-detect] artifacts loaded: dir=/tmp/gh-aw/threat-detection prompt_bytes=4096 agent_output_bytes=812 patch_files=1 all_primary_inputs_missing=false
+[threat-detect] artifact inventory (3 entries):
+[threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true
+[threat-detect]   comment-memory/notes.md bytes=128 kind=file consumed=false
+[threat-detect] prompt built: prompt_bytes=9241 framework_scaffolding_detected=true framework_scaffolding_markers=<github-context>, <safe-output-tools>
+[threat-detect] detection attempt 1 of 2
+[threat-detect] attempt 1 recorded a verdict via the threat_detection_result tool
+THREAT_DETECTION_STATUS: reason=result_recorded exit=0
 ```
 
 #### Concluding a run (`conclude`)
@@ -192,15 +199,9 @@ Additional flags:
   table above); it is also the source of the diagnostic log statistics and marker
   lines. It is consulted for the terminal status reason but never parsed for a
   verdict.
-- `--log-file <path>` — mirror the conclusion into a JSONL run log (env:
-  `THREAT_DETECTION_LOG_FILE`), emitting `conclude_start`, `conclude_verdict`,
-  `conclude_directory_listing`, `conclude_detection_log`, and `conclude_outcome`
-  events. It must not resolve to the same file as `--result-file` or the
-  detection log — the log is opened truncating, so a collision would destroy the
-  input it is meant to describe. Collisions and unopenable log paths are
-  configuration errors that fail the step.
 
-Diagnostic output is bounded so a pathological run cannot flood the job log, and
+Like the detection run, `conclude` writes no separate log artifact; its
+diagnostics go to stdout only. Diagnostic output is bounded so a pathological run cannot flood the job log, and
 truncation is always labelled rather than passed off as a complete reading.
 Untrusted values (model-authored reasons, artifact filenames, detection-log
 lines) have control characters escaped so each stays on one line and cannot
@@ -319,7 +320,7 @@ engine runs. Findings about other artifacts stay advisory warnings in both
 modes.
 
 Every file below the artifacts directory is recorded with its size and consumed
-status in the JSONL `artifacts_loaded` event. Only an allowlisted, size-bounded subset of
+status in the artifact inventory printed to stderr. Only an allowlisted, size-bounded subset of
 `aw_info.json` is added to the detection prompt, and all of its values are
 explicitly treated as untrusted runtime data.
 
@@ -336,7 +337,7 @@ explicitly treated as untrusted runtime data.
 
 ### Replay workflow
 
-Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, free-form replay log, replay result, and original-result comparison. Detectors that support structured logging also produce `detection-runlog.jsonl`; when available, the source run's structured log is retained separately as `original-detection-runlog.jsonl`.
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, free-form replay log, replay result, and original-result comparison.
 
 Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
 
