@@ -63,6 +63,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write JSON result (defaults to stdout)
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
+- `--step-summary` — Deprecated and ignored. Accepted so hosts that still pass it (older `gh-aw` releases) do not fail; the detector no longer writes a GitHub Actions step summary
 - `--version` — Print version and exit
 
 `threat-detect` runs a single agentic CLI engine pass. The engine reports its

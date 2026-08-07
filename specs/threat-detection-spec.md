@@ -288,7 +288,10 @@ artifact inventory defined by TD-17b is surfaced on standard error (TD-20a) only
 and the conclusion verdict through the `conclude` diagnostics (TD-20d). The
 rendered prompt itself MUST NOT be surfaced: the detector reports only its
 metadata (byte count, resolved workflow name/description, custom-prompt
-provenance, scaffolding detection).
+provenance, scaffolding detection). For compatibility with hosts that still pass
+the removed `--step-summary <path>` option, the detector MUST accept that option,
+ignore its value, note on standard error that it was ignored, and MUST NOT treat
+it as a configuration error.
 
 **TD-20d**: The `conclude` subcommand MUST write a human-readable diagnostic
 section to standard output that is sufficient, on its own, to explain the

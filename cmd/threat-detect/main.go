@@ -115,6 +115,7 @@ func run() (code int) {
 		workflowDescription string
 		customPrompt        string
 		customPromptFile    string
+		stepSummary         string
 		version             bool
 		retries             int
 	)
@@ -132,6 +133,11 @@ func run() (code int) {
 	flag.StringVar(&workflowDescription, "workflow-description", "", "Workflow description for the prompt (overrides WORKFLOW_DESCRIPTION)")
 	flag.StringVar(&customPrompt, "custom-prompt", "", "Additional detection instructions appended to the prompt (overrides CUSTOM_PROMPT)")
 	flag.StringVar(&customPromptFile, "custom-prompt-file", "", "Path to a file with additional detection instructions (takes precedence over --custom-prompt and CUSTOM_PROMPT)")
+	// Accepted and ignored for backward compatibility: older gh-aw releases pass
+	// --step-summary, but the detector no longer writes a step summary (TD-20c).
+	// Rejecting the flag would abort detection in those hosts, so it is parsed
+	// and dropped instead.
+	flag.StringVar(&stepSummary, "step-summary", "", "Deprecated and ignored; the detector no longer writes a GitHub Actions step summary")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
@@ -146,6 +152,17 @@ func run() (code int) {
 	if version {
 		fmt.Printf("threat-detect %s\n", detector.Version)
 		return exitSafe
+	}
+
+	stepSummaryProvided := false
+	flag.CommandLine.Visit(func(f *flag.Flag) {
+		if f.Name == "step-summary" {
+			stepSummaryProvided = true
+		}
+	})
+	if stepSummaryProvided {
+		fmt.Fprintf(os.Stderr, "[threat-detect] ignoring deprecated --step-summary %s: the detector no longer writes a step summary\n",
+			sanitizeLogValue(stepSummary))
 	}
 
 	// When --model is not set, fall back to the engine-specific detection model
