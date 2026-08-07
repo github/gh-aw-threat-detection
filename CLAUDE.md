@@ -142,9 +142,11 @@ The `latest` (non-prerelease) GitHub release and "Latest" badge **only move on e
 
 This repo runs daily AW smoke tests against all three engines:
 
-- `.github/workflows/smoke-{copilot,claude,codex}-standalone.{md,lock.yml}` — `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect` binary (pinned to a promoted release tag), runs it under AWF, and concludes from the structured `detection_result.json` via `threat-detect conclude`. The `.lock.yml` files are compiled by `gh aw compile`.
+- `.github/workflows/smoke-{copilot,claude,codex}-standalone.{md,lock.yml}` — `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect` binary, runs it under AWF, and concludes from the structured `detection_result.json` via `threat-detect conclude`. The `.lock.yml` files are compiled by `gh aw compile`.
 
-Recompile with `gh aw compile` after editing any smoke `.md` source.
+The detector version is **not** pinned in the locks: gh-aw emits the literal `latest`, which `install_threat_detect_binary.sh` resolves at run time to the newest **non-prerelease** detector release. Promoting a release is enough to put it in front of the smokes — no recompile. Unpromoted prereleases are never picked up automatically; test those via `detection-only.yml` plus the `GH_AW_THREAT_DETECTION_VERSION` repo variable.
+
+Recompile with `gh aw compile` after editing any smoke `.md` source. If you build the compiler from source instead of installing the released extension, pass **both** `-X main.version=<TAG>` and `-X main.isRelease=true` — omitting the latter makes gh-aw emit `dev` as the compiler/runtime version. See the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill.
 
 The top-level `smoke.yml` workflow can be dispatched to start all three standalone smokes at once.
 
