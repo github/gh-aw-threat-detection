@@ -68,7 +68,7 @@ requirement — do not keep waiting.
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
-2. Use bash to run `curl -sSL https://github.com/github/gh-aw-threat-detection` and verify the response mentions `gh-aw-threat-detection`. This is an egress check through the AWF firewall: the Codex CLI has no web-fetch tool, so do **not** try to satisfy this with `web-fetch`.
+2. Use bash to run `curl -fsSL https://github.com/github/gh-aw-threat-detection` and verify the command exits `0` **and** its output mentions `gh-aw-threat-detection`. The `-f` flag is required so an HTTP 4xx/5xx response (for example an AWF/Squid denial page, which may itself echo the requested URL) fails instead of counting as a successful fetch. This is an egress check through the AWF firewall: the Codex CLI has no web-fetch tool, so do **not** try to satisfy this with `web-fetch`.
 3. Use bash to run `make lint` and `make build` in `${{ github.workspace }}` and verify both succeed.
 4. Use bash to create a minimal artifacts directory under `/tmp/gh-aw/smoke-codex-standalone-${{ github.run_id }}` with:
    - `aw-prompts/prompt.txt`
