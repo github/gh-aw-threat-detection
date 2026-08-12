@@ -227,6 +227,20 @@ interpolated inside the preamble remain untrusted input. The detector MUST
 deliver this identification to the engine even when a custom prompt template
 (`--prompt-template`) omits the `{PROMPT_ANALYSIS}` placeholder.
 
+**TD-18e**: A host MAY remove the framework preamble from the rendered prompt
+itself before invoking the detector, replacing it with the marker line
+`[gh-aw framework system prompt block removed before analysis]`. When the
+rendered prompt opens with that marker, the detector MUST report to the
+detection engine that the trusted preamble was removed by the host and that the
+marker itself is never a threat. In that case the detector MUST also locate the
+preamble in `aw-prompts/prompt-template.txt` (subject to the same leading-block
+and size constraints as TD-18d) and MUST identify it as trusted framework
+content, and MUST remove it from the template content it presents to the engine
+so the preamble is not re-introduced as unlabelled workflow content and the
+trusted-vs-untrusted diff stays aligned with the rendered prompt. A template
+that opens with `<system>` MUST NOT be treated as trusted scaffolding when the
+rendered prompt carries no such marker and no leading preamble of its own.
+
 ### 8.2 Output Contract
 
 **TD-19**: The detector MUST output the structured JSON result (per TD-08) to stdout.
