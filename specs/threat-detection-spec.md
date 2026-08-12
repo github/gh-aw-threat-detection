@@ -96,6 +96,20 @@ use the same JSON object shape as TD-08 with required boolean `prompt_injection`
 field. The implementation MUST reject results that add unexpected fields, omit a
 required field, or use the wrong type for any field.
 
+**TD-10b**: The `reasons` array is model-authored free text and MUST be bounded.
+The implementation MUST reject a result whose `reasons` array contains more than
+20 entries, or whose individual entry is empty, consists solely of whitespace, or
+exceeds 1000 characters. These bounds MUST be enforced identically when a result
+is reported through the `threat_detection_result` tool and when a result file is
+read back, so no result the implementation accepts on write can be rejected on
+read. A rejected report MUST be reported to the model as a correctable error
+(TD-10a) rather than recorded.
+
+**TD-10c**: The implementation MUST bound the number of bytes it reads from a
+result file before parsing it, and MUST reject a file that exceeds that bound as
+a parse error rather than parsing a truncated prefix. The bound MUST be large
+enough to admit every result permitted by TD-10a and TD-10b.
+
 
 ---
 
