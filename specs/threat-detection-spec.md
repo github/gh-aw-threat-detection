@@ -229,8 +229,12 @@ deliver this identification to the engine even when a custom prompt template
 
 **TD-18e**: A host MAY remove the framework preamble from the rendered prompt
 itself before invoking the detector, replacing it with the marker line
-`[gh-aw framework system prompt block removed before analysis]`. When the
-rendered prompt opens with that marker, the detector MUST report to the
+`[gh-aw framework system prompt block removed before analysis]`. The detector
+MUST honour the marker only when it occupies the complete first line of the
+rendered prompt (ignoring leading whitespace and trailing carriage
+returns/spaces); a line that merely begins with the marker text MUST NOT be
+treated as host-authored removal. When the rendered prompt opens with that
+marker, the detector MUST report to the
 detection engine that the trusted preamble was removed by the host and that the
 marker itself is never a threat. In that case the detector MUST also locate the
 preamble in `aw-prompts/prompt-template.txt` (subject to the same leading-block
@@ -239,7 +243,12 @@ content, and MUST remove it from the template content it presents to the engine
 so the preamble is not re-introduced as unlabelled workflow content and the
 trusted-vs-untrusted diff stays aligned with the rendered prompt. A template
 that opens with `<system>` MUST NOT be treated as trusted scaffolding when the
-rendered prompt carries no such marker and no leading preamble of its own.
+rendered prompt carries no such marker and no leading preamble of its own. The
+preamble grammar the detector recognizes MUST be at least as permissive as the
+host's stripping grammar — a case-insensitive opening `<system>` tag that MAY
+carry attributes, and a case-insensitive closing tag that MAY contain internal
+whitespace — so that every preamble the host removes is still identified as
+trusted framework content in the template copy.
 
 ### 8.2 Output Contract
 

@@ -2,14 +2,25 @@ package detector
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
-// systemOpenTag and systemCloseTag delimit the framework-authored scaffolding
-// block that `gh-aw` emits at the very top of every rendered workflow prompt.
-const (
-	systemOpenTag  = "<system>"
-	systemCloseTag = "</system>"
+// systemOpenTagRE and systemCloseTagRE delimit the framework-authored
+// scaffolding block that `gh-aw` emits at the very top of every rendered
+// workflow prompt.
+//
+// The grammar mirrors the host-side stripper in `gh-aw`
+// (`setup_threat_detection.cjs`): the opening tag is case-insensitive and may
+// carry attributes, and the closing tag tolerates internal whitespace. Matching
+// a narrower grammar than the host would leave the detector blind to blocks the
+// host removes, so the framework directives would reach the engine unlabelled.
+var (
+	systemOpenTagRE  = regexp.MustCompile(`(?is)^\s*<system(?:\s[^>]*)?>`)
+	systemCloseTagRE = regexp.MustCompile(`(?is)</\s*system\s*>`)
+	// leadingBlankLineRE matches the run of whitespace ending in a newline that
+	// the host removes after the stripped block, mirroring its `/^\s*\n/`.
+	leadingBlankLineRE = regexp.MustCompile(`(?s)^\s*\n`)
 )
 
 // maxScaffoldingBytes bounds the size of a block that may claim trusted
@@ -77,9 +88,11 @@ type FrameworkScaffolding struct {
 // in a rendered prompt.
 //
 // Only a block that opens at the very start of the prompt (ignoring leading
-// whitespace) and closes at the first `</system>` is treated as scaffolding.
-// A `<system>` tag appearing later in the prompt is attacker-reachable content
-// interpolated from untrusted input and MUST NOT be granted trusted status.
+// whitespace) and closes at the first following closing tag is treated as
+// scaffolding. The tag grammar matches the host's: the opening tag may carry
+// attributes and either tag may vary in case. A `<system>` tag appearing later
+// in the prompt is attacker-reachable content interpolated from untrusted input
+// and MUST NOT be granted trusted status.
 //
 // The block is also rejected when it exceeds maxScaffoldingBytes, so a prompt
 // that is one oversized `<system>` block cannot claim trusted status over
@@ -88,26 +101,17 @@ type FrameworkScaffolding struct {
 func DetectFrameworkScaffolding(rendered string) *FrameworkScaffolding {
 	scaffolding := &FrameworkScaffolding{}
 
-	leading := len(rendered) - len(strings.TrimLeft(rendered, " \t\r\n"))
-	if !strings.HasPrefix(rendered[leading:], systemOpenTag) {
-		return scaffolding
-	}
-
-	closeIdx := strings.Index(rendered, systemCloseTag)
-	if closeIdx == -1 {
-		return scaffolding
-	}
-
-	block := rendered[leading : closeIdx+len(systemCloseTag)]
-	if len(block) > maxScaffoldingBytes {
+	start, closeStart, end, ok := findFrameworkScaffolding(rendered)
+	if !ok {
 		return scaffolding
 	}
 
 	scaffolding.Detected = true
 	scaffolding.Source = ScaffoldingSourceRendered
-	scaffolding.StartLine = lineNumberAt(rendered, leading)
-	scaffolding.EndLine = lineNumberAt(rendered, closeIdx)
+	scaffolding.StartLine = lineNumberAt(rendered, start)
+	scaffolding.EndLine = lineNumberAt(rendered, closeStart)
 
+	block := rendered[start:end]
 	for _, marker := range knownScaffoldingMarkers {
 		if strings.Contains(block, marker) {
 			scaffolding.Markers = append(scaffolding.Markers, marker)
@@ -117,11 +121,51 @@ func DetectFrameworkScaffolding(rendered string) *FrameworkScaffolding {
 	return scaffolding
 }
 
+// findFrameworkScaffolding locates the leading `<system>...</system>` block in
+// content, returning the offset of the opening `<`, the offset of the closing
+// tag, and the offset just past the closing tag.
+//
+// Only a block opening at the very start of the content (ignoring leading
+// whitespace) and closing at the first subsequent closing tag qualifies, and
+// only when it stays within maxScaffoldingBytes.
+func findFrameworkScaffolding(content string) (start, closeStart, end int, ok bool) {
+	openLoc := systemOpenTagRE.FindStringIndex(content)
+	if openLoc == nil {
+		return 0, 0, 0, false
+	}
+	openTag := content[openLoc[0]:openLoc[1]]
+	start = openLoc[0] + len(openTag) - len(strings.TrimLeft(openTag, " \t\r\n\v\f"))
+
+	closeLoc := systemCloseTagRE.FindStringIndex(content[openLoc[1]:])
+	if closeLoc == nil {
+		return 0, 0, 0, false
+	}
+	closeStart = openLoc[1] + closeLoc[0]
+	end = openLoc[1] + closeLoc[1]
+
+	if end-start > maxScaffoldingBytes {
+		return 0, 0, 0, false
+	}
+	return start, closeStart, end, true
+}
+
 // HostRemovedScaffolding reports whether a rendered prompt opens with the
 // marker `gh-aw` leaves behind when it removes the framework `<system>`
 // preamble before invoking the detector.
+//
+// The marker MUST occupy the whole first line, exactly as the host writes it.
+// Accepting it as a mere prefix would let attacker-reachable content such as
+// `[gh-aw framework system prompt block removed before analysis] and now …`
+// claim that the host removed a preamble, which would in turn grant a
+// `<system>` block in the template trusted status the host never conferred.
 func HostRemovedScaffolding(rendered string) bool {
-	return strings.HasPrefix(strings.TrimLeft(rendered, " \t\r\n"), HostRemovedScaffoldingMarker)
+	trimmed := strings.TrimLeft(rendered, " \t\r\n")
+	if !strings.HasPrefix(trimmed, HostRemovedScaffoldingMarker) {
+		return false
+	}
+	rest := trimmed[len(HostRemovedScaffoldingMarker):]
+	rest = strings.TrimLeft(rest, " \t\r")
+	return rest == "" || strings.HasPrefix(rest, "\n")
 }
 
 // AnalyzeFrameworkScaffolding locates the framework preamble for the detection
@@ -163,13 +207,12 @@ func AnalyzeFrameworkScaffolding(rendered, template string) *FrameworkScaffoldin
 // into the rendered prompt, so a template stripped this way still aligns with
 // the rendered prompt for untrusted-input extraction.
 func StripFrameworkScaffolding(content string) (string, bool) {
-	scaffolding := DetectFrameworkScaffolding(content)
-	if !scaffolding.Detected {
+	_, _, end, ok := findFrameworkScaffolding(content)
+	if !ok {
 		return content, false
 	}
 
-	closeIdx := strings.Index(content, systemCloseTag)
-	rest := strings.TrimLeft(content[closeIdx+len(systemCloseTag):], " \t\r\n")
+	rest := leadingBlankLineRE.ReplaceAllString(content[end:], "")
 	return HostRemovedScaffoldingMarker + "\n" + rest, true
 }
 
