@@ -325,9 +325,10 @@ func run() (code int) {
 		scaffoldingDesc = sanitizeLogValue(strings.Join(markers, ", "))
 	}
 	fmt.Fprintf(os.Stderr,
-		"[threat-detect] prompt built: prompt_bytes=%d framework_scaffolding_detected=%t framework_scaffolding_markers=%s\n",
+		"[threat-detect] prompt built: prompt_bytes=%d framework_scaffolding_detected=%t framework_scaffolding_host_removed=%t framework_scaffolding_markers=%s\n",
 		len(prompt),
 		promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.Detected,
+		promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.HostRemoved,
 		scaffoldingDesc)
 
 	// Create engine

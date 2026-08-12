@@ -140,7 +140,7 @@ detector-attested.
 [threat-detect] artifact inventory (3 entries):
 [threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true
 [threat-detect]   comment-memory/notes.md bytes=128 kind=file consumed=false
-[threat-detect] prompt built: prompt_bytes=9241 framework_scaffolding_detected=true framework_scaffolding_markers=<github-context>, <safe-output-tools>
+[threat-detect] prompt built: prompt_bytes=9241 framework_scaffolding_detected=true framework_scaffolding_host_removed=false framework_scaffolding_markers=<github-context>, <safe-output-tools>
 [threat-detect] detection attempt 1 of 2
 [threat-detect] attempt 1 recorded a verdict via the threat_detection_result tool
 THREAT_DETECTION_STATUS: reason=result_recorded exit=0
@@ -254,8 +254,9 @@ output and `agent_usage.json`. That figure is therefore **independent of**
 `detection.log`; the detector's stdout is not the source of truth for credits.
 
 For authoritative billing, use the AWF proxy token log / `agent_usage.json` (or
-the engine's own logs, uploaded as the detection log artifact) together with
-`gh-aw`'s `logs` tooling.
+the engine's own logs, which recent `gh-aw` releases render into the detection
+job's log rather than uploading as an artifact) together with `gh-aw`'s `logs`
+tooling.
 
 ### Released binary
 

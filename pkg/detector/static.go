@@ -73,7 +73,18 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 		}
 	}
 
-	analysis.Scaffolding = DetectFrameworkScaffolding(rendered)
+	analysis.Scaffolding = AnalyzeFrameworkScaffolding(rendered, analysis.PromptTemplate)
+
+	// When the host removed the framework preamble from the rendered prompt,
+	// remove it from the template copy too: it is trusted framework content
+	// (already described by the scaffolding section), and leaving it in would
+	// both re-expose the directives to the engine as if they were workflow
+	// content and misalign the template-vs-rendered diff below.
+	if analysis.Scaffolding.HostRemoved && analysis.PromptTemplate != "" {
+		if stripped, ok := StripFrameworkScaffolding(analysis.PromptTemplate); ok {
+			analysis.PromptTemplate = stripped
+		}
+	}
 
 	// Extract untrusted inputs if both template and rendered prompt are available.
 	if analysis.PromptTemplate != "" && rendered != "" {
