@@ -287,11 +287,20 @@ Untrusted values echoed into a detector-authored diagnostic — model-authored
 text, artifact paths, and configuration values such as the engine ID, model, and
 process name — MUST be escaped so that each is confined to a single physical
 output line and cannot emit a host workflow command, and listings MUST be
-bounded so a pathological input cannot flood the job log. This requirement
-governs the diagnostics the detector composes. It does not extend to the engine
-subprocess's own standard output and standard error, which the detector forwards
-verbatim so harness lifecycle output and engine errors reach the job log in real
-time; hosts MUST NOT treat forwarded engine output as detector-attested text.
+bounded so a pathological input cannot flood the job log.
+
+The detector MUST forward the engine subprocess's own standard output and
+standard error to its standard error as the subprocess produces them, so harness
+lifecycle output and engine errors reach the job log in real time. Because that
+output is model-authored and therefore untrusted, the detector MUST frame it: it
+MUST emit forwarded output one line at a time, MUST prefix every forwarded line
+with a fixed marker that identifies it as engine output, MUST treat both LF and
+CR as line terminators, MUST flush a trailing partial line that arrives without a
+terminator, and MUST ensure no forwarded line can be interpreted by the host as a
+workflow command. A reader MUST therefore be able to distinguish forwarded engine
+output from detector-authored diagnostics by inspecting a single line. Hosts and
+log consumers MUST NOT treat forwarded engine output as detector-attested text,
+and MUST ignore `THREAT_DETECTION_*` markers appearing on forwarded lines.
 
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
@@ -302,7 +311,8 @@ consult the detection run's captured log (`--detection-log <path>`, default
 `<result-file-dir>/detection.log`) for the terminal `THREAT_DETECTION_STATUS:`
 line (per TD-20a) and map its `reason=` value onto the host-side `reason` per the
 following table, defaulting to `agent_failure` when the log is absent, unreadable,
-or contains no status line:
+or contains no status line. Status lines appearing on forwarded engine output
+(TD-20a) MUST be ignored during this scan:
 
 | status reason | host-side `reason` |
 |---|---|

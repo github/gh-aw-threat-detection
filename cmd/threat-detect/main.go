@@ -354,7 +354,9 @@ func run() (code int) {
 
 	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
+		// The message can embed captured engine output (engineExitError), which
+		// is untrusted: sanitize it so it cannot break out of this line.
+		fmt.Fprintf(os.Stderr, "Error running detection: %s\n", sanitizeLogValue(err.Error()))
 		switch {
 		case ctx.Err() != nil:
 			reason = reasonCancelled

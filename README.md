@@ -130,9 +130,11 @@ line. The rendered prompt itself is never echoed.
 Untrusted values interpolated into these detector-authored lines are escaped to a
 single physical line and listings are bounded, so neither a model-authored string
 nor a hostile filename can forge a workflow command or flood the job log. The
-engine subprocess's own stdout/stderr are a separate stream: they are forwarded
-verbatim (so harness output and engine errors appear in real time) and are not
-detector-attested.
+engine subprocess's own stdout/stderr are a separate, untrusted stream: they are
+forwarded line by line in real time (so harness output and engine errors stay
+visible), each line prefixed with `[engine] ` and stripped of its ability to open
+a workflow command. Forwarded lines are not detector-attested — log consumers
+must ignore any `THREAT_DETECTION_*` marker that carries the `[engine] ` prefix.
 
 ```text
 [threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
