@@ -50,8 +50,17 @@ const (
 	maxListedFiles       = 200
 	maxEchoedLogLines    = 50
 	maxEchoedLineRunes   = 500
+	maxReasonLogLines    = 40
 	diagnosticLogMaxSize = 8 << 20 // 8 MiB: read no more of the detection log
 )
+
+// reasonContinuationGutter prefixes every physical line of a multi-line reason
+// after the first. Reasons are untrusted text and a line of theirs could start
+// with "::", which the Actions runner would interpret as a workflow command
+// (leading whitespace is not protection — the runner trims it). The gutter puts
+// a non-"::" character first on every continuation line, so the line stays a
+// plain log line while remaining readable and copy-pasteable.
+const reasonContinuationGutter = "         | "
 
 // bannerRule is the horizontal rule framing the conclude banners. It mirrors
 // gh-aw's inline conclusion step so both paths read identically in job logs.
@@ -238,7 +247,7 @@ func (c *concluder) conclude(resultFile string) int {
 			for _, reason := range result.Reasons {
 				safe = append(safe, sanitizeLogValue(truncateRunes(reason, maxEchoedLineRunes)))
 			}
-			message += "\nReasons: " + strings.Join(safe, "; ")
+			message += "\nReasons (full detail in the verdict block above): " + strings.Join(safe, "; ")
 		}
 		return c.fail(result, detector.ReasonThreatDetected, message)
 	}
@@ -272,11 +281,42 @@ func (c *concluder) reportVerdict(result *detector.Result) {
 	if len(result.Reasons) > 0 {
 		c.info(fmt.Sprintf("   reasons (%d):", len(result.Reasons)))
 		for i, reason := range result.Reasons {
-			c.info(fmt.Sprintf("     [%d] %s", i+1, sanitizeLogValue(reason)))
+			lines := reasonLogLines(reason)
+			c.info(fmt.Sprintf("     [%d] %s", i+1, lines[0]))
+			for _, line := range lines[1:] {
+				c.info(reasonContinuationGutter + line)
+			}
 		}
 	} else {
 		c.info("   reasons          : (none)")
 	}
+}
+
+// reasonLogLines renders an untrusted, model-authored reason as the physical
+// log lines to print. Reasons carry forensic detail — verbatim quotes of the
+// triggering content, file and line references — which is only usable if it
+// keeps its line structure, so embedded newlines become real lines rather than
+// escaped "\n" runs. Each returned line is individually sanitized (so no line
+// can carry a control character or start a line of its own) and bounded, and
+// the line count is capped so one pathological reason cannot flood the job log.
+// The result always has at least one element.
+func reasonLogLines(reason string) []string {
+	normalized := strings.ReplaceAll(reason, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	raw := strings.Split(normalized, "\n")
+	truncated := false
+	if len(raw) > maxReasonLogLines {
+		raw = raw[:maxReasonLogLines]
+		truncated = true
+	}
+	lines := make([]string, 0, len(raw)+1)
+	for _, line := range raw {
+		lines = append(lines, sanitizeLogValue(truncateRunes(line, maxEchoedLineRunes)))
+	}
+	if truncated {
+		lines = append(lines, "… (reason truncated)")
+	}
+	return lines
 }
 
 // listDirectory prints a recursive listing of dir so a missing or unusable

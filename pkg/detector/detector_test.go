@@ -1,6 +1,7 @@
 package detector
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -130,6 +131,36 @@ func TestDefaultPromptTemplate(t *testing.T) {
 	}
 	if !strings.Contains(tmpl, "Lockfile Version Recency") {
 		t.Error("expected template to contain npm lockfile false-positive suppression guidance (Lockfile Version Recency)")
+	}
+}
+
+// TestDefaultPromptTemplateReasonRequirements verifies the template carries the
+// forensic reason instructions required by TD-10d: locate the finding, quote it
+// verbatim, give provenance and remediation, and mask secret values.
+func TestDefaultPromptTemplateReasonRequirements(t *testing.T) {
+	tmpl, err := DefaultPromptTemplate()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, expected := range []string{
+		"## Reason Requirements (Forensic Detail)",
+		"LOCATION:",
+		"EVIDENCE:",
+		"ORIGIN:",
+		"WHY:",
+		"REMEDIATION:",
+		"quoted verbatim",
+		"never write the secret value itself",
+		"[REDACTED",
+	} {
+		if !strings.Contains(tmpl, expected) {
+			t.Errorf("template missing reason guidance %q", expected)
+		}
+	}
+	// The documented per-reason bound must match the enforced one, or the model
+	// will be told a limit the tool rejects.
+	if !strings.Contains(tmpl, fmt.Sprintf("at most %d characters", MaxReasonRunes)) {
+		t.Errorf("template does not document the enforced per-reason bound of %d characters", MaxReasonRunes)
 	}
 }
 

@@ -340,7 +340,7 @@ explicitly treated as untrusted runtime data.
 The three booleans are fully constrained by the schema: all are required, no
 other fields are accepted, and a result that adds, omits, or mistypes a field is
 rejected. `reasons` is model-authored free text and is bounded as well — at most
-20 entries, each non-blank and at most 1000 characters — and the whole result
+20 entries, each non-blank and at most 2000 characters — and the whole result
 file is capped at 1 MiB before it is parsed. The same bounds apply when the model
 reports a result and when the file is read back, so a recorded result can never
 fail validation later. A rejected report is returned to the model as a

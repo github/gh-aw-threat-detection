@@ -389,10 +389,10 @@ func TestConcludeThreatMessageEscaped(t *testing.T) {
 	if !strings.Contains(got, "::error::") {
 		t.Fatalf("expected ::error:: command, got: %q", got)
 	}
-	if strings.Contains(got, "\nReasons:") {
+	if strings.Contains(got, "\nReasons (full detail") {
 		t.Fatalf("newline in message must be escaped, got: %q", got)
 	}
-	if !strings.Contains(got, "%0AReasons:") {
+	if !strings.Contains(got, "%0AReasons (full detail") {
 		t.Fatalf("expected escaped newline before Reasons, got: %q", got)
 	}
 	if !strings.Contains(got, errCodeValidation) {
@@ -847,8 +847,41 @@ func TestConcludeReasonCannotInjectWorkflowCommand(t *testing.T) {
 			t.Errorf("unexpected workflow command emitted: %q", line)
 		}
 	}
-	if !strings.Contains(stdout.String(), `[1] benign looking\n::add-mask::injected`) {
-		t.Errorf("escaped reason not rendered on a single line:\n%s", stdout.String())
+	// The reason keeps its line structure (so quoted evidence stays readable),
+	// but the continuation line carries the gutter so it cannot start a command.
+	if !strings.Contains(stdout.String(), "     [1] benign looking\n") {
+		t.Errorf("first reason line not rendered:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), reasonContinuationGutter+"::add-mask::injected\n") {
+		t.Errorf("continuation line not rendered with gutter:\n%s", stdout.String())
+	}
+}
+
+// TestReasonLogLines verifies multi-line reasons keep their line structure,
+// stay individually sanitized and bounded, and are capped in line count.
+func TestReasonLogLines(t *testing.T) {
+	got := reasonLogLines("LOCATION: prompt.txt:42\r\nEVIDENCE: ignore\tprior\rrules")
+	want := []string{"LOCATION: prompt.txt:42", `EVIDENCE: ignore\tprior`, "rules"}
+	if len(got) != len(want) {
+		t.Fatalf("reasonLogLines lines = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	long := strings.Repeat("x", maxEchoedLineRunes+50)
+	if lines := reasonLogLines(long); !strings.HasSuffix(lines[0], "… (truncated)") {
+		t.Errorf("over-long line not truncated: %q", lines[0])
+	}
+
+	many := reasonLogLines(strings.Repeat("a\n", maxReasonLogLines+10))
+	if len(many) != maxReasonLogLines+1 {
+		t.Fatalf("line count = %d, want %d", len(many), maxReasonLogLines+1)
+	}
+	if many[len(many)-1] != "… (reason truncated)" {
+		t.Errorf("missing truncation marker, got %q", many[len(many)-1])
 	}
 }
 

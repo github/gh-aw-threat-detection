@@ -19,9 +19,11 @@ const (
 	// MaxReasons is the maximum number of entries allowed in `reasons`. Three
 	// threat categories never need more than a handful of explanations.
 	MaxReasons = 20
-	// MaxReasonRunes is the maximum length of a single reason. Reasons are
-	// human-readable explanations, not transcripts or embedded artifacts.
-	MaxReasonRunes = 1000
+	// MaxReasonRunes is the maximum length of a single reason. Reasons must
+	// carry enough forensic detail to locate a finding — artifact, position,
+	// verbatim trigger text, provenance, remediation — but are still
+	// explanations, not transcripts or embedded artifacts.
+	MaxReasonRunes = 2000
 	// MaxResultFileBytes caps how much of a result file is read before parsing.
 	// It is far above any schema-valid result (MaxReasons × MaxReasonRunes plus
 	// JSON overhead) yet bounds memory for a corrupt or hostile file.
