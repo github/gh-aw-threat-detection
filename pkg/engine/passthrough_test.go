@@ -77,6 +77,31 @@ func TestPassthrough_InjectedWorkflowCommand(t *testing.T) {
 	}
 }
 
+func TestPassthrough_InjectedLegacyWorkflowCommand(t *testing.T) {
+	// The runner locates the legacy "##[command]" marker anywhere within a
+	// line, so the "[engine] " frame is no defense: an engine echoing
+	// attacker-authored artifact text could otherwise emit ##[stop-commands]
+	// (suppressing the detector's own threat annotation) or ##[add-mask]
+	// (redacting the log a maintainer is meant to read). The marker must be
+	// broken up inside the value itself.
+	got := capturePassthrough(t,
+		"tool wrote: harmless ##[stop-commands]pwn3d\n"+
+			"##[add-mask]secret\n")
+
+	if strings.Contains(got, "##[") {
+		t.Fatalf("live legacy workflow-command marker survived framing: %q", got)
+	}
+	// The evidence must still be readable, just inert.
+	if !strings.Contains(got, `##\[stop-commands]pwn3d`) || !strings.Contains(got, `##\[add-mask]secret`) {
+		t.Fatalf("neutralized content should stay visible, got %q", got)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
+		if !strings.HasPrefix(line, PassthroughPrefix) {
+			t.Errorf("line is not framed: %q", line)
+		}
+	}
+}
+
 func TestPassthrough_InjectedDetectorMarkers(t *testing.T) {
 	// A forged verdict or status marker must remain distinguishable from a
 	// detector-authored one: every forwarded line carries the frame.

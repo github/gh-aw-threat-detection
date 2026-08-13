@@ -158,9 +158,14 @@ func reportError(reason string) {
 // emitMessage writes msg to both stdout (so it appears in the model's tool
 // output) and stderr, keeping the THREAT_DETECTION_RESULT_ERROR prefix visible
 // regardless of how the tool output is captured.
+//
+// The message can quote a malformed reasons file, so the stderr copy — the one
+// bound for a job log — is rendered inert. The stdout copy is left verbatim: it
+// is the model's own tool output, and it reaches a job log only by way of the
+// engine transcript, which is framed and neutralized as it is forwarded.
 func emitMessage(msg string) {
 	fmt.Println(msg)
-	fmt.Fprintln(os.Stderr, msg)
+	stderrf("%s", msg)
 }
 
 func toAnySlice(values []string) []any {

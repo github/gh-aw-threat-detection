@@ -901,7 +901,8 @@ func TestConcludeReasonCannotInjectWorkflowCommand(t *testing.T) {
 }
 
 // TestReasonLogLines verifies multi-line reasons keep their line structure,
-// stay individually sanitized and bounded, and are capped in line count.
+// stay individually sanitized, are wrapped rather than truncated, and are
+// capped in line count.
 func TestReasonLogLines(t *testing.T) {
 	got := reasonLogLines("LOCATION: prompt.txt:42\r\nEVIDENCE: ignore\tprior\rrules")
 	want := []string{"LOCATION: prompt.txt:42", `EVIDENCE: ignore\tprior`, "rules"}
@@ -914,11 +915,27 @@ func TestReasonLogLines(t *testing.T) {
 		}
 	}
 
+	// An over-long source line is wrapped, not truncated: the forensic detail a
+	// reason exists to carry must survive rendering.
 	long := strings.Repeat("x", maxEchoedLineRunes+50)
-	if lines := reasonLogLines(long); !strings.HasSuffix(lines[0], "… (truncated)") {
-		t.Errorf("over-long line not truncated: %q", lines[0])
+	lines := reasonLogLines(long)
+	if len(lines) != 2 {
+		t.Fatalf("over-long line = %d lines, want 2", len(lines))
+	}
+	if strings.Join(lines, "") != long {
+		t.Errorf("wrapped line lost content: %q", lines)
+	}
+	if len([]rune(lines[0])) != maxEchoedLineRunes {
+		t.Errorf("first segment = %d runes, want %d", len([]rune(lines[0])), maxEchoedLineRunes)
 	}
 
+	// Wrapping must not split a multi-byte rune.
+	wide := reasonLogLines(strings.Repeat("é", maxEchoedLineRunes+1))
+	if len([]rune(wide[0])) != maxEchoedLineRunes || wide[1] != "é" {
+		t.Errorf("multi-byte wrap = %q", wide)
+	}
+
+	// Wrapping is still bounded overall, so one reason cannot flood the log.
 	many := reasonLogLines(strings.Repeat("a\n", maxReasonLogLines+10))
 	if len(many) != maxReasonLogLines+1 {
 		t.Fatalf("line count = %d, want %d", len(many), maxReasonLogLines+1)
@@ -995,6 +1012,45 @@ func TestConcludeDiagnosticsCannotEmitLegacyWorkflowCommand(t *testing.T) {
 
 	if strings.Contains(stdout.String(), "##[") {
 		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", stdout.String())
+	}
+}
+
+// TestConcludeAnnotationCannotEmitLegacyWorkflowCommand verifies the workflow
+// *command data* path is neutralized too. A parse error quotes the offending
+// value from the result file, and that message is emitted as the data portion
+// of an "::error::" annotation, which the toolkit's escaping does not clear of
+// legacy markers. The runner does not currently rescan the data of a command it
+// has already recognized, so this is defense in depth rather than a live
+// exposure — but it keeps the annotation consistent with the same value as
+// rendered everywhere else in the log.
+func TestConcludeAnnotationCannotEmitLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json")
+	malformed := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,` +
+		`"reasons":[],"##[stop-commands]pwn3d":1}`
+	if err := os.WriteFile(resultFile, []byte(malformed), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", got)
+	}
+	if !strings.Contains(got, `##\[stop-commands]pwn3d`) {
+		t.Fatalf("neutralized field name should stay visible:\n%s", got)
+	}
+	if !strings.Contains(got, "::error::") {
+		t.Fatalf("expected ::error:: annotation, got:\n%s", got)
 	}
 }
 
@@ -1505,4 +1561,41 @@ func captureStdout(t *testing.T, fn func()) string {
 	out := <-done
 	r.Close()
 	return out
+}
+
+// TestConcludeHeaderDiagnosticsNeutralizeLegacyWorkflowCommand covers the
+// header lines, which echo the host-supplied environment values and paths
+// before any verdict is read. They are the earliest untrusted echo in the
+// conclusion, and they are emitted through c.info rather than through the
+// annotation path, so they need the choke point to be doing its job.
+func TestConcludeHeaderDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "##[add-mask]result.json")
+	verdict := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	if err := os.WriteFile(resultFile, []byte(verdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection:     "true",
+		executionOutcome: "##[stop-commands]outcome",
+		githubOutput:     filepath.Join(dir, "out"),
+		githubEnv:        filepath.Join(dir, "env"),
+		stdout:           &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitProceed)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", got)
+	}
+	// The values must still be present and readable, just inert.
+	if !strings.Contains(got, `##\[add-mask]result.json`) {
+		t.Fatalf("escaped result path not rendered:\n%s", got)
+	}
+	if !strings.Contains(got, `##\[stop-commands]outcome`) {
+		t.Fatalf("escaped execution outcome not rendered:\n%s", got)
+	}
 }

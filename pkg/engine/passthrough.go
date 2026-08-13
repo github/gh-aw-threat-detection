@@ -4,6 +4,8 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/github/gh-aw-threat-detection/pkg/logsafe"
 )
 
 // PassthroughPrefix is prepended to every line of engine subprocess output that
@@ -112,11 +114,20 @@ func (w *passthroughWriter) flushLocked() {
 }
 
 // neutralizeWorkflowCommand defuses a line that tries to open a GitHub Actions
-// workflow command (::error::, ::stop-commands::, ...). The frame prefix already
-// prevents the runner from seeing one, since a framed line no longer starts with
-// "::"; this is defense in depth for consumers that strip the prefix, and it
-// keeps the intent visible in the log rather than silently dropping it.
+// workflow command, in both marker forms the runner accepts.
+//
+// The `::command::` form is only honored at the start of a line (after trimming
+// leading whitespace), so the frame prefix already prevents the runner from
+// seeing one; rewriting it is defense in depth for consumers that strip the
+// prefix, and it keeps the intent visible in the log rather than silently
+// dropping it.
+//
+// The legacy `##[command]` form is different in kind: the runner locates it
+// anywhere within a line, so neither the frame prefix nor any indentation makes
+// it inert. It must be broken up inside the value itself, exactly as the
+// detector's own diagnostics do.
 func neutralizeWorkflowCommand(line string) string {
+	line = logsafe.EscapeLegacyCommandMarker(line)
 	trimmed := strings.TrimLeft(line, " \t")
 	if !strings.HasPrefix(trimmed, "::") {
 		return line

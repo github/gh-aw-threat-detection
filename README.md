@@ -72,8 +72,8 @@ verdict in-session by invoking the `threat_detection_result` tool, which writes
 a strict JSON object matching the result contract to an out-of-band result sink;
 the detector cancels the engine subprocess as soon as a valid result is written.
 The verdict is read exclusively from that sink; if no sink result is produced, a
-one-shot self-correction prompt is retried, and retry exhaustion is treated as an
-infrastructure error.
+self-correction prompt is retried (`--retries`, once by default), and retry
+exhaustion is treated as an infrastructure error.
 
 #### In-session result reporting (`threat_detection_result`)
 
@@ -145,14 +145,24 @@ it recorded a verdict, the engine subprocess invocation and argv, any
 `::warning::`/`::error::` annotations for degraded inputs, and the terminal status
 line. The rendered prompt itself is never echoed.
 
-Untrusted values interpolated into these detector-authored lines are escaped to a
-single physical line and listings are bounded, so neither a model-authored string
-nor a hostile filename can forge a workflow command or flood the job log. The
+Untrusted values interpolated into these detector-authored lines are escaped so
+that each stays on lines of its own and listings are bounded, so neither a
+model-authored string nor a hostile filename can forge a workflow command or
+flood the job log. Escaping happens on the way out — every detector diagnostic
+goes through one writer, and so does every `conclude` line — rather than at each
+call site, so a new diagnostic cannot reintroduce the gap. It covers **both**
+marker forms the Actions runner accepts: the `::command::` form, which it honors
+only at the start of a line, and the legacy `##[command]` form, which it locates
+anywhere within a line and which is therefore broken up inside the value (`##[`
+is rendered `##\[`). Annotation data is neutralized the same way; the runner
+does not rescan the data of a command it already recognized, so that part is
+defense in depth. The
 engine subprocess's own stdout/stderr are a separate, untrusted stream: they are
 forwarded line by line in real time (so harness output and engine errors stay
 visible), each line prefixed with `[engine] ` and stripped of its ability to open
-a workflow command. Forwarded lines are not detector-attested — log consumers
-must ignore any `THREAT_DETECTION_*` marker that carries the `[engine] ` prefix.
+a workflow command in either form. Forwarded lines are not detector-attested —
+log consumers must ignore any `THREAT_DETECTION_*` marker that carries the
+`[engine] ` prefix.
 
 ```text
 [threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
@@ -215,6 +225,14 @@ from `--result-file` by the same convention the detection run uses (override wit
 verdict: a missing or unparseable full result is reported and ignored, a full
 result whose booleans disagree is discarded outright, and a pre-split result that
 still carries its own reasons renders them directly.
+
+Reasons are rendered into the verdict block with their line structure intact —
+each embedded newline becomes a real log line, prefixed with a gutter so no
+continuation line can begin a workflow command — and a line longer than the
+per-line bound is wrapped onto further lines rather than truncated, so the
+located, verbatim evidence a reason exists to carry survives the job log. The
+`::error::` annotation that follows is a summary and does bound each reason;
+it points back at the verdict block for the full text.
 
 `conclude` reproduces the `gh-aw` job-output contract — it writes `conclusion`,
 `reason`, and `success` to `GITHUB_OUTPUT` and exports `GH_AW_DETECTION_CONCLUSION`
@@ -489,7 +507,9 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 - `.github/workflows/smoke-claude-standalone.md`
 - `.github/workflows/smoke-codex-standalone.md`
 
-Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three at once. The matching `.lock.yml` files are the compiled AW workflows. They set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform, runs it under AWF, and reads the structured `detection_result.json` via `threat-detect conclude`. The detector version they install is resolved at run time — see [Detector Version Selection](#detector-version-selection).
+Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three at once. The matching `.lock.yml` files are the compiled AW workflows. They set `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released binary matching the runner platform, runs it under AWF, and reads the structured `detection_result.json` to conclude. The detector version they install is resolved at run time — see [Detector Version Selection](#detector-version-selection).
+
+**The smokes do not exercise `threat-detect conclude`.** The compiled locks conclude with gh-aw's own `conclude_threat_detection.sh`, which reads only `detection_result.json`. Because the published result deliberately carries `reasons: []`, the smokes' job logs show the verdict but no reasons: recovering those needs the `--full-result-file` lookup that only the `conclude` subcommand performs. Use [`replay-detection.yml`](#replay-workflow), which renders the reasons from the companion full result, when the explanations are what you need to see.
 
 **Codex detection model pin.** The Codex smokes pin the detection model explicitly:
 

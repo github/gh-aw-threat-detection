@@ -993,3 +993,28 @@ func TestRunAcceptsAndIgnoresStepSummaryFlag(t *testing.T) {
 		t.Errorf("expected no step summary to be written to %s, stat err = %v", summaryPath, err)
 	}
 }
+
+// TestDetectionDiagnosticsNeutralizeLegacyWorkflowCommand covers the detection
+// run's own stderr diagnostics. The artifacts directory is host-supplied and is
+// echoed verbatim in the fail-closed error, so — like every other detector
+// diagnostic — it must not be able to emit the runner's legacy workflow command
+// from mid-line.
+func TestDetectionDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) {
+	artifactsDir := filepath.Join(t.TempDir(), "##[stop-commands]artifacts")
+	if err := os.MkdirAll(artifactsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+
+	code, stderr := runWithTestArgsCapture(t, []string{"threat-detect", artifactsDir}, nil)
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	if strings.Contains(stderr, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", stderr)
+	}
+	// The path must still be present and readable, just inert.
+	if !strings.Contains(stderr, `##\[stop-commands]artifacts`) {
+		t.Fatalf("escaped artifacts dir not rendered:\n%s", stderr)
+	}
+}

@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
+	"github.com/github/gh-aw-threat-detection/pkg/logsafe"
 )
 
 // Exit codes for the conclude subcommand. These map directly onto whether the
@@ -137,7 +139,7 @@ func runConclude(args []string) int {
 		namedPath{"$GITHUB_OUTPUT", githubOutput},
 		namedPath{"$GITHUB_ENV", githubEnv},
 	); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		stderrf("Error: %v", err)
 		return concludeExitFail
 	}
 
@@ -387,27 +389,64 @@ func (c *concluder) reportVerdict(result *detector.Result, reasons []string) {
 // log lines to print. Reasons carry forensic detail — verbatim quotes of the
 // triggering content, file and line references — which is only usable if it
 // keeps its line structure, so embedded newlines become real lines rather than
-// escaped "\n" runs. Each returned line is individually sanitized (so no line
-// can carry a control character or start a line of its own) and bounded, and
-// the line count is capped so one pathological reason cannot flood the job log.
-// The result always has at least one element.
+// escaped "\n" runs.
+//
+// A source line longer than the per-line bound is wrapped across continuation
+// lines rather than truncated. Truncating would silently discard up to three
+// quarters of a reason written to the maximum MaxReasonRunes budget — precisely
+// the located, verbatim evidence the reason exists to carry — for a reason that
+// merely happens not to be pre-wrapped. The overall line count is still capped
+// so one pathological reason cannot flood the job log.
+//
+// Each returned line is individually sanitized, so no line can carry a control
+// character, start a line of its own, or embed a legacy workflow-command
+// marker. The result always has at least one element.
 func reasonLogLines(reason string) []string {
 	normalized := strings.ReplaceAll(reason, "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	raw := strings.Split(normalized, "\n")
+	lines := make([]string, 0, maxReasonLogLines+1)
 	truncated := false
-	if len(raw) > maxReasonLogLines {
-		raw = raw[:maxReasonLogLines]
-		truncated = true
+	for _, source := range strings.Split(normalized, "\n") {
+		for _, segment := range wrapRunes(source, maxEchoedLineRunes) {
+			if len(lines) == maxReasonLogLines {
+				truncated = true
+				break
+			}
+			lines = append(lines, sanitizeLogValue(segment))
+		}
+		if truncated {
+			break
+		}
 	}
-	lines := make([]string, 0, len(raw)+1)
-	for _, line := range raw {
-		lines = append(lines, sanitizeLogValue(truncateRunes(line, maxEchoedLineRunes)))
+	if len(lines) == 0 {
+		lines = append(lines, "")
 	}
 	if truncated {
 		lines = append(lines, "… (reason truncated)")
 	}
 	return lines
+}
+
+// wrapRunes splits s into segments of at most max runes, counting runes rather
+// than bytes so a multi-byte character is never split across segments. An empty
+// input yields a single empty segment, so a blank line inside a reason survives
+// as a blank line.
+func wrapRunes(s string, max int) []string {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return []string{s}
+	}
+	var segments []string
+	count := 0
+	start := 0
+	for i := range s {
+		if count == max {
+			segments = append(segments, s[start:i])
+			start = i
+			count = 0
+		}
+		count++
+	}
+	return append(segments, s[start:])
 }
 
 // listDirectory prints a recursive listing of dir so a missing or unusable
@@ -556,21 +595,6 @@ func readBounded(path string, limit int64) ([]byte, int64, error) {
 	return data, totalBytes, nil
 }
 
-// legacyCommandMarker is the runner's legacy workflow-command marker,
-// "##[command]data". The Actions runner honors it in addition to the "::" form,
-// and — unlike "::", which it accepts only at the start of a line (after
-// trimming leading whitespace) — it locates this marker with an unanchored
-// IndexOf. A legacy marker anywhere inside a log line is therefore a live
-// command, so no line prefix, gutter, or indentation can render it inert: the
-// value itself must be broken up. Reachable commands include add-mask (which
-// redacts arbitrary text from the log) and stop-commands (which suppresses
-// every later command, including this program's own threat annotation).
-const legacyCommandMarker = "##["
-
-// legacyCommandMarkerEscaped is the inert rendering of legacyCommandMarker. It
-// keeps the sequence readable and greppable while breaking the runner's match.
-const legacyCommandMarkerEscaped = `##\[`
-
 // sanitizeLogValue renders an untrusted string (a model-authored reason, an
 // artifact filename, or a detection-log line) so it cannot act as a workflow
 // command. Two things are neutralized:
@@ -585,7 +609,7 @@ const legacyCommandMarkerEscaped = `##\[`
 //     runner matches it mid-line and line-position defenses cannot reach it.
 func sanitizeLogValue(s string) string {
 	if !strings.ContainsFunc(s, unicode.IsControl) {
-		return strings.ReplaceAll(s, legacyCommandMarker, legacyCommandMarkerEscaped)
+		return logsafe.EscapeLegacyCommandMarker(s)
 	}
 	var b strings.Builder
 	b.Grow(len(s))
@@ -605,7 +629,7 @@ func sanitizeLogValue(s string) string {
 	}
 	// The control-character escapes above emit only backslash sequences, so they
 	// can neither create nor hide a "##[" marker; escaping it afterwards is safe.
-	return strings.ReplaceAll(b.String(), legacyCommandMarker, legacyCommandMarkerEscaped)
+	return logsafe.EscapeLegacyCommandMarker(b.String())
 }
 
 // truncateRunes shortens s to at most max runes, appending an ellipsis marker
@@ -738,16 +762,25 @@ func (c *concluder) appendKV(path, name, value string) {
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "conclude: failed to write %s: %v\n", name, err)
+		stderrf("conclude: failed to write %s: %v", name, err)
 		return
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s=%s\n", name, value)
 }
 
-// info prints a human-readable line to stdout (the job log).
+// info prints one diagnostic line to the conclusion's output stream.
+//
+// Sanitizing here rather than at each call site makes this the single choke
+// point for the conclusion diagnostics: every value these lines interpolate —
+// model-authored reasons, artifact filenames, detection-log lines, and the
+// host-supplied paths and environment values echoed in the header — is rendered
+// inert before it can reach the job log, and a future call site cannot
+// reintroduce the gap by forgetting to escape its own arguments. Sanitizing is
+// idempotent, so callers that additionally bound a value may keep escaping it
+// themselves.
 func (c *concluder) info(message string) {
-	fmt.Fprintln(c.stdout, message)
+	fmt.Fprintln(c.stdout, sanitizeLogValue(message))
 }
 
 // banner prints a title framed by horizontal rules, delimiting the conclusion
@@ -766,7 +799,19 @@ func (c *concluder) command(kind, message string) {
 
 // escapeWorkflowData escapes a string for use as the data portion of a workflow
 // command, per the GitHub Actions toolkit rules.
+//
+// The toolkit rules cover only the characters that would terminate or extend
+// this command (`%`, CR, LF); they leave the legacy `##[` marker alone. The
+// runner does not currently rescan the data of a command it has already
+// recognized — it tries the `::` form first and falls back to legacy parsing
+// only when that fails — so a marker embedded in the message of an `::error::`
+// this program emits is not live today. Neutralizing it anyway costs nothing
+// and does not depend on that parse order holding, and it keeps annotation text
+// consistent with the same value rendered by sanitizeLogValue elsewhere in the
+// log. The percent-escaping below emits only `%XX` sequences, so it can neither
+// create nor hide a marker.
 func escapeWorkflowData(s string) string {
+	s = logsafe.EscapeLegacyCommandMarker(s)
 	s = strings.ReplaceAll(s, "%", "%25")
 	s = strings.ReplaceAll(s, "\r", "%0D")
 	s = strings.ReplaceAll(s, "\n", "%0A")

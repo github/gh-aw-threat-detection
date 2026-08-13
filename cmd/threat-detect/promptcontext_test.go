@@ -175,3 +175,29 @@ func TestPromptContextRejectsUnreadableCustomPromptFile(t *testing.T) {
 		t.Fatalf("stderr missing config_error status, got:\n%s", stderr)
 	}
 }
+
+func TestPromptContextNeutralizesLegacyWorkflowCommand(t *testing.T) {
+	// The workflow name and description are echoed verbatim into the job log.
+	// Quoting confines them to one line but leaves the legacy "##[command]"
+	// marker intact, and the runner matches that one anywhere in a line.
+	stderr := runDetectionForPromptContext(t, map[string]string{
+		"WORKFLOW_NAME":        "##[add-mask]name",
+		"WORKFLOW_DESCRIPTION": "desc ##[stop-commands]tok",
+	})
+
+	promptContext := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(line, "Prompt context:") {
+			promptContext = line
+		}
+	}
+	if promptContext == "" {
+		t.Fatalf("stderr missing prompt context line, got:\n%s", stderr)
+	}
+	if strings.Contains(promptContext, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log: %q", promptContext)
+	}
+	if !strings.Contains(promptContext, `add-mask]name`) || !strings.Contains(promptContext, `stop-commands]tok`) {
+		t.Fatalf("neutralized values should stay visible: %q", promptContext)
+	}
+}
