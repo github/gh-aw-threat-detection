@@ -135,6 +135,48 @@ result file before parsing it, and MUST reject a file that exceeds that bound as
 a parse error rather than parsing a truncated prefix. The bound MUST be large
 enough to admit every result permitted by TD-10a and TD-10b.
 
+**TD-10d**: `reasons` is model-authored text derived from untrusted input, so it
+MUST NOT be persisted in any file the host publishes. The implementation MUST
+therefore split the verdict across two destinations:
+
+- the **result** (the `--output` path, or standard output) carries the three
+  booleans with `reasons` present but always **empty**; and
+- the **full result** (the `--full-output` path) carries the identical verdict
+  together with the reported `reasons`.
+
+Both files MUST use the same JSON object shape as TD-08 and MUST satisfy TD-10a
+through TD-10c, so the redacted result remains schema-valid and every existing
+reader parses it unchanged. The implementation MUST NOT drop the `reasons` key
+from the redacted result.
+
+The full result MUST NOT be written to the same path as the result. When it
+cannot be written, the implementation MUST report the failure as a diagnostic
+and MUST NOT fail the detection run: it carries no verdict, so a read-only or
+absent detection directory MUST NOT convert a completed detection into an
+infrastructure error.
+
+The detector MUST NOT echo `reasons` into any diagnostic it composes on standard
+output or standard error, because hosts routinely capture both into files they
+publish. The reasons reach a human through the full result, read by `conclude`
+and rendered into the job log (TD-20e), which the host masks and expires with
+its own log retention.
+
+This requirement governs detector-authored diagnostics only. It does **not**
+extend to the engine subprocess's own output, which TD-20a requires the detector
+to forward. The model does not pass reasons on the command line — artifact-derived
+reason text is written to the file named by `THREAT_DETECTION_REASONS_FILE` and
+handed to `threat_detection_result` as `--reasons-file <path>` — but an engine
+that renders its own tool activity (the file write that produces that file, or a
+subsequent read of it) reproduces the reason text on the forwarded lines. TD-20a's
+framing makes those lines identifiable and inert — they cannot forge a workflow
+command or a `THREAT_DETECTION_*` marker — but framing does not remove the text.
+Consequently a host that tees the detection run's standard error
+into a file MUST treat that file as carrying model-authored text and MUST NOT
+publish it (see U-09). Suppressing the text entirely would require withholding or
+rewriting engine output, which conflicts with the real-time forwarding TD-20a
+mandates; it is therefore out of scope for this requirement, which governs only
+the files the detector itself writes.
+
 
 ---
 
@@ -291,13 +333,24 @@ trusted framework content in the template copy.
 
 ### 8.2 Output Contract
 
-**TD-19**: The detector MUST output the structured JSON result (per TD-08) to stdout.
+**TD-19**: The detector MUST output the structured JSON result (per TD-08) to
+stdout. That result is the redacted one: its `reasons` array is always empty
+(per TD-10d).
 
-**TD-20**: The detector MUST support writing the result to a file via the `--output` flag.
+**TD-20**: The detector MUST support writing the result to a file via the
+`--output` flag, and the companion full result via the `--full-output` flag.
+When `--full-output` is not given, the full-result path MUST be derived from the
+`--output` path by convention, so a host that configures only `--output` still
+gets the reasons on disk without any change; an explicitly empty `--full-output`
+MUST disable the full result entirely. When the result goes to stdout there is
+no path to derive from, so the implementation MUST NOT write a full result
+unless `--full-output` supplies an explicit path: the flag remains available as
+an escape hatch for a host that wants the reasons on disk somewhere no upload
+glob can reach.
 
 **TD-20a**: The detector MUST NOT write diagnostics to any destination other than
-standard output, standard error, and the result file (TD-20). It MUST NOT produce
-a separate run-log artifact. Every diagnostic the detector emits MUST therefore be
+standard output, standard error, the result file, and the full result file
+(TD-20). It MUST NOT produce a separate run-log artifact. Every diagnostic the detector emits MUST therefore be
 observable in the host's captured job log, and MUST be written to standard error
 so it cannot corrupt the result JSON on standard output (TD-19).
 
@@ -369,9 +422,10 @@ it as a configuration error.
 section to standard output that is sufficient, on its own, to explain the
 conclusion. It MUST report the environment inputs it consumed (`RUN_DETECTION`,
 `GH_AW_DETECTION_CONTINUE_ON_ERROR`, `DETECTION_AGENTIC_EXECUTION_OUTCOME`) and
-the resolved result-file and detection-log paths, and — on both the safe and the
-threat path — the per-field verdict (`prompt_injection`, `secret_leak`,
-`malicious_patch`) together with an indexed list of reasons. When the result file
+the resolved result-file, full-result-file, and detection-log paths, and — on
+both the safe and the threat path — the per-field verdict (`prompt_injection`,
+`secret_leak`, `malicious_patch`) together with an indexed list of reasons
+resolved per TD-20e. When the result file
 is missing or unusable it MUST additionally emit a recursive listing of the
 result directory and, when a detection log is present, its line and byte counts
 plus every line containing a `THREAT_DETECTION_STATUS:` or
@@ -394,6 +448,29 @@ against the latter, the legacy marker MUST be neutralized within the value
 itself. These diagnostics
 are the sole record of the conclusion; `conclude` MUST NOT write them to any
 separate log artifact (TD-20a).
+
+**TD-20e**: Because the result file read by `conclude` carries no reasons
+(TD-10d), `conclude` MUST recover them from the companion full result. It MUST
+accept a `--full-result-file <path>` option and, when the option is not given,
+MUST derive the path from `--result-file` using the same convention the
+detection run uses for `--full-output`. An explicitly empty value MUST disable
+the lookup, mirroring `--full-output`.
+
+The result file remains the sole source of the verdict. The full result MUST
+only ever contribute reasons, and `conclude` MUST therefore:
+
+- treat a missing or unparseable full result as non-fatal, reporting it as a
+  diagnostic and concluding from the result file alone;
+- ignore a full result whose three booleans disagree with the result file,
+  reporting the disagreement, so a stale or planted file can never move,
+  contradict, or add to the verdict; and
+- fall back to any reasons carried inside the result file itself when no usable
+  full result is available, so a result written by a pre-split detector still
+  renders its explanations.
+
+Recovered reasons MUST be rendered into the job-log diagnostics under the
+escaping and bounding rules of TD-20d. `conclude` MUST NOT copy them into any
+file, and hosts MUST NOT upload the full result.
 
 **TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
 actual security finding, so reviewers do not treat a detection outage as a

@@ -95,10 +95,12 @@ func runConclude(args []string) int {
 	fs := flag.NewFlagSet("conclude", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var (
-		resultFile   string
-		detectionLog string
+		resultFile     string
+		fullResultFile string
+		detectionLog   string
 	)
 	fs.StringVar(&resultFile, "result-file", defaultConcludeResultFile, "Path to the structured detection_result.json verdict file")
+	fs.StringVar(&fullResultFile, "full-result-file", "", "Path to the companion result file carrying the model-authored reasons, which the host does not upload (default: the --result-file path with \"_full\" inserted before the extension; empty disables the lookup)")
 	fs.StringVar(&detectionLog, "detection-log", "", "Path to the detection run's captured log, consulted to refine agent_failure/parse_error and to render diagnostics when the result file is missing (default: <result-file dir>/detection.log)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -108,6 +110,20 @@ func runConclude(args []string) int {
 	}
 	if detectionLog == "" {
 		detectionLog = filepath.Join(filepath.Dir(resultFile), defaultDetectionLogName)
+	}
+	fullResultProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "full-result-file" {
+			fullResultProvided = true
+		}
+	})
+	// An explicitly empty --full-result-file disables the companion lookup;
+	// omitting the flag derives the conventional sibling. The two cases are
+	// distinguished by flag provision rather than by the value, because "" is
+	// itself a meaningful value here.
+	fullResultDisabled := fullResultProvided && fullResultFile == ""
+	if !fullResultProvided {
+		fullResultFile = detector.FullResultPath(resultFile)
 	}
 
 	githubOutput := os.Getenv("GITHUB_OUTPUT")
@@ -126,14 +142,16 @@ func runConclude(args []string) int {
 	}
 
 	c := &concluder{
-		runDetection:     os.Getenv("RUN_DETECTION"),
-		warnMode:         detectionContinueOnError(),
-		executionFailed:  os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
-		executionOutcome: os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
-		githubOutput:     githubOutput,
-		githubEnv:        githubEnv,
-		detectionLog:     detectionLog,
-		stdout:           os.Stdout,
+		runDetection:       os.Getenv("RUN_DETECTION"),
+		warnMode:           detectionContinueOnError(),
+		executionFailed:    os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
+		executionOutcome:   os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
+		githubOutput:       githubOutput,
+		githubEnv:          githubEnv,
+		fullResultFile:     fullResultFile,
+		fullResultDisabled: fullResultDisabled,
+		detectionLog:       detectionLog,
+		stdout:             os.Stdout,
 	}
 	return c.run(resultFile)
 }
@@ -149,8 +167,15 @@ type concluder struct {
 
 	githubOutput string // path of $GITHUB_OUTPUT (may be empty)
 	githubEnv    string // path of $GITHUB_ENV (may be empty)
-	detectionLog string // detection run log path; empty derives the sibling default
-	stdout       io.Writer
+	// fullResultFile is the companion result carrying the model-authored
+	// reasons. Empty derives the sibling default from the result file path,
+	// unless fullResultDisabled is set.
+	fullResultFile string
+	// fullResultDisabled suppresses the companion lookup entirely, for a host
+	// that passed an explicitly empty --full-result-file.
+	fullResultDisabled bool
+	detectionLog       string // detection run log path; empty derives the sibling default
+	stdout             io.Writer
 }
 
 // run emits the conclusion banner, evaluates the verdict, and always closes
@@ -168,6 +193,7 @@ func (c *concluder) conclude(resultFile string) int {
 	// for a concluder constructed directly with only the sibling default implied.
 	c.detectionLog = c.detectionLogPath(resultFile)
 	detectionLog := c.detectionLog
+	c.fullResultFile = c.fullResultPath(resultFile)
 	detectionDir := filepath.Dir(resultFile)
 
 	c.banner("🛡️  Threat Detection: Parse Results & Conclude")
@@ -177,6 +203,7 @@ func (c *concluder) conclude(resultFile string) int {
 	c.info(fmt.Sprintf("📁 Threat detection directory: %s", detectionDir))
 	c.info(fmt.Sprintf("📄 Detection log path: %s", detectionLog))
 	c.info(fmt.Sprintf("📄 Structured result path: %s", resultFile))
+	c.info(fmt.Sprintf("📄 Full result path: %s", sanitizeLogValue(describeResultPath(c.fullResultFile, "(disabled)"))))
 
 	// Step 1 — detection not required: skip without reading any verdict.
 	if c.runDetection != "true" {
@@ -226,8 +253,14 @@ func (c *concluder) conclude(resultFile string) int {
 
 	c.info("✔️  Structured result file found and parsed successfully.")
 
-	// Step 3 — report and evaluate the verdict.
-	c.reportVerdict(result)
+	// Step 3 — recover the model-authored reasons. The uploaded result carries
+	// an empty `reasons` array by design; the explanations live in the
+	// companion full result, which stays on the runner. A pre-split result that
+	// still carries its own reasons is honored as-is.
+	reasons := c.resolveReasons(result)
+
+	// Step 4 — report and evaluate the verdict.
+	c.reportVerdict(result, reasons)
 	if result.HasThreats() {
 		threats := make([]string, 0, 3)
 		if result.PromptInjection {
@@ -240,12 +273,12 @@ func (c *concluder) conclude(resultFile string) int {
 			threats = append(threats, "malicious patch")
 		}
 		message := fmt.Sprintf("%s: ❌ Security threats detected: %s", errCodeValidation, strings.Join(threats, ", "))
-		if len(result.Reasons) > 0 {
+		if len(reasons) > 0 {
 			// Reasons are model-authored open text; sanitize and bound them the
 			// same way reportVerdict does before folding them into the workflow
 			// command and the run log.
-			safe := make([]string, 0, len(result.Reasons))
-			for _, reason := range result.Reasons {
+			safe := make([]string, 0, len(reasons))
+			for _, reason := range reasons {
 				safe = append(safe, sanitizeLogValue(truncateRunes(reason, maxEchoedLineRunes)))
 			}
 			message += "\nReasons (full detail in the verdict block above): " + strings.Join(safe, "; ")
@@ -271,17 +304,74 @@ func (c *concluder) detectionLogPath(resultFile string) string {
 	return filepath.Join(filepath.Dir(resultFile), defaultDetectionLogName)
 }
 
+// fullResultPath resolves the companion full-result location, defaulting to the
+// conventional sibling derived from the result file path.
+func (c *concluder) fullResultPath(resultFile string) string {
+	if c.fullResultDisabled {
+		return ""
+	}
+	if c.fullResultFile != "" {
+		return c.fullResultFile
+	}
+	return detector.FullResultPath(resultFile)
+}
+
+// resolveReasons returns the reasons to render for result.
+//
+// The authoritative verdict is always the one already parsed from the result
+// file; the companion full result contributes explanations only. It is
+// therefore consulted defensively: a missing or malformed file is reported and
+// ignored, and a file whose verdict disagrees with the authoritative one is
+// discarded outright, so no on-disk file the detector did not write for this
+// run can move or contradict the verdict.
+//
+// When no usable full result is available, any reasons carried inside the
+// result file itself are used. That is the pre-split shape, so a result written
+// by an older detector still renders its explanations.
+func (c *concluder) resolveReasons(result *detector.Result) []string {
+	if c.fullResultFile == "" {
+		c.info("📄 Full result lookup disabled; reasons will be rendered from the structured result file, if it carries any.")
+		return result.Reasons
+	}
+	full, err := detector.ReadResultFile(c.fullResultFile)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			c.info(fmt.Sprintf("📄 No full result file found at: %s", sanitizeLogValue(c.fullResultFile)))
+		default:
+			// A parse error quotes the offending value, which is
+			// attacker-influenced content from the file itself, so both the
+			// path and the error text are escaped and bounded before they
+			// reach the job log (TD-20d).
+			c.info(fmt.Sprintf("   ⚠️  Could not read full result file %s: %s",
+				sanitizeLogValue(c.fullResultFile),
+				sanitizeLogValue(truncateRunes(err.Error(), maxEchoedLineRunes))))
+		}
+		c.info("   Reasons will be rendered from the structured result file, if it carries any.")
+		return result.Reasons
+	}
+	if !result.SameVerdict(full) {
+		c.info(fmt.Sprintf("   ⚠️  Full result file %s reports a different verdict than the structured result file; ignoring it.",
+			sanitizeLogValue(c.fullResultFile)))
+		c.info("   The structured result file remains authoritative.")
+		return result.Reasons
+	}
+	c.info(fmt.Sprintf("✔️  Full result file found; recovered %d reason(s).", len(full.Reasons)))
+	return full.Reasons
+}
+
 // reportVerdict prints the per-field verdict breakdown and the indexed reasons
 // list. It runs on both the safe and threat paths so the job log always shows
-// exactly what the detector concluded.
-func (c *concluder) reportVerdict(result *detector.Result) {
+// exactly what the detector concluded. Reasons are passed in rather than read
+// from result, because the uploaded result deliberately carries none.
+func (c *concluder) reportVerdict(result *detector.Result, reasons []string) {
 	c.info("📋 Threat detection verdict (from structured result file):")
 	c.info(fmt.Sprintf("   prompt_injection : %t", result.PromptInjection))
 	c.info(fmt.Sprintf("   secret_leak      : %t", result.SecretLeak))
 	c.info(fmt.Sprintf("   malicious_patch  : %t", result.MaliciousPatch))
-	if len(result.Reasons) > 0 {
-		c.info(fmt.Sprintf("   reasons (%d):", len(result.Reasons)))
-		for i, reason := range result.Reasons {
+	if len(reasons) > 0 {
+		c.info(fmt.Sprintf("   reasons (%d):", len(reasons)))
+		for i, reason := range reasons {
 			lines := reasonLogLines(reason)
 			c.info(fmt.Sprintf("     [%d] %s", i+1, lines[0]))
 			for _, line := range lines[1:] {

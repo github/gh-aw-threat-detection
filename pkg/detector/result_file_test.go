@@ -88,3 +88,76 @@ func TestBuildResultFromReport(t *testing.T) {
 		t.Fatalf("unexpected booleans: %#v", r)
 	}
 }
+
+func TestFullResultPath(t *testing.T) {
+	cases := map[string]string{
+		"":                                    "",
+		"detection_result.json":               "detection_result_full.json",
+		"/tmp/gh-aw/td/detection_result.json": "/tmp/gh-aw/td/detection_result_full.json",
+		"/tmp/result":                         "/tmp/result_full",
+		"/tmp/a.b/result.json":                "/tmp/a.b/result_full.json",
+		"/tmp/.detection_result":              "/tmp/.detection_result_full",
+		"/tmp/archive.tar.gz":                 "/tmp/archive.tar_full.gz",
+		"relative/dir/detection_result.json":  "relative/dir/detection_result_full.json",
+	}
+	for in, want := range cases {
+		if got := FullResultPath(in); got != want {
+			t.Errorf("FullResultPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFullResultPathNeverAliasesInput(t *testing.T) {
+	for _, in := range []string{"detection_result.json", "/tmp/result", "/tmp/.hidden", "a.tar.gz"} {
+		if got := FullResultPath(in); got == in {
+			t.Errorf("FullResultPath(%q) aliased its input", in)
+		}
+	}
+}
+
+func TestRedactedDropsReasonsWithoutMutating(t *testing.T) {
+	original := &Result{PromptInjection: true, SecretLeak: true, MaliciousPatch: false, Reasons: []string{"a", "b"}}
+	redacted := original.Redacted()
+	if len(redacted.Reasons) != 0 {
+		t.Fatalf("Redacted() reasons = %#v, want empty", redacted.Reasons)
+	}
+	if redacted.Reasons == nil {
+		t.Fatal("Redacted() must keep reasons as an empty array, not null")
+	}
+	if !redacted.PromptInjection || !redacted.SecretLeak || redacted.MaliciousPatch {
+		t.Fatalf("Redacted() changed the verdict: %#v", redacted)
+	}
+	if len(original.Reasons) != 2 {
+		t.Fatalf("Redacted() mutated the receiver: %#v", original)
+	}
+	// The redacted result must still be schema-valid.
+	path := filepath.Join(t.TempDir(), "result.json")
+	if err := WriteResultFile(path, redacted); err != nil {
+		t.Fatalf("redacted result is not writable: %v", err)
+	}
+	if _, err := ReadResultFile(path); err != nil {
+		t.Fatalf("redacted result is not readable: %v", err)
+	}
+}
+
+func TestSameVerdictIgnoresReasons(t *testing.T) {
+	a := &Result{PromptInjection: true, Reasons: []string{}}
+	b := &Result{PromptInjection: true, Reasons: []string{"why"}}
+	if !a.SameVerdict(b) {
+		t.Error("SameVerdict() = false for identical verdicts with differing reasons")
+	}
+	c := &Result{PromptInjection: true, SecretLeak: true}
+	if a.SameVerdict(c) {
+		t.Error("SameVerdict() = true for differing verdicts")
+	}
+	if a.SameVerdict(nil) {
+		t.Error("SameVerdict(nil) = true")
+	}
+	var nilResult *Result
+	if nilResult.SameVerdict(a) {
+		t.Error("nil.SameVerdict() = true")
+	}
+	if nilResult.Redacted() != nil {
+		t.Error("nil.Redacted() must be nil")
+	}
+}
