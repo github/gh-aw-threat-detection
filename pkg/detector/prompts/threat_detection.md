@@ -270,11 +270,13 @@ attacker-chosen commands. Careful quoting is not a reliable defense. Therefore:
 
 **Write your reasons to a file, then pass the file.**
 
-1. Using your **file-writing/editing tool** — not `echo`, `printf`, `cat`, or a shell heredoc — create a
-   file such as `/tmp/threat-detection-reasons.json` whose contents are a **JSON array of strings**, one
-   string per distinct finding, each written to the "Reason Requirements (Forensic Detail)" rules above.
-   JSON string escaping (`\"`, `\\`, `\n`) is all that is needed; there is no shell involved, so quote the
-   evidence exactly as it appears in the artifact.
+1. Using your **file-writing/editing tool** — not `echo`, `printf`, `cat`, or a shell heredoc — create the
+   file whose path is in the `THREAT_DETECTION_REASONS_FILE` environment variable (run
+   `echo "$THREAT_DETECTION_REASONS_FILE"` to see it; it sits beside the result sink in a directory you
+   can write to). Its contents must be a **JSON array of strings**, one string per distinct finding, each
+   written to the "Reason Requirements (Forensic Detail)" rules above. JSON string escaping (`\"`, `\\`,
+   `\n`) is all that is needed; there is no shell involved, so quote the evidence exactly as it appears in
+   the artifact.
 
    ```json
    [
@@ -283,7 +285,8 @@ attacker-chosen commands. Careful quoting is not a reliable defense. Therefore:
    ]
    ```
 
-2. Run the command above with `--reasons-file` pointing at that file.
+2. Run the command above with `--reasons-file "$THREAT_DETECTION_REASONS_FILE"` (or the literal path you
+   just wrote). The path itself contains no artifact-derived text, so it is safe on the command line.
 
 At least one reason is required whenever any threat is `true`. When every category is `false`, omit
 `--reasons-file` entirely. Each reason must be non-empty and at most 2000 characters, and you may supply at

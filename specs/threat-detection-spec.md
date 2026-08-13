@@ -105,11 +105,15 @@ provenance sufficient to locate and rotate it.
 shell, the implementation MUST provide a transport that carries reason text from
 the engine to the tool without passing it through a shell command line, and the
 prompt MUST direct the engine to use that transport for any reason quoting
-artifact content. Malformed transport input MUST be reported to the engine as a
+artifact content. The implementation MUST grant the engine the capability that
+transport requires (for example, a file-writing tool) whenever it provisions the
+reporting tool; an engine that cannot use the transport would be forced back
+onto the shell. Malformed transport input MUST be reported to the engine as a
 correctable error (TD-10a). Reasons supplied through this transport MUST be
-subject to the same bounds as any other transport (TD-10b). Prompt-level quoting
-guidance MUST NOT be the only protection against shell interpretation of reason
-text.
+subject to the same bounds as any other transport (TD-10b), and any transport
+state left by a previous attempt MUST be discarded before a retry. Prompt-level
+quoting guidance MUST NOT be the only protection against shell interpretation of
+reason text.
 
 **TD-10a**: The result reported through the `threat_detection_result` tool MUST
 use the same JSON object shape as TD-08 with required boolean `prompt_injection`,
@@ -371,8 +375,13 @@ stays readable and copy-pasteable (TD-10d); when it is, every line after the
 first MUST be prefixed with a marker that cannot begin a workflow command.
 Untrusted values echoed into the diagnostics (model-authored reasons, artifact
 filenames, and detection-log lines) MUST otherwise be escaped so that each
-physical output line is confined to one line of the value and cannot emit a host
-workflow command. These diagnostics
+physical output line is confined to one line of the value. Such values MUST NOT
+be able to emit a host workflow command in **either** marker form the runner
+accepts: the `::command::` form, which the runner honors only at the start of a
+line after trimming leading whitespace, and the legacy `##[command]` form, which
+the runner locates anywhere within a line. Because line position is no defense
+against the latter, the legacy marker MUST be neutralized within the value
+itself. These diagnostics
 are the sole record of the conclusion; `conclude` MUST NOT write them to any
 separate log artifact (TD-20a).
 

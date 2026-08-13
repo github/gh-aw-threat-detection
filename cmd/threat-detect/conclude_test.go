@@ -809,6 +809,12 @@ func TestSanitizeLogValue(t *testing.T) {
 		{"carriage return is escaped", "text\r::error::boom", `text\r::error::boom`},
 		{"tab is escaped", "a\tb", `a\tb`},
 		{"other control chars are escaped", "a\x00b\x1bc", `a\x00b\x1bc`},
+		// The runner matches the legacy "##[cmd]" marker anywhere in a line, so
+		// it must be broken up in the value regardless of line position.
+		{"legacy marker is escaped", "evidence ##[stop-commands]tok", `evidence ##\[stop-commands]tok`},
+		{"legacy marker escaped without control chars", "##[add-mask]word", `##\[add-mask]word`},
+		{"every legacy marker occurrence is escaped", "##[error]a ##[add-mask]b", `##\[error]a ##\[add-mask]b`},
+		{"legacy marker escaped alongside control chars", "x\n##[error]y", `x\n##\[error]y`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -882,6 +888,76 @@ func TestReasonLogLines(t *testing.T) {
 	}
 	if many[len(many)-1] != "… (reason truncated)" {
 		t.Errorf("missing truncation marker, got %q", many[len(many)-1])
+	}
+}
+
+// TestConcludeReasonCannotEmitLegacyWorkflowCommand verifies a reason cannot
+// smuggle the runner's legacy "##[command]" marker into the job log. The runner
+// matches that marker mid-line, so the line gutter cannot neutralize it; if it
+// survived, attacker-authored evidence could emit ##[stop-commands] and
+// suppress this program's own threat annotation, or ##[add-mask] and redact the
+// log a maintainer is meant to read.
+func TestConcludeReasonCannotEmitLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json")
+	verdict := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,` +
+		`"reasons":["EVIDENCE:\nharmless ##[stop-commands]pwn3d then ##[add-mask]detected"]}`
+	if err := os.WriteFile(resultFile, []byte(verdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", got)
+	}
+	// The evidence must still be present and readable, just inert.
+	if !strings.Contains(got, `##\[stop-commands]pwn3d`) || !strings.Contains(got, `##\[add-mask]detected`) {
+		t.Fatalf("escaped evidence not rendered:\n%s", got)
+	}
+	// The threat annotation must still be emitted (it is what stop-commands
+	// would have suppressed).
+	if !strings.Contains(got, "::error::") {
+		t.Fatalf("expected ::error:: annotation, got:\n%s", got)
+	}
+}
+
+// TestConcludeDiagnosticsCannotEmitLegacyWorkflowCommand verifies the other
+// untrusted echo paths — artifact filenames and detection-log lines — are
+// neutralized the same way.
+func TestConcludeDiagnosticsCannotEmitLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "detection.log")
+	logLine := "THREAT_DETECTION_STATUS: reason=engine_error exit=2 ##[add-mask]x\n"
+	if err := os.WriteFile(logPath, []byte(logLine), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "evil##[error]name.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     true,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		detectionLog: logPath,
+		stdout:       &stdout,
+	}
+	c.run(filepath.Join(dir, "missing_result.json"))
+
+	if strings.Contains(stdout.String(), "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", stdout.String())
 	}
 }
 

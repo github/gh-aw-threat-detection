@@ -14,14 +14,29 @@ import (
 // resultSinkPollInterval is how often watchResultSink polls the sink file.
 const resultSinkPollInterval = 250 * time.Millisecond
 
+// reasonsFileName is the conventional name of the reasons file the engine
+// writes. It is provisioned in the same directory as the result sink, which is
+// also the directory holding the rendered prompt file — a directory every
+// engine can already reach (Copilot is given it via --add-dir), so the model is
+// never told to write somewhere it may be refused.
+const reasonsFileName = "threat-detection-reasons.json"
+
 // provisionResultTool creates a temp dir containing an executable
 // "threat_detection_result" wrapper that execs the current binary's
 // report-result subcommand. It returns the env additions
-// (THREAT_DETECTION_RESULT_FILE and a PATH prefix) and a cleanup func.
+// (THREAT_DETECTION_RESULT_FILE, THREAT_DETECTION_REASONS_FILE and a PATH
+// prefix) and a cleanup func.
 func provisionResultTool(sinkPath string) (env []string, cleanup func(), err error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolving executable path: %w", err)
+	}
+
+	// Drop any reasons file left by an earlier attempt so a retry cannot report
+	// stale reasons that the model did not author this time around.
+	reasonsPath := filepath.Join(filepath.Dir(sinkPath), reasonsFileName)
+	if err := os.Remove(reasonsPath); err != nil && !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("removing stale reasons file: %w", err)
 	}
 
 	toolDir, err := os.MkdirTemp("", "threat-detect-tool-")
@@ -39,6 +54,7 @@ func provisionResultTool(sinkPath string) (env []string, cleanup func(), err err
 	pathEnv := os.Getenv("PATH")
 	env = []string{
 		"THREAT_DETECTION_RESULT_FILE=" + sinkPath,
+		"THREAT_DETECTION_REASONS_FILE=" + reasonsPath,
 		"PATH=" + toolDir + string(os.PathListSeparator) + pathEnv,
 	}
 	return env, cleanup, nil

@@ -465,15 +465,36 @@ func readBounded(path string, limit int64) ([]byte, int64, error) {
 	return data, totalBytes, nil
 }
 
+// legacyCommandMarker is the runner's legacy workflow-command marker,
+// "##[command]data". The Actions runner honors it in addition to the "::" form,
+// and — unlike "::", which it accepts only at the start of a line (after
+// trimming leading whitespace) — it locates this marker with an unanchored
+// IndexOf. A legacy marker anywhere inside a log line is therefore a live
+// command, so no line prefix, gutter, or indentation can render it inert: the
+// value itself must be broken up. Reachable commands include add-mask (which
+// redacts arbitrary text from the log) and stop-commands (which suppresses
+// every later command, including this program's own threat annotation).
+const legacyCommandMarker = "##["
+
+// legacyCommandMarkerEscaped is the inert rendering of legacyCommandMarker. It
+// keeps the sequence readable and greppable while breaking the runner's match.
+const legacyCommandMarkerEscaped = `##\[`
+
 // sanitizeLogValue renders an untrusted string (a model-authored reason, an
-// artifact filename, or a detection-log line) so it cannot break out of its
-// single physical log line. Embedded newlines would otherwise let the value
-// emit a line of its own beginning with "::", which the Actions runner would
-// interpret as a workflow command. Control characters are escaped rather than
-// dropped so the original content stays visible and diagnosable.
+// artifact filename, or a detection-log line) so it cannot act as a workflow
+// command. Two things are neutralized:
+//
+//   - Control characters are escaped rather than dropped, so the original
+//     content stays visible and diagnosable. This confines the value to one
+//     physical line, since an embedded newline would otherwise let it emit a
+//     line of its own beginning with "::" — which the runner would interpret.
+//     (Reasons are rendered across real lines by reasonLogLines, which calls
+//     this per line and prefixes continuations so none can start with "::".)
+//   - The legacy "##[" marker is escaped wherever it appears, because the
+//     runner matches it mid-line and line-position defenses cannot reach it.
 func sanitizeLogValue(s string) string {
 	if !strings.ContainsFunc(s, unicode.IsControl) {
-		return s
+		return strings.ReplaceAll(s, legacyCommandMarker, legacyCommandMarkerEscaped)
 	}
 	var b strings.Builder
 	b.Grow(len(s))
@@ -491,7 +512,9 @@ func sanitizeLogValue(s string) string {
 			b.WriteRune(r)
 		}
 	}
-	return b.String()
+	// The control-character escapes above emit only backslash sequences, so they
+	// can neither create nor hide a "##[" marker; escaping it afterwards is safe.
+	return strings.ReplaceAll(b.String(), legacyCommandMarker, legacyCommandMarkerEscaped)
 }
 
 // truncateRunes shortens s to at most max runes, appending an ellipsis marker

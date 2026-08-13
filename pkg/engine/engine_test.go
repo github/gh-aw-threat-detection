@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -245,9 +246,9 @@ func TestEngineCommandArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("claude with bash grant", func(t *testing.T) {
+	t.Run("claude with result-tool grant", func(t *testing.T) {
 		got := claudeArgs("claude-sonnet-4.6", true)
-		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash", "--model", "claude-sonnet-4.6", "-"}
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash,Write,Edit", "--model", "claude-sonnet-4.6", "-"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
 		}
@@ -255,7 +256,7 @@ func TestEngineCommandArgs(t *testing.T) {
 
 	t.Run("claude harness args", func(t *testing.T) {
 		got := claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true)
-		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash,Write,Edit", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeHarnessArgs() = %#v, want %#v", got, want)
 		}
@@ -278,7 +279,7 @@ func TestEngineCommandArgs(t *testing.T) {
 		wantArgs := []string{
 			harnessPath, "claude",
 			"--print", "--verbose", "--output-format", "stream-json",
-			"--allowed-tools", "Bash",
+			"--allowed-tools", "Bash,Write,Edit",
 			"--model", "claude-sonnet-4.6",
 			"--prompt-file", "/tmp/prompt.txt",
 		}
@@ -505,5 +506,45 @@ func TestExtractStreamJSONErrorNoError(t *testing.T) {
 	stdout := `{"type":"system","subtype":"init"}` + "\n" + `{"type":"result","subtype":"success","is_error":false}`
 	if msg := extractStreamJSONError(stdout); msg != "" {
 		t.Errorf("expected no error message, got %q", msg)
+	}
+}
+
+// TestClaudeGrantsFileToolsForReasonsTransport pins the Claude tool grant to the
+// transport the detection prompt mandates. Reasons quote attacker-authored text
+// verbatim, so the prompt requires them to be written to a file with a
+// file-writing tool rather than passed through the shell. If Claude is granted
+// only Bash, that instruction is unfollowable and the model's only options are
+// a heredoc or a --reason argument — both of which reintroduce shell expansion
+// of attacker-controlled evidence.
+func TestClaudeGrantsFileToolsForReasonsTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"claudeArgs", claudeArgs("", true)},
+		{"claudeHarnessArgs", claudeHarnessArgs("/tmp/prompt.txt", "", true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			granted := ""
+			for i, a := range tc.args {
+				if a == "--allowed-tools" && i+1 < len(tc.args) {
+					granted = tc.args[i+1]
+				}
+			}
+			if granted == "" {
+				t.Fatalf("no --allowed-tools grant in %#v", tc.args)
+			}
+			tools := strings.Split(granted, ",")
+			for _, required := range []string{"Bash", "Write"} {
+				if !slices.Contains(tools, required) {
+					t.Errorf("tool %q not granted (got %q); the prompt requires writing the reasons file without a shell", required, granted)
+				}
+			}
+		})
+	}
+
+	// Without the result sink no tool is granted at all, so nothing to write.
+	if got := claudeArgs("", false); slices.Contains(got, "--allowed-tools") {
+		t.Errorf("unexpected tool grant without a result sink: %#v", got)
 	}
 }

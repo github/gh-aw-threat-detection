@@ -157,15 +157,15 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		return "", err
 	}
 	defer cleanup()
-	enableBashTool := opts.ResultSinkPath != ""
+	enableResultTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
-		logEngineInvoke("claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableBashTool)...), e.model)
+		logEngineInvoke("claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableResultTool)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
-			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableBashTool)...)
+			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableResultTool)...)
 		}, "", toolEnv, opts.ResultSinkPath)
 	}
-	args := claudeArgs(e.model, enableBashTool)
+	args := claudeArgs(e.model, enableResultTool)
 	logEngineInvoke("claude", "claude", args, e.model)
 	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
 }
@@ -323,10 +323,21 @@ func copilotHarnessAwfConfigEnvAt(harnessDefaultPath string) []string {
 	return []string{"GH_AW_AWF_CONFIG_PATH=" + candidate}
 }
 
-func claudeArgs(model string, allowBash bool) []string {
+// resultToolClaudeTools are the Claude tools granted when the in-session result
+// sink is provisioned. Bash runs the threat_detection_result wrapper, while
+// Write and Edit let the model author the reasons file that carries verbatim
+// evidence out of band of the shell (see ReadReasonsFile). Without the file
+// tools the model's only remaining ways to report a reason are a shell heredoc
+// or a --reason argument — the exact shell-expansion surface the file transport
+// exists to remove — so the tool grant and the prompt must stay in step.
+//
+// This grants no capability beyond Bash, which can already write files.
+var resultToolClaudeTools = []string{"Bash", "Write", "Edit"}
+
+func claudeArgs(model string, allowResultTool bool) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
-	if allowBash {
-		args = append(args, "--allowed-tools", "Bash")
+	if allowResultTool {
+		args = append(args, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
@@ -338,10 +349,10 @@ func claudeArgs(model string, allowBash bool) []string {
 // identical to claudeArgs except that it uses --prompt-file <path> instead of
 // the stdin sentinel "-", matching the invocation pattern used by the gh-aw
 // claude_harness.cjs script.
-func claudeHarnessArgs(promptPath, model string, allowBash bool) []string {
+func claudeHarnessArgs(promptPath, model string, allowResultTool bool) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
-	if allowBash {
-		args = append(args, "--allowed-tools", "Bash")
+	if allowResultTool {
+		args = append(args, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)

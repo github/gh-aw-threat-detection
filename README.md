@@ -78,8 +78,12 @@ infrastructure error.
 
 On the agentic CLI engine path (`copilot`, `claude`, `codex`), the detector
 provisions a `threat_detection_result` command on the model's `PATH` and sets
-`THREAT_DETECTION_RESULT_FILE` to a private sink file before each engine
-invocation. The model reports its verdict by running the command exactly once:
+`THREAT_DETECTION_RESULT_FILE` to a private sink file, plus
+`THREAT_DETECTION_REASONS_FILE` to the path the model writes its reasons to
+(alongside the sink, in a directory every engine can reach), before each engine
+invocation. Any reasons file left by a previous attempt is removed at
+provisioning time so a retry cannot report stale reasons. The model reports its
+verdict by running the command exactly once:
 
 ```bash
 threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reasons-file <path>

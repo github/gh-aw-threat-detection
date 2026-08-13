@@ -164,3 +164,52 @@ func TestRunCLIEnvWithSinkIncludesStdoutOnFailure(t *testing.T) {
 		t.Fatalf("expected stdout error surfaced, got %q", err.Error())
 	}
 }
+
+// TestProvisionResultToolProvidesReasonsPath verifies the reasons file the
+// prompt tells the model to write is provisioned in a directory the engine can
+// reach — the same directory as the result sink and the rendered prompt file,
+// which Copilot receives via --add-dir.
+func TestProvisionResultToolProvidesReasonsPath(t *testing.T) {
+	dir := t.TempDir()
+	sink := filepath.Join(dir, "result.json")
+	env, cleanup, err := provisionResultTool(sink)
+	if err != nil {
+		t.Fatalf("provisionResultTool() error = %v", err)
+	}
+	defer cleanup()
+
+	var reasonsPath string
+	for _, e := range env {
+		if strings.HasPrefix(e, "THREAT_DETECTION_REASONS_FILE=") {
+			reasonsPath = strings.TrimPrefix(e, "THREAT_DETECTION_REASONS_FILE=")
+		}
+	}
+	if reasonsPath == "" {
+		t.Fatal("THREAT_DETECTION_REASONS_FILE not provisioned")
+	}
+	if got := filepath.Dir(reasonsPath); got != dir {
+		t.Fatalf("reasons file dir = %q, want %q (must share the sink's directory)", got, dir)
+	}
+}
+
+// TestProvisionResultToolClearsStaleReasons verifies a reasons file left by an
+// earlier attempt is removed, so a retry cannot report reasons the model did
+// not author on that attempt.
+func TestProvisionResultToolClearsStaleReasons(t *testing.T) {
+	dir := t.TempDir()
+	sink := filepath.Join(dir, "result.json")
+	stale := filepath.Join(dir, reasonsFileName)
+	if err := os.WriteFile(stale, []byte(`["stale finding"]`), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	_, cleanup, err := provisionResultTool(sink)
+	if err != nil {
+		t.Fatalf("provisionResultTool() error = %v", err)
+	}
+	defer cleanup()
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale reasons file survived provisioning, stat err = %v", err)
+	}
+}
