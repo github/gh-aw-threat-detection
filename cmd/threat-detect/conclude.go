@@ -90,7 +90,7 @@ func runConclude(args []string) int {
 		detectionLog   string
 	)
 	fs.StringVar(&resultFile, "result-file", defaultConcludeResultFile, "Path to the structured detection_result.json verdict file")
-	fs.StringVar(&fullResultFile, "full-result-file", "", "Path to the companion result file carrying the model-authored reasons, which the host does not upload (default: the --result-file path with \"_full\" inserted before the extension)")
+	fs.StringVar(&fullResultFile, "full-result-file", "", "Path to the companion result file carrying the model-authored reasons, which the host does not upload (default: the --result-file path with \"_full\" inserted before the extension; empty disables the lookup)")
 	fs.StringVar(&detectionLog, "detection-log", "", "Path to the detection run's captured log, consulted to refine agent_failure/parse_error and to render diagnostics when the result file is missing (default: <result-file dir>/detection.log)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -107,6 +107,11 @@ func runConclude(args []string) int {
 			fullResultProvided = true
 		}
 	})
+	// An explicitly empty --full-result-file disables the companion lookup;
+	// omitting the flag derives the conventional sibling. The two cases are
+	// distinguished by flag provision rather than by the value, because "" is
+	// itself a meaningful value here.
+	fullResultDisabled := fullResultProvided && fullResultFile == ""
 	if !fullResultProvided {
 		fullResultFile = detector.FullResultPath(resultFile)
 	}
@@ -127,15 +132,16 @@ func runConclude(args []string) int {
 	}
 
 	c := &concluder{
-		runDetection:     os.Getenv("RUN_DETECTION"),
-		warnMode:         detectionContinueOnError(),
-		executionFailed:  os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
-		executionOutcome: os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
-		githubOutput:     githubOutput,
-		githubEnv:        githubEnv,
-		fullResultFile:   fullResultFile,
-		detectionLog:     detectionLog,
-		stdout:           os.Stdout,
+		runDetection:       os.Getenv("RUN_DETECTION"),
+		warnMode:           detectionContinueOnError(),
+		executionFailed:    os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME") == "failure",
+		executionOutcome:   os.Getenv("DETECTION_AGENTIC_EXECUTION_OUTCOME"),
+		githubOutput:       githubOutput,
+		githubEnv:          githubEnv,
+		fullResultFile:     fullResultFile,
+		fullResultDisabled: fullResultDisabled,
+		detectionLog:       detectionLog,
+		stdout:             os.Stdout,
 	}
 	return c.run(resultFile)
 }
@@ -152,10 +158,14 @@ type concluder struct {
 	githubOutput string // path of $GITHUB_OUTPUT (may be empty)
 	githubEnv    string // path of $GITHUB_ENV (may be empty)
 	// fullResultFile is the companion result carrying the model-authored
-	// reasons. Empty derives the sibling default from the result file path.
+	// reasons. Empty derives the sibling default from the result file path,
+	// unless fullResultDisabled is set.
 	fullResultFile string
-	detectionLog   string // detection run log path; empty derives the sibling default
-	stdout         io.Writer
+	// fullResultDisabled suppresses the companion lookup entirely, for a host
+	// that passed an explicitly empty --full-result-file.
+	fullResultDisabled bool
+	detectionLog       string // detection run log path; empty derives the sibling default
+	stdout             io.Writer
 }
 
 // run emits the conclusion banner, evaluates the verdict, and always closes
@@ -183,7 +193,7 @@ func (c *concluder) conclude(resultFile string) int {
 	c.info(fmt.Sprintf("📁 Threat detection directory: %s", detectionDir))
 	c.info(fmt.Sprintf("📄 Detection log path: %s", detectionLog))
 	c.info(fmt.Sprintf("📄 Structured result path: %s", resultFile))
-	c.info(fmt.Sprintf("📄 Full result path: %s", describeResultPath(c.fullResultFile, "(none)")))
+	c.info(fmt.Sprintf("📄 Full result path: %s", sanitizeLogValue(describeResultPath(c.fullResultFile, "(disabled)"))))
 
 	// Step 1 — detection not required: skip without reading any verdict.
 	if c.runDetection != "true" {
@@ -287,6 +297,9 @@ func (c *concluder) detectionLogPath(resultFile string) string {
 // fullResultPath resolves the companion full-result location, defaulting to the
 // conventional sibling derived from the result file path.
 func (c *concluder) fullResultPath(resultFile string) string {
+	if c.fullResultDisabled {
+		return ""
+	}
 	if c.fullResultFile != "" {
 		return c.fullResultFile
 	}
@@ -307,22 +320,29 @@ func (c *concluder) fullResultPath(resultFile string) string {
 // by an older detector still renders its explanations.
 func (c *concluder) resolveReasons(result *detector.Result) []string {
 	if c.fullResultFile == "" {
+		c.info("📄 Full result lookup disabled; reasons will be rendered from the structured result file, if it carries any.")
 		return result.Reasons
 	}
 	full, err := detector.ReadResultFile(c.fullResultFile)
 	if err != nil {
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-			c.info(fmt.Sprintf("📄 No full result file found at: %s", c.fullResultFile))
+			c.info(fmt.Sprintf("📄 No full result file found at: %s", sanitizeLogValue(c.fullResultFile)))
 		default:
-			c.info(fmt.Sprintf("   ⚠️  Could not read full result file %s: %v", c.fullResultFile, err))
+			// A parse error quotes the offending value, which is
+			// attacker-influenced content from the file itself, so both the
+			// path and the error text are escaped and bounded before they
+			// reach the job log (TD-20d).
+			c.info(fmt.Sprintf("   ⚠️  Could not read full result file %s: %s",
+				sanitizeLogValue(c.fullResultFile),
+				sanitizeLogValue(truncateRunes(err.Error(), maxEchoedLineRunes))))
 		}
 		c.info("   Reasons will be rendered from the structured result file, if it carries any.")
 		return result.Reasons
 	}
 	if !result.SameVerdict(full) {
 		c.info(fmt.Sprintf("   ⚠️  Full result file %s reports a different verdict than the structured result file; ignoring it.",
-			c.fullResultFile))
+			sanitizeLogValue(c.fullResultFile)))
 		c.info("   The structured result file remains authoritative.")
 		return result.Reasons
 	}

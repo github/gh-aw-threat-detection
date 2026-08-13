@@ -168,8 +168,12 @@ Consequences worth knowing:
 - Reasons are **not** available to anything reading artifacts after the fact.
   Post-hoc triage of an old blocked run depends on the job log still being
   retained.
-- Reasons are never echoed to stdout or stderr during detection, because hosts
-  routinely tee both into published files.
+- No diagnostic the detector writes echoes the reasons, because hosts routinely
+  tee stdout and stderr into published files. This covers detector-authored
+  output only — the engine transcript is forwarded verbatim and reproduces the
+  reason text wherever the engine renders the `threat_detection_result`
+  invocation the model made, so a captured stderr file must be treated as
+  carrying model-authored text and must not be uploaded.
 - A failure to write the full result is non-fatal — it carries no verdict, so a
   read-only detection directory does not turn a completed detection into an
   infrastructure error.

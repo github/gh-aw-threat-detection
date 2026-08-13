@@ -130,10 +130,23 @@ and MUST NOT fail the detection run: it carries no verdict, so a read-only or
 absent detection directory MUST NOT convert a completed detection into an
 infrastructure error.
 
-Reasons MUST NOT be echoed to standard output or standard error by the detection
-run, because hosts routinely capture both into files they publish. The reasons
-reach a human through the full result, read by `conclude` and rendered into the
-job log (TD-20e), which the host masks and expires with its own log retention.
+The detector MUST NOT echo `reasons` into any diagnostic it composes on standard
+output or standard error, because hosts routinely capture both into files they
+publish. The reasons reach a human through the full result, read by `conclude`
+and rendered into the job log (TD-20e), which the host masks and expires with
+its own log retention.
+
+This requirement governs detector-authored diagnostics only. It does **not**
+extend to the engine subprocess's own output, which TD-20a requires the detector
+to forward verbatim: the model reports its verdict by invoking the
+`threat_detection_result` command with each reason as an argument, so an engine
+that renders its own tool invocations reproduces the reason text in the
+transcript. Consequently a host that tees the detection run's standard error
+into a file MUST treat that file as carrying model-authored text and MUST NOT
+publish it (see U-09). Closing that surface would require suppressing or
+rewriting the engine transcript, which conflicts with the real-time forwarding
+TD-20a mandates; it is therefore out of scope for this requirement, which
+governs only the files the detector itself writes.
 
 
 ---
@@ -300,8 +313,11 @@ stdout. That result is the redacted one: its `reasons` array is always empty
 When `--full-output` is not given, the full-result path MUST be derived from the
 `--output` path by convention, so a host that configures only `--output` still
 gets the reasons on disk without any change; an explicitly empty `--full-output`
-MUST disable the full result entirely. When the result goes to stdout, no
-full-result path can be derived and none MUST be written.
+MUST disable the full result entirely. When the result goes to stdout there is
+no path to derive from, so the implementation MUST NOT write a full result
+unless `--full-output` supplies an explicit path: the flag remains available as
+an escape hatch for a host that wants the reasons on disk somewhere no upload
+glob can reach.
 
 **TD-20a**: The detector MUST NOT write diagnostics to any destination other than
 standard output, standard error, the result file, and the full result file
@@ -389,7 +405,8 @@ separate log artifact (TD-20a).
 (TD-10d), `conclude` MUST recover them from the companion full result. It MUST
 accept a `--full-result-file <path>` option and, when the option is not given,
 MUST derive the path from `--result-file` using the same convention the
-detection run uses for `--full-output`.
+detection run uses for `--full-output`. An explicitly empty value MUST disable
+the lookup, mirroring `--full-output`.
 
 The result file remains the sole source of the verdict. The full result MUST
 only ever contribute reasons, and `conclude` MUST therefore:

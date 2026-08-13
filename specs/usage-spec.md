@@ -166,7 +166,11 @@ an explicitly empty `--full-output` to disable it.
 
 **U-09**: The host SHOULD capture the detector's standard error into its job log
 and retain it for observability: apart from the result file, it is the detector's
-only diagnostic output (per TD-20a). The detector does not produce a separate
+only diagnostic output (per TD-20a). The host MUST NOT publish that capture as an
+artifact: it carries the forwarded engine transcript, which reproduces the
+model-authored reasons wherever the engine renders its own
+`threat_detection_result` invocation (per TD-10d). The job log is the intended
+destination for that text; a file uploaded alongside the result is not. The detector does not produce a separate
 run-log artifact and does not write to the GitHub Actions step summary; the
 recursive artifact inventory, the prompt metadata, the per-attempt trace, and the
 terminal status line are available on standard error only (per TD-20c).
@@ -271,8 +275,8 @@ this output is the sole record of them, and the host MUST retain its job log for
 as long as it expects to be able to explain a blocked run.
 
 A host MAY pass `--full-result-file <path>` when the full result is not stored
-beside the result file; by default `conclude` derives it by the same convention
-the detection run uses. A missing, unreadable, or verdict-mismatched full result
+beside the result file, or an explicitly empty value to disable the lookup; by
+default `conclude` derives it by the same convention the detection run uses. A missing, unreadable, or verdict-mismatched full result
 never changes the conclusion (per TD-20e). `conclude` writes no separate log
 artifact and never copies the reasons into a file.
 

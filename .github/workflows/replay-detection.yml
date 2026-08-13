@@ -459,7 +459,19 @@ jobs:
 
           if [ -f "$full_result_path" ]; then
             echo "Replay detection reasons (not persisted to any artifact):"
-            jq -r '.reasons[]? | "  - " + .' "$full_result_path" || true
+            # Render reasons only when the companion file describes the same
+            # verdict, so a stale file cannot explain a verdict that was not
+            # reached. Each reason is JSON-encoded (tojson) so model-authored
+            # text stays on one physical line and cannot forge a workflow
+            # command such as "::error::".
+            jq -n -r \
+              --slurpfile result "$result_path" \
+              --slurpfile full "$full_result_path" \
+              'def verdict: {prompt_injection, secret_leak, malicious_patch};
+               if ($result[0] | verdict) == ($full[0] | verdict)
+               then ($full[0].reasons[]? | "  - " + tojson)
+               else "  (full result reports a different verdict; ignored)"
+               end' || echo "  (full result unavailable or unreadable)"
           fi
 
           echo "exit_code=${run_status}" >> "$GITHUB_OUTPUT"

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1242,4 +1243,121 @@ func TestConcludeDerivesFullResultSibling(t *testing.T) {
 	if !strings.Contains(stdout.String(), "     [1] jailbreak attempt") {
 		t.Errorf("expected reasons from the conventional sibling\n--- got ---\n%s", stdout.String())
 	}
+}
+
+// TestConcludeMalformedFullResultCannotInjectWorkflowCommand verifies that the
+// parse error reported for an unreadable companion file — which quotes the
+// offending, attacker-influenced value — cannot emit a line of its own that the
+// Actions runner would read as a workflow command (TD-20d).
+func TestConcludeMalformedFullResultCannotInjectWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	// `reasons` is a string rather than an array, so the validation error
+	// quotes its value verbatim. The value carries a newline followed by a
+	// workflow command.
+	resultFile := writeSplitResultFixture(t, safeVerdict,
+		`{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":"oops\n::error::forged"}`)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitProceed)
+	}
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "::error::") {
+			t.Fatalf("malformed full result forged a workflow command: %q", line)
+		}
+	}
+	if !strings.Contains(stdout.String(), `oops\n::error::forged`) {
+		t.Errorf("expected the escaped value to remain visible\n--- got ---\n%s", stdout.String())
+	}
+}
+
+// TestConcludeFullResultPathCannotInjectWorkflowCommand verifies the companion
+// path is escaped too, since it reaches the job log on both the missing and the
+// verdict-mismatch branch.
+func TestConcludeFullResultPathCannotInjectWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, safeVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection:   "true",
+		fullResultFile: "/tmp/full.json\n::error::forged",
+		githubOutput:   filepath.Join(dir, "out"),
+		githubEnv:      filepath.Join(dir, "env"),
+		stdout:         &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitProceed)
+	}
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "::error::") {
+			t.Fatalf("full result path forged a workflow command: %q", line)
+		}
+	}
+}
+
+// TestRunConcludeExplicitEmptyFullResultFileDisablesLookup verifies that an
+// explicitly empty --full-result-file skips the companion lookup rather than
+// falling back to the convention.
+func TestRunConcludeExplicitEmptyFullResultFileDisablesLookup(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json")
+	if err := os.WriteFile(resultFile, []byte(redactedThreatVerdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(detector.FullResultPath(resultFile), []byte(threatVerdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", "false")
+	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	// runConclude honors the explicit empty value, so the sibling holding the
+	// reasons is never consulted even though it exists on disk. The conclusion
+	// itself is unchanged, since the verdict comes from the result file.
+	stdout := captureStdout(t, func() {
+		if code := runConclude([]string{"--result-file", resultFile, "--full-result-file", ""}); code != concludeExitFail {
+			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+		}
+	})
+	if strings.Contains(stdout, "jailbreak attempt") {
+		t.Errorf("companion file must not be consulted when disabled\n--- got ---\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "📄 Full result path: (disabled)") {
+		t.Errorf("expected the disabled path rendering\n--- got ---\n%s", stdout)
+	}
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns what was
+// written, so runConclude's job-log rendering can be asserted.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	defer func() {
+		os.Stdout = orig
+	}()
+	fn()
+	w.Close()
+	out := <-done
+	r.Close()
+	return out
 }

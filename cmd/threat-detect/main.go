@@ -262,8 +262,9 @@ func run() (code int) {
 	// wins (including an explicit empty value, which disables the sidecar);
 	// otherwise it is derived from --output by convention so a host that only
 	// knows about --output still gets the reasons on disk without any change.
-	// With no --output at all the result goes to stdout and there is no path to
-	// derive from, so no sidecar is written.
+	// With no --output at all there is no path to derive from, so the sidecar
+	// exists in stdout mode only when --full-output names one explicitly — the
+	// escape hatch for placing it where no upload glob can reach.
 	if !providedFlags["full-output"] {
 		fullOutputJSON = detector.FullResultPath(outputJSON)
 	}
@@ -509,8 +510,13 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 // The result reachable by the host's artifact upload (--output, or stdout) is
 // always redacted: it carries the three booleans with an empty `reasons` array.
 // The model-authored reasons go only to fullOutput, which stays on the runner.
-// Reasons are never echoed to stdout or stderr here, because hosts tee both into
-// files they publish.
+//
+// No diagnostic composed here echoes the reasons, because hosts tee stdout and
+// stderr into files they publish. That guarantee covers detector-authored output
+// only: the engine subprocess's transcript is forwarded verbatim (TD-20a) and
+// reproduces the reason text wherever the engine renders the
+// threat_detection_result invocation the model made, so a captured stderr file
+// must be treated as carrying model-authored text and must not be published.
 //
 // A failure to write the full result is non-fatal: it is diagnostic-only, and a
 // read-only or missing detection directory must not turn a completed detection
