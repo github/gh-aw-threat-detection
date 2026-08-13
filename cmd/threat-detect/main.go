@@ -29,7 +29,6 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
-	"github.com/github/gh-aw-threat-detection/pkg/logsafe"
 )
 
 const (
@@ -69,9 +68,24 @@ const (
 // distinguish engine_error from invalid_report_exhausted on the status line.
 var errEngineExecution = errors.New("engine execution failed")
 
+// stderrf writes one diagnostic line to standard error.
+//
+// Every detector diagnostic goes through here so that sanitization is a
+// property of the output path rather than of each call site. The lines
+// interpolate untrusted and host-supplied values — artifact filenames and
+// inventory paths, the artifacts directory, engine and model identifiers,
+// result paths, and error text that quotes any of them — and a future call site
+// must not be able to reintroduce a log-injection gap by forgetting to escape
+// its own arguments. The message is rendered as exactly one physical line, so
+// callers pass no trailing newline. Sanitizing is idempotent, so a caller that
+// additionally bounds a value may still escape it itself.
+func stderrf(format string, args ...any) {
+	fmt.Fprintln(os.Stderr, sanitizeLogValue(fmt.Sprintf(format, args...)))
+}
+
 // emitStatus writes the single terminal status line to stderr.
 func emitStatus(reason string, code int) {
-	fmt.Fprintf(os.Stderr, "%s reason=%s exit=%d\n", statusPrefix, reason, code)
+	stderrf("%s reason=%s exit=%d", statusPrefix, reason, code)
 }
 
 // detectionContinueOnError reports whether the host selected warn mode. It is
@@ -164,7 +178,7 @@ func run() (code int) {
 		}
 	})
 	if stepSummaryProvided {
-		fmt.Fprintf(os.Stderr, "[threat-detect] ignoring deprecated --step-summary %s: the detector no longer writes a step summary\n",
+		stderrf("[threat-detect] ignoring deprecated --step-summary %s: the detector no longer writes a step summary",
 			sanitizeLogValue(stepSummary))
 	}
 
@@ -183,14 +197,14 @@ func run() (code int) {
 	if modelDesc == "" {
 		modelDesc = "(none; using engine default)"
 	}
-	fmt.Fprintf(os.Stderr, "[threat-detect] run start: version=%s engine=%s model=%s retries=%d\n",
+	stderrf("[threat-detect] run start: version=%s engine=%s model=%s retries=%d",
 		sanitizeLogValue(detector.Version), sanitizeLogValue(engine.Canonical(engineID)),
 		sanitizeLogValue(modelDesc), retries)
 
 	// Determine artifacts directory from positional args
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: threat-detect [flags] <artifacts-dir>\n")
+		stderrf("Usage: threat-detect [flags] <artifacts-dir>")
 		flag.PrintDefaults()
 		reason = reasonConfigError
 		return exitError
@@ -200,7 +214,7 @@ func run() (code int) {
 	// Load artifacts
 	arts, err := artifacts.Load(artifactsDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading artifacts: %v\n", err)
+		stderrf("Error loading artifacts: %v", err)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -226,12 +240,12 @@ func run() (code int) {
 		if w.RequiredInput && !warnMode {
 			command = "error"
 		}
-		fmt.Fprintf(os.Stderr, "::%s::%s\n", command, escapeWorkflowData(w.Message))
+		stderrf("::%s::%s", command, escapeWorkflowData(w.Message))
 		// The annotation text alone does not say whether the finding concerns an
 		// artifact the host was required to stage — in warn mode both kinds are
 		// emitted as "::warning::". Record that classification alongside it so
 		// TD-18c stays diagnosable from the job log.
-		fmt.Fprintf(os.Stderr, "[threat-detect] artifact degraded: field=%s required_input=%t\n",
+		stderrf("[threat-detect] artifact degraded: field=%s required_input=%t",
 			sanitizeLogValue(w.Field), w.RequiredInput)
 	}
 
@@ -239,13 +253,13 @@ func run() (code int) {
 	// analyze nothing and return a clean verdict — a fail-open failure mode in
 	// a security control. Fail closed instead of proceeding.
 	if arts.AllPrimaryInputsMissing {
-		fmt.Fprintf(os.Stderr, "Error: prompt, agent output, and patch/bundle files are all missing or empty in %s; refusing to run detection on empty input.\n", artifactsDir)
+		stderrf("Error: prompt, agent output, and patch/bundle files are all missing or empty in %s; refusing to run detection on empty input.", artifactsDir)
 		reason = reasonConfigError
 		return exitError
 	}
 
 	if !warnMode && arts.HasRequiredInputWarnings() {
-		fmt.Fprintf(os.Stderr, "Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.\n", artifactsDir)
+		stderrf("Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.", artifactsDir)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -276,20 +290,20 @@ func run() (code int) {
 	if outputJSON != "" && fullOutputJSON != "" {
 		same, err := samePath(outputJSON, fullOutputJSON)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error resolving result paths: %v\n", err)
+			stderrf("Error resolving result paths: %v", err)
 			reason = reasonConfigError
 			return exitError
 		}
 		if same {
-			fmt.Fprintf(os.Stderr, "Error: --full-output %s resolves to the same file as --output; the full result must be written to a separate path that the host does not upload.\n",
-				sanitizeLogValue(fullOutputJSON))
+			stderrf("Error: --full-output %s resolves to the same file as --output; the full result must be written to a separate path that the host does not upload.",
+				fullOutputJSON)
 			reason = reasonConfigError
 			return exitError
 		}
 	}
-	fmt.Fprintf(os.Stderr, "[threat-detect] result destinations: output=%s full_output=%s\n",
-		sanitizeLogValue(describeResultPath(outputJSON, "(stdout)")),
-		sanitizeLogValue(describeResultPath(fullOutputJSON, "(disabled)")))
+	stderrf("[threat-detect] result destinations: output=%s full_output=%s",
+		describeResultPath(outputJSON, "(stdout)"),
+		describeResultPath(fullOutputJSON, "(disabled)"))
 
 	// A value is "defaulted" only when neither the flag nor its environment
 	// variable supplied it; equality with the fallback text is not sufficient.
@@ -317,7 +331,7 @@ func run() (code int) {
 	if providedFlags["custom-prompt-file"] {
 		data, err := os.ReadFile(customPromptFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading custom prompt file: %v\n", err)
+			stderrf("Error reading custom prompt file: %v", err)
 			reason = reasonConfigError
 			return exitError
 		}
@@ -329,14 +343,11 @@ func run() (code int) {
 	// or missing workflow name/description is diagnosable from the job log alone,
 	// not silently absorbed into the prompt.
 	//
-	// Quoting already confines each value to one physical line, but it leaves a
-	// legacy "##[" marker intact, and the runner honors that one anywhere in a
-	// line. Quoting emits backslash escapes only, so it can neither create nor
-	// hide a marker, and escaping afterwards is enough.
-	fmt.Fprintf(os.Stderr,
-		"Prompt context: workflow_name=%s (defaulted=%t) workflow_description=%s (defaulted=%t) custom_prompt_applied=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
-		logsafe.EscapeLegacyCommandMarker(strconv.Quote(arts.WorkflowName)), nameDefaulted,
-		logsafe.EscapeLegacyCommandMarker(strconv.Quote(arts.WorkflowDescription)), descriptionDefaulted,
+	// The workflow name and description originate outside the detector, so they
+	// are quoted for readability here and rendered inert by stderrf.
+	stderrf(
+		"Prompt context: workflow_name=%q (defaulted=%t) workflow_description=%q (defaulted=%t) custom_prompt_applied=%t custom_prompt_source=%s custom_prompt_bytes=%d",
+		arts.WorkflowName, nameDefaulted, arts.WorkflowDescription, descriptionDefaulted,
 		arts.CustomPrompt != "", customPromptSource, len(arts.CustomPrompt))
 
 	// Build the prompt
@@ -344,7 +355,7 @@ func run() (code int) {
 	if promptFile != "" {
 		data, err := os.ReadFile(promptFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading prompt template: %v\n", err)
+			stderrf("Error reading prompt template: %v", err)
 			reason = reasonConfigError
 			return exitError
 		}
@@ -353,7 +364,7 @@ func run() (code int) {
 
 	prompt, promptAnalysis, err := detector.BuildPromptWithAnalysis(arts, promptTemplate)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)
+		stderrf("Error building prompt: %v", err)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -365,8 +376,8 @@ func run() (code int) {
 	if markers := scaffoldingMarkers(promptAnalysis); len(markers) > 0 {
 		scaffoldingDesc = sanitizeLogValue(strings.Join(markers, ", "))
 	}
-	fmt.Fprintf(os.Stderr,
-		"[threat-detect] prompt built: prompt_bytes=%d framework_scaffolding_detected=%t framework_scaffolding_host_removed=%t framework_scaffolding_markers=%s\n",
+	stderrf(
+		"[threat-detect] prompt built: prompt_bytes=%d framework_scaffolding_detected=%t framework_scaffolding_host_removed=%t framework_scaffolding_markers=%s",
 		len(prompt),
 		promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.Detected,
 		promptAnalysis != nil && promptAnalysis.Scaffolding != nil && promptAnalysis.Scaffolding.HostRemoved,
@@ -375,7 +386,7 @@ func run() (code int) {
 	// Create engine
 	eng, err := engine.New(engineID, model)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating engine: %v\n", err)
+		stderrf("Error creating engine: %v", err)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -383,7 +394,7 @@ func run() (code int) {
 	// Provision an out-of-band result sink for the in-session reporting tool.
 	sinkFile, err := os.CreateTemp("", "threat-detect-result-*.json")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating result sink: %v\n", err)
+		stderrf("Error creating result sink: %v", err)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -396,8 +407,8 @@ func run() (code int) {
 	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
 		// The message can embed captured engine output (engineExitError), which
-		// is untrusted: sanitize it so it cannot break out of this line.
-		fmt.Fprintf(os.Stderr, "Error running detection: %s\n", sanitizeLogValue(err.Error()))
+		// is untrusted; stderrf renders it inert.
+		stderrf("Error running detection: %v", err)
 		switch {
 		case ctx.Err() != nil:
 			reason = reasonCancelled
@@ -430,26 +441,26 @@ func describeResultPath(path, placeholder string) string {
 // directory, so each is sanitized and confined to one physical line; the listing
 // is bounded so a pathological directory cannot flood the job log.
 func reportArtifacts(artifactsDir string, arts *artifacts.Artifacts) {
-	fmt.Fprintf(os.Stderr,
-		"[threat-detect] artifacts loaded: dir=%s prompt_bytes=%d agent_output_bytes=%d patch_files=%d all_primary_inputs_missing=%t\n",
+	stderrf(
+		"[threat-detect] artifacts loaded: dir=%s prompt_bytes=%d agent_output_bytes=%d patch_files=%d all_primary_inputs_missing=%t",
 		sanitizeLogValue(artifactsDir), arts.PromptFileSize, arts.AgentOutputFileSize,
 		len(arts.PatchFiles), arts.AllPrimaryInputsMissing)
 
 	if len(arts.Inventory) == 0 {
-		fmt.Fprintf(os.Stderr, "[threat-detect] artifact inventory: (empty)\n")
+		stderrf("[threat-detect] artifact inventory: (empty)")
 		return
 	}
 	shown := arts.Inventory
 	if len(shown) > maxInventoryEntries {
 		shown = shown[:maxInventoryEntries]
 	}
-	fmt.Fprintf(os.Stderr, "[threat-detect] artifact inventory (%d entries):\n", len(arts.Inventory))
+	stderrf("[threat-detect] artifact inventory (%d entries):", len(arts.Inventory))
 	for _, entry := range shown {
-		fmt.Fprintf(os.Stderr, "[threat-detect]   %s bytes=%d kind=%s consumed=%t\n",
+		stderrf("[threat-detect]   %s bytes=%d kind=%s consumed=%t",
 			sanitizeLogValue(entry.Path), entry.Size, sanitizeLogValue(entry.Kind), entry.Consumed)
 	}
 	if len(shown) < len(arts.Inventory) {
-		fmt.Fprintf(os.Stderr, "[threat-detect]   ... %d more entry(ies) omitted\n", len(arts.Inventory)-len(shown))
+		stderrf("[threat-detect]   ... %d more entry(ies) omitted", len(arts.Inventory)-len(shown))
 	}
 }
 
@@ -474,9 +485,8 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 		return
 	}
 
-	fmt.Fprintf(
-		os.Stderr,
-		"::warning::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.\n",
+	stderrf(
+		"::warning::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.",
 		promptAnalysisValidationCode,
 		strings.Join(unavailable, ", "),
 	)
@@ -493,7 +503,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	currentPrompt := prompt
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		fmt.Fprintf(os.Stderr, "[threat-detect] detection attempt %d of %d\n", i+1, attempts)
+		stderrf("[threat-detect] detection attempt %d of %d", i+1, attempts)
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
 		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
@@ -503,11 +513,11 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		// threat_detection_result tool, which records it to the sink.
 		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
-			fmt.Fprintf(os.Stderr, "[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool\n", i+1)
+			stderrf("[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool", i+1)
 			return result, nil
 		}
 		lastErr = err
-		fmt.Fprintf(os.Stderr, "[threat-detect] attempt %d recorded no usable verdict: %s\n", i+1, sanitizeLogValue(err.Error()))
+		stderrf("[threat-detect] attempt %d recorded no usable verdict: %v", i+1, err)
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
@@ -535,10 +545,10 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (int, string) {
 	if fullOutputJSON != "" {
 		if err := detector.WriteResultFile(fullOutputJSON, result); err != nil {
-			fmt.Fprintf(os.Stderr, "::warning::Could not write the full detection result to %s: %v. The verdict is unaffected; reasons will not be available to the conclusion step.\n",
+			stderrf("::warning::Could not write the full detection result to %s: %v. The verdict is unaffected; reasons will not be available to the conclusion step.",
 				escapeWorkflowData(fullOutputJSON), escapeWorkflowData(err.Error()))
 		} else {
-			fmt.Fprintf(os.Stderr, "[threat-detect] full result written: path=%s reasons=%d\n",
+			stderrf("[threat-detect] full result written: path=%s reasons=%d",
 				sanitizeLogValue(fullOutputJSON), len(result.Reasons))
 		}
 	}
@@ -546,13 +556,13 @@ func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (in
 	redacted := result.Redacted()
 	jsonBytes, err := json.MarshalIndent(redacted, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling result: %v\n", err)
+		stderrf("Error marshaling result: %v", err)
 		return exitError, reasonOutputWriteError
 	}
 
 	if outputJSON != "" {
 		if err := os.WriteFile(outputJSON, jsonBytes, 0o600); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
+			stderrf("Error writing output: %v", err)
 			return exitError, reasonOutputWriteError
 		}
 	} else {

@@ -1018,10 +1018,11 @@ func TestConcludeDiagnosticsCannotEmitLegacyWorkflowCommand(t *testing.T) {
 // TestConcludeAnnotationCannotEmitLegacyWorkflowCommand verifies the workflow
 // *command data* path is neutralized too. A parse error quotes the offending
 // value from the result file, and that message is emitted as the data portion
-// of an "::error::" annotation. The toolkit's data escaping covers only "%",
-// CR, and LF, so without an explicit pass the legacy marker — which the runner
-// matches anywhere, including inside a command it is already processing —
-// would ride through.
+// of an "::error::" annotation, which the toolkit's escaping does not clear of
+// legacy markers. The runner does not currently rescan the data of a command it
+// has already recognized, so this is defense in depth rather than a live
+// exposure — but it keeps the annotation consistent with the same value as
+// rendered everywhere else in the log.
 func TestConcludeAnnotationCannotEmitLegacyWorkflowCommand(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := filepath.Join(dir, "detection_result.json")
@@ -1560,4 +1561,41 @@ func captureStdout(t *testing.T, fn func()) string {
 	out := <-done
 	r.Close()
 	return out
+}
+
+// TestConcludeHeaderDiagnosticsNeutralizeLegacyWorkflowCommand covers the
+// header lines, which echo the host-supplied environment values and paths
+// before any verdict is read. They are the earliest untrusted echo in the
+// conclusion, and they are emitted through c.info rather than through the
+// annotation path, so they need the choke point to be doing its job.
+func TestConcludeHeaderDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "##[add-mask]result.json")
+	verdict := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	if err := os.WriteFile(resultFile, []byte(verdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection:     "true",
+		executionOutcome: "##[stop-commands]outcome",
+		githubOutput:     filepath.Join(dir, "out"),
+		githubEnv:        filepath.Join(dir, "env"),
+		stdout:           &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitProceed)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", got)
+	}
+	// The values must still be present and readable, just inert.
+	if !strings.Contains(got, `##\[add-mask]result.json`) {
+		t.Fatalf("escaped result path not rendered:\n%s", got)
+	}
+	if !strings.Contains(got, `##\[stop-commands]outcome`) {
+		t.Fatalf("escaped execution outcome not rendered:\n%s", got)
+	}
 }

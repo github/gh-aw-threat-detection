@@ -455,8 +455,11 @@ accepts: the `::command::` form, which the runner honors only at the start of a
 line after trimming leading whitespace, and the legacy `##[command]` form, which
 the runner locates anywhere within a line. Because line position is no defense
 against the latter, the legacy marker MUST be neutralized within the value
-itself — including when the value is carried as the data portion of a workflow
-command the implementation itself emits, which the runner also scans. These
+itself. An implementation MAY additionally neutralize the marker in the data
+portion of a workflow command it emits itself. The runner does not currently
+rescan that data — it attempts the `::command::` form first and falls back to
+legacy parsing only when that attempt fails — so this is defense in depth
+against that parse order changing, not a live exposure. These
 diagnostics
 are the sole record of the conclusion; `conclude` MUST NOT write them to any
 separate log artifact (TD-20a).

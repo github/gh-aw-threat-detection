@@ -139,7 +139,7 @@ func runConclude(args []string) int {
 		namedPath{"$GITHUB_OUTPUT", githubOutput},
 		namedPath{"$GITHUB_ENV", githubEnv},
 	); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		stderrf("Error: %v", err)
 		return concludeExitFail
 	}
 
@@ -762,16 +762,25 @@ func (c *concluder) appendKV(path, name, value string) {
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "conclude: failed to write %s: %v\n", name, err)
+		stderrf("conclude: failed to write %s: %v", name, err)
 		return
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s=%s\n", name, value)
 }
 
-// info prints a human-readable line to stdout (the job log).
+// info prints one diagnostic line to the conclusion's output stream.
+//
+// Sanitizing here rather than at each call site makes this the single choke
+// point for the conclusion diagnostics: every value these lines interpolate —
+// model-authored reasons, artifact filenames, detection-log lines, and the
+// host-supplied paths and environment values echoed in the header — is rendered
+// inert before it can reach the job log, and a future call site cannot
+// reintroduce the gap by forgetting to escape its own arguments. Sanitizing is
+// idempotent, so callers that additionally bound a value may keep escaping it
+// themselves.
 func (c *concluder) info(message string) {
-	fmt.Fprintln(c.stdout, message)
+	fmt.Fprintln(c.stdout, sanitizeLogValue(message))
 }
 
 // banner prints a title framed by horizontal rules, delimiting the conclusion
@@ -792,12 +801,15 @@ func (c *concluder) command(kind, message string) {
 // command, per the GitHub Actions toolkit rules.
 //
 // The toolkit rules cover only the characters that would terminate or extend
-// this command (`%`, CR, LF). They do not cover the legacy `##[` marker, which
-// the runner locates anywhere in a line — including inside the data of a
-// command it is already processing — so annotation text that embeds untrusted
-// content (a parse error quoting a malformed result file, a hostile path) could
-// otherwise smuggle one through. Neutralize it first: the percent-escaping
-// below emits only `%XX` sequences and so can neither create nor hide a marker.
+// this command (`%`, CR, LF); they leave the legacy `##[` marker alone. The
+// runner does not currently rescan the data of a command it has already
+// recognized — it tries the `::` form first and falls back to legacy parsing
+// only when that fails — so a marker embedded in the message of an `::error::`
+// this program emits is not live today. Neutralizing it anyway costs nothing
+// and does not depend on that parse order holding, and it keeps annotation text
+// consistent with the same value rendered by sanitizeLogValue elsewhere in the
+// log. The percent-escaping below emits only `%XX` sequences, so it can neither
+// create nor hide a marker.
 func escapeWorkflowData(s string) string {
 	s = logsafe.EscapeLegacyCommandMarker(s)
 	s = strings.ReplaceAll(s, "%", "%25")

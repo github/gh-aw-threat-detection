@@ -148,11 +148,15 @@ line. The rendered prompt itself is never echoed.
 Untrusted values interpolated into these detector-authored lines are escaped so
 that each stays on lines of its own and listings are bounded, so neither a
 model-authored string nor a hostile filename can forge a workflow command or
-flood the job log. That covers **both** marker forms the Actions runner accepts:
-the `::command::` form, which it honors only at the start of a line, and the
-legacy `##[command]` form, which it locates anywhere within a line — including
-inside the data of an annotation the detector itself emits — and which is
-therefore broken up inside the value (`##[` is rendered `##\[`). The
+flood the job log. Escaping happens on the way out — every detector diagnostic
+goes through one writer, and so does every `conclude` line — rather than at each
+call site, so a new diagnostic cannot reintroduce the gap. It covers **both**
+marker forms the Actions runner accepts: the `::command::` form, which it honors
+only at the start of a line, and the legacy `##[command]` form, which it locates
+anywhere within a line and which is therefore broken up inside the value (`##[`
+is rendered `##\[`). Annotation data is neutralized the same way; the runner
+does not rescan the data of a command it already recognized, so that part is
+defense in depth. The
 engine subprocess's own stdout/stderr are a separate, untrusted stream: they are
 forwarded line by line in real time (so harness output and engine errors stay
 visible), each line prefixed with `[engine] ` and stripped of its ability to open
