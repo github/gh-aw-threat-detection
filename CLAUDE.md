@@ -79,7 +79,8 @@ threat-detect [flags] <artifacts-dir>
 - `--engine {copilot|claude|codex}` (default `copilot`)
 - `--model <name>` — model override forwarded to the engine
 - `--prompt-template <path>` — override the embedded default
-- `--output <path>` — write JSON result (defaults to stdout)
+- `--output <path>` — write the JSON result (defaults to stdout); `reasons` is always empty here
+- `--full-output <path>` — write the JSON result *with* reasons; defaults to the `--output` path with `_full` inserted before the extension, empty disables it. Never uploaded
 - `--retries` (default `1`) — retries for malformed detection outputs; env: `THREAT_DETECTION_RETRIES`
 
 **Exit codes** (defined in `cmd/threat-detect/main.go`):
@@ -97,6 +98,8 @@ threat-detect [flags] <artifacts-dir>
 ```
 
 The detector reads the verdict exclusively from the out-of-band result sink. The engine reports its verdict in-session by invoking the `threat_detection_result` tool, which writes the JSON object (`prompt_injection`, `secret_leak`, `malicious_patch`, `reasons`) to the sink (`detector.ReadResultFile` / `detector.ParseStructuredResult`).
+
+**The verdict is split on write (TD-10d).** `--output` always carries `reasons: []`; the reported reasons go only to `--full-output` (`detection_result_full.json`), which stays on the runner and MUST NOT be uploaded. The schema is unchanged — `reasons` stays a required array, just empty — so parsers, validation bounds, and replay comparisons are unaffected. `conclude` reads the full result via `--full-result-file` (derived from `--result-file` by default) and renders the reasons into the masked job log; it never lets that file move or contradict the verdict. Reasons are never echoed to stdout/stderr during detection, because hosts tee both into published files.
 
 **Artifacts directory shape** (validated by `pkg/artifacts/artifacts.go`):
 
@@ -144,7 +147,7 @@ This repo runs daily AW smoke tests against all three engines:
 
 - `.github/workflows/smoke-{copilot,claude,codex}-standalone.{md,lock.yml}` — `features: gh-aw-detection: true`, so gh-aw natively downloads this repo's released `threat-detect` binary, runs it under AWF, and concludes from the structured `detection_result.json` via `threat-detect conclude`. The `.lock.yml` files are compiled by `gh aw compile`.
 
-The detector version is **not** pinned in the locks: gh-aw emits the literal `latest`, which `install_threat_detect_binary.sh` resolves at run time to the newest **non-prerelease** detector release. Promoting a release is enough to put it in front of the smokes — no recompile. Unpromoted prereleases are never picked up automatically; test those via `detection-only.yml` plus the `GH_AW_THREAT_DETECTION_VERSION` repo variable.
+The detector version is **not** pinned in the locks: gh-aw emits the literal `latest`, which `install_threat_detect_binary.sh` resolves at run time to the newest **non-prerelease** detector release. Promoting a release is enough to put it in front of the smokes — no recompile. Unpromoted prereleases are never picked up automatically; test those via `replay-detection.yml` with `detector_source=release` and `detector_ref=<prerelease tag>`.
 
 Recompile with `gh aw compile` after editing any smoke `.md` source. If you build the compiler from source instead of installing the released extension, pass **both** `-X main.version=<TAG>` and `-X main.isRelease=true` — omitting the latter makes gh-aw emit `dev` as the compiler/runtime version. See the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill.
 
@@ -162,6 +165,7 @@ When changing this repo:
 
 - **Spec first**: behavior changes must align with [`specs/threat-detection-spec.md`](specs/threat-detection-spec.md). Update the spec when the contract changes.
 - **Preserve the JSON result contract**: `prompt_injection`, `secret_leak`, `malicious_patch`, `reasons` — schema enforced by the parser in `pkg/detector/result.go`.
+- **Never persist reasons in a published file**: model-authored text belongs in the full result and the job log only (TD-10d, TD-20e, U-08a).
 - **Don't bundle engine CLIs into the binary**. Engines (Copilot, Claude, Codex) are invoked from `PATH`. The runner provides the engine.
 - **No new JS scripts**. Detection setup and result parsing are Go. Old gh-aw JS detection scripts are being retired.
 - **Custom orchestrator steps** (`threat-detection.steps`) belong in the `gh-aw` job, not inside the detector.

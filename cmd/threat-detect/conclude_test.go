@@ -1036,3 +1036,210 @@ func TestConcludeRejectsOversizeResultFile(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", outputs["reason"], detector.ReasonParseError)
 	}
 }
+
+// redactedThreatVerdict is the post-split shape of the uploaded result: the
+// verdict with no reasons.
+const redactedThreatVerdict = `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+
+// writeSplitResultFixture writes a redacted result plus its conventional
+// companion full result, returning the redacted path.
+func writeSplitResultFixture(t *testing.T, redacted, full string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "detection_result.json")
+	if err := os.WriteFile(path, []byte(redacted), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if full != "" {
+		if err := os.WriteFile(detector.FullResultPath(path), []byte(full), 0o600); err != nil {
+			t.Fatalf("WriteFile error = %v", err)
+		}
+	}
+	return path
+}
+
+// TestConcludeRendersReasonsFromFullResultFile verifies the reasons stripped
+// from the uploaded result are recovered from the companion full result and
+// rendered into the job log and the threat annotation.
+func TestConcludeRendersReasonsFromFullResultFile(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeSplitResultFixture(t, redactedThreatVerdict, threatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"📄 Full result path: " + detector.FullResultPath(resultFile),
+		"✔️  Full result file found; recovered 1 reason(s).",
+		"   reasons (1):",
+		"     [1] jailbreak attempt",
+		"Reasons: jailbreak attempt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+}
+
+// TestConcludeFallsBackToInFileReasons verifies a pre-split result — one that
+// still carries its own reasons — renders them when no full result exists.
+func TestConcludeFallsBackToInFileReasons(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, threatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "📄 No full result file found at: "+detector.FullResultPath(resultFile)) {
+		t.Errorf("expected missing-full-result notice\n--- got ---\n%s", got)
+	}
+	if !strings.Contains(got, "     [1] jailbreak attempt") {
+		t.Errorf("expected in-file reasons to render\n--- got ---\n%s", got)
+	}
+}
+
+// TestConcludeMissingFullResultIsNonFatal verifies an absent companion file
+// does not change the conclusion.
+func TestConcludeMissingFullResultIsNonFatal(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeResultFixture(t, redactedThreatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	if outputs := parseKV(t, filepath.Join(dir, "out")); outputs["reason"] != detector.ReasonThreatDetected {
+		t.Fatalf("reason = %q, want %q", outputs["reason"], detector.ReasonThreatDetected)
+	}
+	if !strings.Contains(stdout.String(), "   reasons          : (none)") {
+		t.Errorf("expected (none) reasons rendering\n--- got ---\n%s", stdout.String())
+	}
+}
+
+// TestConcludeMalformedFullResultIsNonFatal verifies an unparseable companion
+// file is reported and ignored rather than failing the conclusion, which is
+// still derived entirely from the authoritative result file.
+func TestConcludeMalformedFullResultIsNonFatal(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeSplitResultFixture(t, safeVerdict, `{"prompt_injection":`)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitProceed)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "⚠️  Could not read full result file") {
+		t.Errorf("expected unreadable-full-result notice\n--- got ---\n%s", got)
+	}
+	if outputs := parseKV(t, filepath.Join(dir, "out")); outputs["conclusion"] != "success" {
+		t.Fatalf("conclusion = %q, want success", outputs["conclusion"])
+	}
+}
+
+// TestConcludeIgnoresFullResultWithDifferentVerdict verifies the companion file
+// can only ever contribute reasons: a full result claiming a different verdict
+// is discarded, so a stale or planted file cannot move the outcome.
+func TestConcludeIgnoresFullResultWithDifferentVerdict(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeSplitResultFixture(t, safeVerdict,
+		`{"prompt_injection":true,"secret_leak":true,"malicious_patch":true,"reasons":["planted"]}`)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitProceed {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitProceed)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "reports a different verdict than the structured result file; ignoring it.") {
+		t.Errorf("expected verdict-mismatch notice\n--- got ---\n%s", got)
+	}
+	if strings.Contains(got, "planted") {
+		t.Errorf("reasons from a mismatched full result must not render\n--- got ---\n%s", got)
+	}
+	if outputs := parseKV(t, filepath.Join(dir, "out")); outputs["conclusion"] != "success" {
+		t.Fatalf("conclusion = %q, want success", outputs["conclusion"])
+	}
+}
+
+// TestRunConcludeFullResultFileOverride verifies --full-result-file overrides
+// the convention, and that an explicit empty value disables the lookup.
+func TestRunConcludeFullResultFileOverride(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json")
+	if err := os.WriteFile(resultFile, []byte(redactedThreatVerdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	elsewhere := filepath.Join(dir, "elsewhere.json")
+	if err := os.WriteFile(elsewhere, []byte(threatVerdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	t.Setenv("RUN_DETECTION", "true")
+	t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", "false")
+	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
+	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
+
+	if code := runConclude([]string{"--result-file", resultFile, "--full-result-file", elsewhere}); code != concludeExitFail {
+		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+	}
+
+	c := &concluder{fullResultFile: ""}
+	if got := c.fullResultPath(resultFile); got != detector.FullResultPath(resultFile) {
+		t.Fatalf("fullResultPath() = %q, want the conventional sibling", got)
+	}
+}
+
+// TestConcludeDerivesFullResultSibling verifies a concluder constructed with an
+// empty companion path derives the conventional sibling, matching runConclude's
+// default.
+func TestConcludeDerivesFullResultSibling(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := writeSplitResultFixture(t, redactedThreatVerdict, threatVerdict)
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection:   "true",
+		fullResultFile: "",
+		githubOutput:   filepath.Join(dir, "out"),
+		githubEnv:      filepath.Join(dir, "env"),
+		stdout:         &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	if !strings.Contains(stdout.String(), "     [1] jailbreak attempt") {
+		t.Errorf("expected reasons from the conventional sibling\n--- got ---\n%s", stdout.String())
+	}
+}

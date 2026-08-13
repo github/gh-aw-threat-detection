@@ -150,6 +150,20 @@ engine CLI.
 verdict payload and MUST read it from the location it configured (stdout, or the
 `--output` path, or the `detection_result.json` sink used by `conclude`).
 
+**U-08a**: The result the host reads and publishes carries no reasons: its
+`reasons` array is always empty (per TD-10d). The reasons are written to the
+companion full result (`--full-output`, by default `detection_result_full.json`
+beside the result file). A host MUST NOT upload, publish, or otherwise persist
+the full result; it exists so `conclude` can render the reasons into the job log
+(per TD-20e), where the runner's masking applies and they expire with the host's
+log retention. A host that needs the reasons after the fact MUST read them from
+the retained job log, not from an artifact.
+
+A host MUST treat failure to write the full result as non-fatal (per TD-10d). If
+it places the result file in a directory it uploads wholesale rather than by
+exact path, it MUST either point `--full-output` outside that directory or pass
+an explicitly empty `--full-output` to disable it.
+
 **U-09**: The host SHOULD capture the detector's standard error into its job log
 and retain it for observability: apart from the result file, it is the detector's
 only diagnostic output (per TD-20a). The detector does not produce a separate
@@ -168,7 +182,8 @@ versions.
 | `--engine {copilot\|claude\|codex}` | Select the AI engine (default `copilot`) |
 | `--model <name>` | Override the engine model (see U-13) |
 | `--prompt-template <path>` | Override the embedded default prompt |
-| `--output <path>` | Write the JSON result to a file instead of stdout |
+| `--output <path>` | Write the JSON result to a file instead of stdout (reasons always empty, per U-08a) |
+| `--full-output <path>` | Write the result including reasons; defaults to the `--output` path with `_full` inserted before the extension, and an explicitly empty value disables it. MUST NOT be uploaded |
 | `--retries <n>` | Retries for malformed detection outputs (default `1`) |
 | `--step-summary <path>` | Deprecated and ignored; accepted only for compatibility with hosts that still pass it (per TD-20c) |
 | `--version` | Print version and exit |
@@ -186,9 +201,14 @@ this ordered flow:
    `comment-memory/` directory when present, so persisted, attacker-influenced
    comment memory is analyzed alongside the prompt and patch (per TD-18a).
 3. **Run** the detector once, writing its verdict to a structured result file
-   (`detection_result.json`).
+   (`detection_result.json`) and its reasons to the companion full result
+   (`detection_result_full.json`), which stays on the runner (per U-08a).
 4. **Conclude** the run with the `conclude` subcommand (Section 6) to derive the
-   host-side job-output contract.
+   host-side job-output contract. `conclude` reads the reasons from the full
+   result and renders them into the job log (per TD-20e).
+5. **Publish** only the redacted result file. The host MUST upload it by exact
+   path, not by uploading its containing directory, so the full result is not
+   swept into the artifact.
 
 **U-12**: The host MUST NOT derive the verdict by scraping the detector's stdout
 or transcript when running in the integrated flow; the verdict crosses the job
@@ -246,7 +266,15 @@ unusable — a recursive listing of the result directory plus detection-log stat
 and any `THREAT_DETECTION_*` marker lines. A conforming host SHOULD surface this
 output in its job log so a detection run can be triaged without downloading
 artifacts, and MAY pass `--detection-log <path>` when the detection run's log is
-not stored beside the result file. `conclude` writes no separate log artifact.
+not stored beside the result file. Because the reasons are rendered only here,
+this output is the sole record of them, and the host MUST retain its job log for
+as long as it expects to be able to explain a blocked run.
+
+A host MAY pass `--full-result-file <path>` when the full result is not stored
+beside the result file; by default `conclude` derives it by the same convention
+the detection run uses. A missing, unreadable, or verdict-mismatched full result
+never changes the conclusion (per TD-20e). `conclude` writes no separate log
+artifact and never copies the reasons into a file.
 
 **U-19**: A conforming host MAY control conclusion behavior through these
 environment inputs consumed by `conclude`:
@@ -319,6 +347,12 @@ detector's captured standard error (per TD-20a) and structured result for
 comparison. When the source detection artifact contains a captured log, the
 replay host SHOULD retain it separately from the replay log.
 
+A replay host MUST apply U-08a to its own outputs: it MUST NOT upload the replay
+run's full result, and when it recovers a verdict from a source run's artifacts
+it MUST strip that verdict's reasons before persisting it. Comparisons between a
+replay verdict and the original MUST be made on the three boolean fields only,
+since `reasons` is free text that varies between runs of an identical verdict.
+
 **U-28**: Replay MUST NOT require credentials beyond those already needed to read
 the source run's artifacts and to authenticate the selected engine.
 
@@ -326,7 +360,7 @@ the source run's artifacts and to authenticate the selected engine.
 
 ## 9. Conformance Summary
 
-A conforming host satisfies U-01 through U-28. Requirements that reference
+A conforming host satisfies U-01 through U-28, including U-08a. Requirements that reference
 `TD-XX` are satisfied jointly with the corresponding requirement in the
 [Threat Detection Specification](threat-detection-spec.md); this document does
 not weaken or override any `TD-XX` requirement.

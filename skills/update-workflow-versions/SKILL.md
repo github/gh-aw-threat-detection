@@ -131,7 +131,7 @@ Verify before compiling:
 ## Testing an unpromoted detector prerelease
 
 The smokes only ever see **promoted** detector releases. To exercise a
-prerelease under AWF before promoting it, set the `GH_AW_THREAT_DETECTION_VERSION`
-repository variable to the prerelease tag and dispatch
-`.github/workflows/detection-only.yml`, which runs the same AWF detection job
-body against local fixtures. Unset the variable afterwards.
+prerelease under AWF before promoting it, dispatch
+`.github/workflows/replay-detection.yml` with `detector_source=release`,
+`detector_ref=<prerelease tag>`, and `use_awf=true`. It downloads that exact
+release asset and runs it under AWF against a prior gh-aw run's artifacts.

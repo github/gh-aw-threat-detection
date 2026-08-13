@@ -412,6 +412,11 @@ jobs:
         run: |
           set -euo pipefail
           result_path="${REPLAY_OUTPUT}/result.json"
+          # The detector writes the model-authored reasons to a companion file
+          # derived from --output. It is deliberately kept out of the uploaded
+          # artifact list below: reasons are rendered into the job log (which the
+          # runner masks) instead of being persisted.
+          full_result_path="${REPLAY_OUTPUT}/result_full.json"
           log_path="${REPLAY_OUTPUT}/replay.log"
           if [ "$ENGINE" = "copilot" ] && [ -n "${GH_AW_COPILOT_TOKEN}" ]; then
             export GH_TOKEN="$GH_AW_COPILOT_TOKEN"
@@ -452,6 +457,11 @@ jobs:
             set -e
           fi
 
+          if [ -f "$full_result_path" ]; then
+            echo "Replay detection reasons (not persisted to any artifact):"
+            jq -r '.reasons[]? | "  - " + .' "$full_result_path" || true
+          fi
+
           echo "exit_code=${run_status}" >> "$GITHUB_OUTPUT"
           if [ "$run_status" -eq 0 ]; then
             echo "outcome=safe" >> "$GITHUB_OUTPUT"
@@ -489,7 +499,13 @@ jobs:
               for line in path.read_text(errors='replace').splitlines():
                   match = marker.search(line)
                   if match:
-                      output.write_text(json.dumps(json.loads(match.group(1)), indent=2) + '\n')
+                      original = json.loads(match.group(1))
+                      # The original run's reasons are model-authored text from
+                      # another repository's agent. They are only ever compared
+                      # on the verdict fields, so they are dropped rather than
+                      # written into a published replay artifact.
+                      original['reasons'] = []
+                      output.write_text(json.dumps(original, indent=2) + '\n')
                       raise SystemExit(0)
           raise SystemExit(0)
           PY
@@ -498,13 +514,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f "${REPLAY_OUTPUT}/original-result.json" ] && [ -f "${REPLAY_OUTPUT}/result.json" ]; then
+            # Compare the verdict fields only. Reasons are free text that varies
+            # between runs even for an identical verdict, and are not persisted
+            # on either side of the comparison.
             jq -n \
               --slurpfile original "${REPLAY_OUTPUT}/original-result.json" \
               --slurpfile replay "${REPLAY_OUTPUT}/result.json" \
-              '{
-                matches: ($original[0] == $replay[0]),
-                original: $original[0],
-                replay: $replay[0]
+              'def verdict: {prompt_injection, secret_leak, malicious_patch};
+               {
+                matches: (($original[0] | verdict) == ($replay[0] | verdict)),
+                original: ($original[0] | verdict),
+                replay: ($replay[0] | verdict)
               }' > "${REPLAY_OUTPUT}/comparison.json"
           else
             jq -n '{matches: null, reason: "original detection result was not available"}' > "${REPLAY_OUTPUT}/comparison.json"
