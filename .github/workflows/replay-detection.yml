@@ -417,6 +417,12 @@ jobs:
           # artifact list below: reasons are rendered into the job log (which the
           # runner masks) instead of being persisted.
           full_result_path="${REPLAY_OUTPUT}/result_full.json"
+          # The replay log tees the detector's standard error, which forwards the
+          # engine subprocess's own output. That transcript can reproduce the
+          # model-authored reasons wherever the engine renders its file-writing
+          # tool activity, so this capture is runner-local and job-log only: it is
+          # deliberately kept out of the uploaded artifact list below (per U-09
+          # and U-27).
           log_path="${REPLAY_OUTPUT}/replay.log"
           if [ "$ENGINE" = "copilot" ] && [ -n "${GH_AW_COPILOT_TOKEN}" ]; then
             export GH_TOKEN="$GH_AW_COPILOT_TOKEN"
@@ -498,9 +504,11 @@ jobs:
           output = output_root / 'original-result.json'
           candidates = list(root.rglob('detection.log')) + list(root.rglob('*.log'))
 
-          # Retain the source run's captured detection log alongside the replay's
-          # own log (per usage-spec U-27), so the two can be compared without
-          # re-downloading the original run's artifacts.
+          # Retain the source run's captured detection log beside the replay's own
+          # log so the two can be compared without re-downloading the original
+          # run's artifacts. Like the replay log, it is runner-local only: a
+          # gh-aw detection log carries the forwarded engine transcript, so it is
+          # excluded from the uploaded artifact list (per U-09 and U-27).
           if candidates:
               (output_root / 'original-detection.log').write_bytes(candidates[0].read_bytes())
 
@@ -637,8 +645,6 @@ jobs:
             ${{ runner.temp }}/gh-aw-replay/output/result.json
             ${{ runner.temp }}/gh-aw-replay/output/comparison.json
             ${{ runner.temp }}/gh-aw-replay/output/original-result.json
-            ${{ runner.temp }}/gh-aw-replay/output/original-detection.log
-            ${{ runner.temp }}/gh-aw-replay/output/replay.log
             ${{ runner.temp }}/gh-aw-replay/output/awf-replay-config.json
           if-no-files-found: ignore
           retention-days: 14

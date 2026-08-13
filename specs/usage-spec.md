@@ -168,8 +168,9 @@ an explicitly empty `--full-output` to disable it.
 and retain it for observability: apart from the result file, it is the detector's
 only diagnostic output (per TD-20a). The host MUST NOT publish that capture as an
 artifact: it carries the forwarded engine transcript, which reproduces the
-model-authored reasons wherever the engine renders its own
-`threat_detection_result` invocation (per TD-10d). The job log is the intended
+model-authored reasons wherever the engine renders its own tool activity — in
+particular the file write that produces the reasons file passed to
+`threat_detection_result` (per TD-10d). The job log is the intended
 destination for that text; a file uploaded alongside the result is not. The detector does not produce a separate
 run-log artifact and does not write to the GitHub Actions step summary; the
 recursive artifact inventory, the prompt metadata, the per-attempt trace, and the
@@ -349,7 +350,9 @@ diagnostics. When it does, it MUST normalize the downloaded artifacts into the
 input contract of Section 3 before invoking the detector, and SHOULD retain the
 detector's captured standard error (per TD-20a) and structured result for
 comparison. When the source detection artifact contains a captured log, the
-replay host SHOULD retain it separately from the replay log.
+replay host SHOULD retain it separately from the replay log. Both captures are
+subject to U-09: they carry a forwarded engine transcript, so the replay host
+MUST keep them runner-local and MUST NOT publish either as an artifact.
 
 A replay host MUST apply U-08a to its own outputs: it MUST NOT upload the replay
 run's full result, and when it recovers a verdict from a source run's artifacts

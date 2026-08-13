@@ -163,12 +163,14 @@ its own log retention.
 
 This requirement governs detector-authored diagnostics only. It does **not**
 extend to the engine subprocess's own output, which TD-20a requires the detector
-to forward: the model reports its verdict by invoking the
-`threat_detection_result` command with each reason as an argument, so an engine
-that renders its own tool invocations reproduces the reason text on the forwarded
-lines. TD-20a's framing makes those lines identifiable and inert — they cannot
-forge a workflow command or a `THREAT_DETECTION_*` marker — but framing does not
-remove the text. Consequently a host that tees the detection run's standard error
+to forward. The model does not pass reasons on the command line — artifact-derived
+reason text is written to the file named by `THREAT_DETECTION_REASONS_FILE` and
+handed to `threat_detection_result` as `--reasons-file <path>` — but an engine
+that renders its own tool activity (the file write that produces that file, or a
+subsequent read of it) reproduces the reason text on the forwarded lines. TD-20a's
+framing makes those lines identifiable and inert — they cannot forge a workflow
+command or a `THREAT_DETECTION_*` marker — but framing does not remove the text.
+Consequently a host that tees the detection run's standard error
 into a file MUST treat that file as carrying model-authored text and MUST NOT
 publish it (see U-09). Suppressing the text entirely would require withholding or
 rewriting engine output, which conflicts with the real-time forwarding TD-20a

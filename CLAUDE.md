@@ -157,7 +157,7 @@ Required Actions secrets/variables for smokes are documented in [README.md → D
 
 ## Replay Workflow
 
-`.github/workflows/replay-detection.yml` — manual dispatch to rerun detection against artifacts from a prior `gh-aw` run. Supports two detector sources (`current`, `release`), engine and model overrides, custom prompt injection, and AWF mode (`use_awf=true`). Uploads a sanitized `replay-detection-<run_id>` artifact with manifest, inventory, logs, replay result, and comparison to the original result. Uses the dispatching repo's `GITHUB_TOKEN` — no extra replay token needed. `run_attempt` is only safe for the latest attempt of a run.
+`.github/workflows/replay-detection.yml` — manual dispatch to rerun detection against artifacts from a prior `gh-aw` run. Supports two detector sources (`current`, `release`), engine and model overrides, custom prompt injection, and AWF mode (`use_awf=true`). Uploads a sanitized `replay-detection-<run_id>` artifact with manifest, inventory, replay result, and comparison to the original result. Logs and reasons stay runner-local and job-log only — they carry the forwarded engine transcript and are never uploaded. Uses the dispatching repo's `GITHUB_TOKEN` — no extra replay token needed. `run_attempt` is only safe for the latest attempt of a run.
 
 ## Coding Guidance
 

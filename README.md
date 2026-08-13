@@ -408,7 +408,9 @@ that fails the detection closed.
 
 ### Replay workflow
 
-Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, free-form replay log, replay result, and original-result comparison.
+Maintainers can manually run **Replay Threat Detection** from the Actions tab to rerun detection against artifacts from a prior workflow run. Provide the source repository and run ID; the workflow downloads the `agent`, `activation`, optional experiment, and optional original `detection` artifacts, normalizes them into the CLI input contract above, runs `threat-detect`, and uploads a sanitized `replay-detection-<run_id>` artifact with the manifest, file inventory, replay result, and original-result comparison.
+
+The replay log and the source run's detection log stay on the runner and are visible in the job log only. Both tee the detector's standard error, which forwards the engine subprocess's output, so they can reproduce the model-authored reasons and are never uploaded (usage-spec U-09 and U-27). The same applies to the reasons companion file: reasons are printed into the job log and left out of every artifact.
 
 Replay uses the dispatching repository's `GITHUB_TOKEN`; no extra replay token is required. The selected source run must be accessible to that token.
 
