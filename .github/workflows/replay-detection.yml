@@ -412,6 +412,11 @@ jobs:
         run: |
           set -euo pipefail
           result_path="${REPLAY_OUTPUT}/result.json"
+          # The detector writes the model-authored reasons to a companion file
+          # derived from --output. It is deliberately kept out of the uploaded
+          # artifact list below: reasons are rendered into the job log (which the
+          # runner masks) instead of being persisted.
+          full_result_path="${REPLAY_OUTPUT}/result_full.json"
           log_path="${REPLAY_OUTPUT}/replay.log"
           if [ "$ENGINE" = "copilot" ] && [ -n "${GH_AW_COPILOT_TOKEN}" ]; then
             export GH_TOKEN="$GH_AW_COPILOT_TOKEN"
@@ -450,6 +455,23 @@ jobs:
             "$DETECTOR_BIN" "${args[@]}" 2>&1 | tee "$log_path"
             run_status=${PIPESTATUS[0]}
             set -e
+          fi
+
+          if [ -f "$full_result_path" ]; then
+            echo "Replay detection reasons (not persisted to any artifact):"
+            # Render reasons only when the companion file describes the same
+            # verdict, so a stale file cannot explain a verdict that was not
+            # reached. Each reason is JSON-encoded (tojson) so model-authored
+            # text stays on one physical line and cannot forge a workflow
+            # command such as "::error::".
+            jq -n -r \
+              --slurpfile result "$result_path" \
+              --slurpfile full "$full_result_path" \
+              'def verdict: {prompt_injection, secret_leak, malicious_patch};
+               if ($result[0] | verdict) == ($full[0] | verdict)
+               then ($full[0].reasons[]? | "  - " + tojson)
+               else "  (full result reports a different verdict; ignored)"
+               end' || echo "  (full result unavailable or unreadable)"
           fi
 
           echo "exit_code=${run_status}" >> "$GITHUB_OUTPUT"
@@ -502,6 +524,12 @@ jobs:
                       parsed = json.loads(match.group(1))
                   except ValueError:
                       continue
+                  # The original run's reasons are model-authored text from
+                  # another repository's agent. They are only ever compared on
+                  # the verdict fields, so they are dropped rather than written
+                  # into a published replay artifact.
+                  if isinstance(parsed, dict):
+                      parsed['reasons'] = []
                   output.write_text(json.dumps(parsed, indent=2) + '\n')
                   raise SystemExit(0)
           raise SystemExit(0)
@@ -511,13 +539,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f "${REPLAY_OUTPUT}/original-result.json" ] && [ -f "${REPLAY_OUTPUT}/result.json" ]; then
+            # Compare the verdict fields only. Reasons are free text that varies
+            # between runs even for an identical verdict, and are not persisted
+            # on either side of the comparison.
             jq -n \
               --slurpfile original "${REPLAY_OUTPUT}/original-result.json" \
               --slurpfile replay "${REPLAY_OUTPUT}/result.json" \
-              '{
-                matches: ($original[0] == $replay[0]),
-                original: $original[0],
-                replay: $replay[0]
+              'def verdict: {prompt_injection, secret_leak, malicious_patch};
+               {
+                matches: (($original[0] | verdict) == ($replay[0] | verdict)),
+                original: ($original[0] | verdict),
+                replay: ($replay[0] | verdict)
               }' > "${REPLAY_OUTPUT}/comparison.json"
           else
             jq -n '{matches: null, reason: "original detection result was not available"}' > "${REPLAY_OUTPUT}/comparison.json"

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
+	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
 
 func TestRunInvokesAgenticEngine(t *testing.T) {
@@ -131,9 +132,133 @@ func TestRunPrefersSinkResultOverTranscript(t *testing.T) {
 	if !result["prompt_injection"].(bool) {
 		t.Fatalf("expected sink-derived result, got %#v", result)
 	}
+	// The uploaded result is always redacted; the sink reasons land in the
+	// companion full result.
 	reasons, _ := result["reasons"].([]any)
-	if len(reasons) != 1 || reasons[0].(string) != "from sink" {
-		t.Fatalf("expected sink reasons, got %#v", result["reasons"])
+	if len(reasons) != 0 {
+		t.Fatalf("expected redacted reasons in %s, got %#v", outputPath, result["reasons"])
+	}
+	full := readResultFile(t, detector.FullResultPath(outputPath))
+	if !full["prompt_injection"].(bool) {
+		t.Fatalf("expected sink-derived full result, got %#v", full)
+	}
+	fullReasons, _ := full["reasons"].([]any)
+	if len(fullReasons) != 1 || fullReasons[0].(string) != "from sink" {
+		t.Fatalf("expected sink reasons, got %#v", full["reasons"])
+	}
+}
+
+func TestRunSplitsReasonsIntoFullResultFile(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "detection_result.json")
+	fullPath := filepath.Join(filepath.Dir(outputPath), "detection_result_full.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,"reasons":["exfiltration attempt in comment body"]}`
+	fakeBinDir := writeFakeCopilotWithSinkAndStdout(t, copilotMarker, sinkJSON, "", 0)
+
+	stderr := captureStderr(t, func() {
+		code := runWithTestArgs(t, []string{
+			"threat-detect",
+			"-output", outputPath,
+			artifactsDir,
+		}, map[string]string{
+			"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		})
+		if code != exitThreat {
+			t.Fatalf("run() exit code = %d, want %d", code, exitThreat)
+		}
+	})
+
+	// The reason must not appear on stderr: hosts tee stderr into files they
+	// publish, so echoing it there would defeat the split.
+	if strings.Contains(stderr, "exfiltration attempt in comment body") {
+		t.Errorf("reason text leaked into stderr:\n%s", stderr)
+	}
+
+	redacted, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("reading redacted result: %v", err)
+	}
+	if strings.Contains(string(redacted), "exfiltration attempt") {
+		t.Errorf("reason text leaked into %s: %s", outputPath, redacted)
+	}
+	full := readResultFile(t, fullPath)
+	fullReasons, _ := full["reasons"].([]any)
+	if len(fullReasons) != 1 || fullReasons[0].(string) != "exfiltration attempt in comment body" {
+		t.Fatalf("full result reasons = %#v, want the reported reason", full["reasons"])
+	}
+}
+
+func TestRunFullOutputCanBeDisabled(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "detection_result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSinkAndStdout(t, copilotMarker, sinkJSON, "", 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-full-output", "",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	if _, err := os.Stat(detector.FullResultPath(outputPath)); !os.IsNotExist(err) {
+		t.Fatalf("expected no full result file, stat err = %v", err)
+	}
+}
+
+func TestRunRejectsFullOutputAliasingOutput(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "detection_result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSinkAndStdout(t, copilotMarker, sinkJSON, "", 0)
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-full-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d", code, exitError)
+	}
+}
+
+func TestRunFullResultWriteFailureIsNonFatal(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "detection_result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSinkAndStdout(t, copilotMarker, sinkJSON, "", 0)
+
+	// A directory that does not exist makes the full-result write fail while
+	// leaving the authoritative result perfectly writable.
+	unwritable := filepath.Join(t.TempDir(), "missing-dir", "full.json")
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-full-output", unwritable,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d (full-result write must be non-fatal)", code, exitSafe)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("expected authoritative result to be written: %v", err)
 	}
 }
 

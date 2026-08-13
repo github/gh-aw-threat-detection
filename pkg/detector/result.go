@@ -51,6 +51,54 @@ func (r *Result) IsSafe() bool {
 	return r != nil && !r.HasThreats()
 }
 
+// FullResultSuffix is appended to the stem of a result path to derive the
+// companion full-result path (detection_result.json -> detection_result_full.json).
+const FullResultSuffix = "_full"
+
+// Redacted returns a copy of r with the model-authored reasons removed. The
+// `reasons` key is retained as an empty array rather than dropped, so the
+// redacted result remains schema-valid under TD-10a and every existing reader
+// parses it unchanged.
+func (r *Result) Redacted() *Result {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.Reasons = []string{}
+	return &out
+}
+
+// SameVerdict reports whether r and other agree on all three threat booleans.
+// It deliberately ignores `reasons`: it is the check that lets a companion full
+// result contribute its reasons only when it describes the same verdict.
+func (r *Result) SameVerdict(other *Result) bool {
+	if r == nil || other == nil {
+		return false
+	}
+	return r.PromptInjection == other.PromptInjection &&
+		r.SecretLeak == other.SecretLeak &&
+		r.MaliciousPatch == other.MaliciousPatch
+}
+
+// FullResultPath derives the companion full-result path for a result file path
+// by inserting FullResultSuffix before the extension. It returns "" for an empty
+// input so callers can use it directly for a "no result file configured" case.
+func FullResultPath(resultPath string) string {
+	if resultPath == "" {
+		return ""
+	}
+	dir, base := filepath.Split(resultPath)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	// A dotfile with no extension (".detection_result") must not have its whole
+	// name treated as the extension, which would produce a bare "_full" name.
+	if stem == "" {
+		stem = base
+		ext = ""
+	}
+	return dir + stem + FullResultSuffix + ext
+}
+
 // ParseStructuredResult parses a strict JSON object containing exactly the
 // prompt_injection, secret_leak, malicious_patch, and reasons fields.
 func ParseStructuredResult(data []byte) (*Result, error) {

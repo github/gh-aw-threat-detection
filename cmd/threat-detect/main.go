@@ -111,6 +111,7 @@ func run() (code int) {
 		model               string
 		promptFile          string
 		outputJSON          string
+		fullOutputJSON      string
 		workflowName        string
 		workflowDescription string
 		customPrompt        string
@@ -128,7 +129,8 @@ func run() (code int) {
 	flag.StringVar(&engineID, "engine", "", "AI engine to use (copilot, claude, codex)")
 	flag.StringVar(&model, "model", "", "Model to use for detection")
 	flag.StringVar(&promptFile, "prompt-template", "", "Path to custom prompt template (defaults to built-in)")
-	flag.StringVar(&outputJSON, "output", "", "Path to write JSON result (defaults to stdout)")
+	flag.StringVar(&outputJSON, "output", "", "Path to write the JSON result (defaults to stdout). Reasons are always empty in this file; see --full-output")
+	flag.StringVar(&fullOutputJSON, "full-output", "", "Path to write the JSON result including reasons (defaults to the --output path with \"_full\" inserted before the extension; empty disables it). Hosts MUST NOT upload this file")
 	flag.StringVar(&workflowName, "workflow-name", "", "Workflow name for the prompt (overrides WORKFLOW_NAME)")
 	flag.StringVar(&workflowDescription, "workflow-description", "", "Workflow description for the prompt (overrides WORKFLOW_DESCRIPTION)")
 	flag.StringVar(&customPrompt, "custom-prompt", "", "Additional detection instructions appended to the prompt (overrides CUSTOM_PROMPT)")
@@ -256,6 +258,38 @@ func run() (code int) {
 	providedFlags := map[string]bool{}
 	flag.CommandLine.Visit(func(f *flag.Flag) { providedFlags[f.Name] = true })
 
+	// Resolve the companion full-result path. An explicit --full-output always
+	// wins (including an explicit empty value, which disables the sidecar);
+	// otherwise it is derived from --output by convention so a host that only
+	// knows about --output still gets the reasons on disk without any change.
+	// With no --output at all there is no path to derive from, so the sidecar
+	// exists in stdout mode only when --full-output names one explicitly — the
+	// escape hatch for placing it where no upload glob can reach.
+	if !providedFlags["full-output"] {
+		fullOutputJSON = detector.FullResultPath(outputJSON)
+	}
+	// The whole point of the split is that the two files have different
+	// exposure: --output is uploaded, --full-output is not. If they resolve to
+	// the same file, writing the full result would leak reasons into the
+	// uploaded artifact, so refuse rather than silently pick one.
+	if outputJSON != "" && fullOutputJSON != "" {
+		same, err := samePath(outputJSON, fullOutputJSON)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving result paths: %v\n", err)
+			reason = reasonConfigError
+			return exitError
+		}
+		if same {
+			fmt.Fprintf(os.Stderr, "Error: --full-output %s resolves to the same file as --output; the full result must be written to a separate path that the host does not upload.\n",
+				sanitizeLogValue(fullOutputJSON))
+			reason = reasonConfigError
+			return exitError
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[threat-detect] result destinations: output=%s full_output=%s\n",
+		sanitizeLogValue(describeResultPath(outputJSON, "(stdout)")),
+		sanitizeLogValue(describeResultPath(fullOutputJSON, "(disabled)")))
+
 	// A value is "defaulted" only when neither the flag nor its environment
 	// variable supplied it; equality with the fallback text is not sufficient.
 	nameDefaulted := !providedFlags["workflow-name"] && os.Getenv("WORKFLOW_NAME") == ""
@@ -369,9 +403,18 @@ func run() (code int) {
 	}
 
 	var resultReason string
-	code, resultReason = writeResult(result, outputJSON)
+	code, resultReason = writeResult(result, outputJSON, fullOutputJSON)
 	reason = resultReason
 	return code
+}
+
+// describeResultPath renders a result destination for the run log, substituting
+// a human-readable placeholder when no path is configured.
+func describeResultPath(path, placeholder string) string {
+	if path == "" {
+		return placeholder
+	}
+	return path
 }
 
 // reportArtifacts prints the loaded-artifact summary and the recursive inventory
@@ -463,11 +506,38 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
 }
 
-// writeResult marshals and writes the verdict, returning the exit code and the
-// terminal reason for the status line. The result JSON is only ever produced on
-// the success path; an output failure yields no JSON and reasonOutputWriteError.
-func writeResult(result *detector.Result, outputJSON string) (int, string) {
-	jsonBytes, err := json.MarshalIndent(result, "", "  ")
+// writeResult writes the verdict to its two destinations and returns the exit
+// code and the terminal reason for the status line.
+//
+// The result reachable by the host's artifact upload (--output, or stdout) is
+// always redacted: it carries the three booleans with an empty `reasons` array.
+// The model-authored reasons go only to fullOutput, which stays on the runner.
+//
+// No diagnostic composed here echoes the reasons, because hosts tee stdout and
+// stderr into files they publish. That guarantee covers detector-authored output
+// only: forwarded engine output (TD-20a) reproduces the reason text wherever the
+// engine renders the threat_detection_result invocation the model made. Framing
+// makes those lines identifiable and inert, but does not remove the text, so a
+// captured stderr file must be treated as carrying model-authored text and must
+// not be published.
+//
+// A failure to write the full result is non-fatal: it is diagnostic-only, and a
+// read-only or missing detection directory must not turn a completed detection
+// into an infrastructure error. A failure to write the authoritative redacted
+// result is fatal, and yields no JSON at all.
+func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (int, string) {
+	if fullOutputJSON != "" {
+		if err := detector.WriteResultFile(fullOutputJSON, result); err != nil {
+			fmt.Fprintf(os.Stderr, "::warning::Could not write the full detection result to %s: %v. The verdict is unaffected; reasons will not be available to the conclusion step.\n",
+				escapeWorkflowData(fullOutputJSON), escapeWorkflowData(err.Error()))
+		} else {
+			fmt.Fprintf(os.Stderr, "[threat-detect] full result written: path=%s reasons=%d\n",
+				sanitizeLogValue(fullOutputJSON), len(result.Reasons))
+		}
+	}
+
+	redacted := result.Redacted()
+	jsonBytes, err := json.MarshalIndent(redacted, "", "  ")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error marshaling result: %v\n", err)
 		return exitError, reasonOutputWriteError

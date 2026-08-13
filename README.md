@@ -61,7 +61,8 @@ threat-detect [flags] <artifacts-dir>
 - `--workflow-description` — Workflow description for the prompt. Overrides `WORKFLOW_DESCRIPTION`
 - `--custom-prompt` — Additional detection instructions appended to the prompt. Overrides `CUSTOM_PROMPT`
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
-- `--output` — Path to write JSON result (defaults to stdout)
+- `--output` — Path to write the JSON result (defaults to stdout). Its `reasons` array is always empty; see [Where the reasons go](#where-the-reasons-go)
+- `--full-output` — Path to write the JSON result *including* reasons. Defaults to the `--output` path with `_full` inserted before the extension (`detection_result.json` → `detection_result_full.json`); pass an explicitly empty value to disable it. **Hosts must not upload this file**
 - `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--step-summary` — Deprecated and ignored. Accepted so hosts that still pass it (older `gh-aw` releases) do not fail; the detector no longer writes a GitHub Actions step summary
 - `--version` — Print version and exit
@@ -165,6 +166,38 @@ must ignore any `THREAT_DETECTION_*` marker that carries the `[engine] ` prefix.
 THREAT_DETECTION_STATUS: reason=result_recorded exit=0
 ```
 
+#### Where the reasons go
+
+`reasons` is model-authored text derived from the untrusted content being
+analyzed, so it is never written to a file the host publishes. The verdict is
+split across two files:
+
+| File | Contents | Fate |
+|------|----------|------|
+| `detection_result.json` (`--output`) | the three booleans, with `reasons: []` | uploaded as the detection artifact |
+| `detection_result_full.json` (`--full-output`) | the identical verdict plus the reported `reasons` | stays on the runner, never uploaded |
+
+The schema is unchanged: `reasons` is still a required array, just empty, so
+every existing parser reads the redacted result as-is. `conclude` reads the full
+result and renders the reasons into the job log, where the runner's masking
+applies and they expire with normal log retention.
+
+Consequences worth knowing:
+
+- Reasons are **not** available to anything reading artifacts after the fact.
+  Post-hoc triage of an old blocked run depends on the job log still being
+  retained.
+- No diagnostic the detector writes echoes the reasons, because hosts routinely
+  tee stdout and stderr into published files. This covers detector-authored
+  output only — forwarded engine output (the `[engine] `-prefixed lines) still
+  reproduces the reason text wherever the engine renders the
+  `threat_detection_result` invocation the model made. Framing makes those lines
+  identifiable and inert, but does not remove the text, so a captured stderr file
+  must be treated as carrying model-authored text and must not be uploaded.
+- A failure to write the full result is non-fatal — it carries no verdict, so a
+  read-only detection directory does not turn a completed detection into an
+  infrastructure error.
+
 #### Concluding a run (`conclude`)
 
 In `gh-aw`-compiled workflows the detector runs inside the AWF sandbox, where the
@@ -175,6 +208,13 @@ it back with the `conclude` subcommand:
 ```bash
 threat-detect conclude --result-file /tmp/gh-aw/threat-detection/detection_result.json
 ```
+
+`conclude` recovers the reasons from the companion full result, deriving its path
+from `--result-file` by the same convention the detection run uses (override with
+`--full-result-file <path>`). The result file remains the sole source of the
+verdict: a missing or unparseable full result is reported and ignored, a full
+result whose booleans disagree is discarded outright, and a pre-split result that
+still carries its own reasons renders them directly.
 
 `conclude` reproduces the `gh-aw` job-output contract — it writes `conclusion`,
 `reason`, and `success` to `GITHUB_OUTPUT` and exports `GH_AW_DETECTION_CONCLUSION`
@@ -470,10 +510,6 @@ this because `gh-aw` does not set `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE}` for
 them. Pinning a concrete, priced OpenAI model keeps the pass cheap and
 deterministic.
 
-### Detection-only Workflow
-
-`.github/workflows/detection-only.yml` is a manual iteration workflow for the generated detection job. It keeps the copied detection job body aligned with the `smoke-copilot-standalone` smoke workflow — it installs the released `threat-detect` binary, runs `threat-detect --engine copilot --output detection_result.json` under AWF, and concludes from the structured `detection_result.json` via `conclude_threat_detection.sh` — while replacing prior activation and agent jobs with stubs that upload local fixtures from `testdata/detection-only/` as the `agent` artifact.
-
 ### Detector Version Selection
 
 The smoke workflows do **not** pin a detector version. gh-aw emits the literal `latest` to `install_threat_detect_binary.sh`, which resolves it at run time via `GET /repos/github/gh-aw-threat-detection/releases/latest` — the newest **non-prerelease** release. Promoting a detector release is therefore all it takes to put that build in front of the smokes; no recompile, no new gh-aw release.
@@ -481,7 +517,7 @@ The smoke workflows do **not** pin a detector version. gh-aw emits the literal `
 > [!NOTE]
 > This repo previously carried a `smoke-<engine>-standalone-latest` counterpart of each smoke, compiled by a gh-aw whose `constants.DefaultThreatDetectVersion` had been patched to the newest detector build. That existed only because the constant used to be a hard-pinned tag that could not be moved without a new gh-aw release. gh-aw v0.86.x changed the default to `latest`, so those variants — and the patched-compiler build step they required — were removed.
 
-Because `releases/latest` ignores prereleases, an **unpromoted** prerelease is never picked up automatically. To exercise one under AWF before promoting it, set the `GH_AW_THREAT_DETECTION_VERSION` repository variable to the prerelease tag and dispatch `.github/workflows/detection-only.yml`, then unset it.
+Because `releases/latest` ignores prereleases, an **unpromoted** prerelease is never picked up automatically. To exercise one before promoting it, dispatch [`.github/workflows/replay-detection.yml`](.github/workflows/replay-detection.yml) with `detector_source=release`, `detector_ref=<prerelease tag>`, and `use_awf=true` against a prior gh-aw run's artifacts.
 
 ### Keeping the Compiled Locks Current
 
@@ -499,7 +535,7 @@ Regenerating the locks is a **separate, manual, human-reviewed step** because pu
 **Tag → test → promote loop:**
 
 1. Cut a release tag (`create-release-tag.yml`); `release.yml` publishes a version-tagged **prerelease** with the recorded asset sha256.
-2. Optionally exercise the prerelease under AWF via `detection-only.yml` and the `GH_AW_THREAT_DETECTION_VERSION` variable, as described above.
+2. Optionally exercise the prerelease under AWF via `replay-detection.yml` with `detector_source=release`, `detector_ref=<prerelease tag>`, and `use_awf=true`, as described above.
 3. Promote with `promote-release.yml`; it re-verifies the asset sha256 and marks the release **Latest** (stable). The smokes pick up the promoted tag on their next run with no recompile.
 
 > [!NOTE]
@@ -521,7 +557,6 @@ Optional Actions variables:
 |----------|---------|
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. When `--model` is not passed, the detector reads the variable matching the selected engine; if it is unset, it falls back to the engine CLI's native model env var (`COPILOT_MODEL` for copilot, `ANTHROPIC_MODEL` for claude). |
-| `GH_AW_THREAT_DETECTION_VERSION` | Detector release tag downloaded by `detection-only.yml` (defaults to the latest promoted release when unset). Set it to a prerelease tag to exercise an unpromoted build under AWF. The `*-standalone` smoke workflows ignore this variable — they resolve the newest promoted release at run time (see [Detector Version Selection](#detector-version-selection)). |
 
 ### Build
 
