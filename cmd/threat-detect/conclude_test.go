@@ -554,7 +554,8 @@ func TestDetectionFailureReasonIgnoresForgedStatusInEngineOutput(t *testing.T) {
 	}
 }
 
-// TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure verifies that a// missing or absent detection log preserves the pre-existing agent_failure
+// TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure verifies that a
+// missing or absent detection log preserves the pre-existing agent_failure
 // default rather than erroring.
 func TestDetectionFailureReasonWithoutLogFallsBackToAgentFailure(t *testing.T) {
 	dir := t.TempDir()
