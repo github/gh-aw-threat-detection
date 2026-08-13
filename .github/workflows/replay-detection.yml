@@ -506,19 +506,32 @@ jobs:
 
           # Diagnostic-only: parses the *original* gh-aw run's log, which may
           # carry the legacy marker wrapped in Markdown emphasis (**/__/*/_).
+          #
+          # Lines prefixed with "[engine] " are engine subprocess output the
+          # detector forwarded — untrusted, model-authored text. They
+          # are skipped so an injected marker cannot be promoted to the
+          # "original" verdict this replay is compared against.
           marker = re.compile(r'THREAT_DETECTION_RESULT:\s*(\{.*\})')
+          engine_prefix = '[engine] '
           for path in candidates:
               for line in path.read_text(errors='replace').splitlines():
+                  if line.lstrip(' \t').startswith(engine_prefix):
+                      continue
                   match = marker.search(line)
-                  if match:
-                      original = json.loads(match.group(1))
-                      # The original run's reasons are model-authored text from
-                      # another repository's agent. They are only ever compared
-                      # on the verdict fields, so they are dropped rather than
-                      # written into a published replay artifact.
-                      original['reasons'] = []
-                      output.write_text(json.dumps(original, indent=2) + '\n')
-                      raise SystemExit(0)
+                  if not match:
+                      continue
+                  try:
+                      parsed = json.loads(match.group(1))
+                  except ValueError:
+                      continue
+                  # The original run's reasons are model-authored text from
+                  # another repository's agent. They are only ever compared on
+                  # the verdict fields, so they are dropped rather than written
+                  # into a published replay artifact.
+                  if isinstance(parsed, dict):
+                      parsed['reasons'] = []
+                  output.write_text(json.dumps(parsed, indent=2) + '\n')
+                  raise SystemExit(0)
           raise SystemExit(0)
           PY
 

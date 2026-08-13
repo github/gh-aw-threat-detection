@@ -138,15 +138,17 @@ its own log retention.
 
 This requirement governs detector-authored diagnostics only. It does **not**
 extend to the engine subprocess's own output, which TD-20a requires the detector
-to forward verbatim: the model reports its verdict by invoking the
+to forward: the model reports its verdict by invoking the
 `threat_detection_result` command with each reason as an argument, so an engine
-that renders its own tool invocations reproduces the reason text in the
-transcript. Consequently a host that tees the detection run's standard error
+that renders its own tool invocations reproduces the reason text on the forwarded
+lines. TD-20a's framing makes those lines identifiable and inert — they cannot
+forge a workflow command or a `THREAT_DETECTION_*` marker — but framing does not
+remove the text. Consequently a host that tees the detection run's standard error
 into a file MUST treat that file as carrying model-authored text and MUST NOT
-publish it (see U-09). Closing that surface would require suppressing or
-rewriting the engine transcript, which conflicts with the real-time forwarding
-TD-20a mandates; it is therefore out of scope for this requirement, which
-governs only the files the detector itself writes.
+publish it (see U-09). Suppressing the text entirely would require withholding or
+rewriting engine output, which conflicts with the real-time forwarding TD-20a
+mandates; it is therefore out of scope for this requirement, which governs only
+the files the detector itself writes.
 
 
 ---
@@ -336,11 +338,20 @@ Untrusted values echoed into a detector-authored diagnostic — model-authored
 text, artifact paths, and configuration values such as the engine ID, model, and
 process name — MUST be escaped so that each is confined to a single physical
 output line and cannot emit a host workflow command, and listings MUST be
-bounded so a pathological input cannot flood the job log. This requirement
-governs the diagnostics the detector composes. It does not extend to the engine
-subprocess's own standard output and standard error, which the detector forwards
-verbatim so harness lifecycle output and engine errors reach the job log in real
-time; hosts MUST NOT treat forwarded engine output as detector-attested text.
+bounded so a pathological input cannot flood the job log.
+
+The detector MUST forward the engine subprocess's own standard output and
+standard error to its standard error as the subprocess produces them, so harness
+lifecycle output and engine errors reach the job log in real time. Because that
+output is model-authored and therefore untrusted, the detector MUST frame it: it
+MUST emit forwarded output one line at a time, MUST prefix every forwarded line
+with a fixed marker that identifies it as engine output, MUST treat both LF and
+CR as line terminators, MUST flush a trailing partial line that arrives without a
+terminator, and MUST ensure no forwarded line can be interpreted by the host as a
+workflow command. A reader MUST therefore be able to distinguish forwarded engine
+output from detector-authored diagnostics by inspecting a single line. Hosts and
+log consumers MUST NOT treat forwarded engine output as detector-attested text,
+and MUST ignore `THREAT_DETECTION_*` markers appearing on forwarded lines.
 
 **TD-20b**: The detector MUST provide a `conclude` subcommand that reads a structured
 result file written by a prior detection run and emits the host-side job-output
@@ -351,7 +362,8 @@ consult the detection run's captured log (`--detection-log <path>`, default
 `<result-file-dir>/detection.log`) for the terminal `THREAT_DETECTION_STATUS:`
 line (per TD-20a) and map its `reason=` value onto the host-side `reason` per the
 following table, defaulting to `agent_failure` when the log is absent, unreadable,
-or contains no status line:
+or contains no status line. Status lines appearing on forwarded engine output
+(TD-20a) MUST be ignored during this scan:
 
 | status reason | host-side `reason` |
 |---|---|

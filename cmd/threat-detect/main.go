@@ -388,7 +388,9 @@ func run() (code int) {
 
 	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error running detection: %v\n", err)
+		// The message can embed captured engine output (engineExitError), which
+		// is untrusted: sanitize it so it cannot break out of this line.
+		fmt.Fprintf(os.Stderr, "Error running detection: %s\n", sanitizeLogValue(err.Error()))
 		switch {
 		case ctx.Err() != nil:
 			reason = reasonCancelled
@@ -513,10 +515,11 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 //
 // No diagnostic composed here echoes the reasons, because hosts tee stdout and
 // stderr into files they publish. That guarantee covers detector-authored output
-// only: the engine subprocess's transcript is forwarded verbatim (TD-20a) and
-// reproduces the reason text wherever the engine renders the
-// threat_detection_result invocation the model made, so a captured stderr file
-// must be treated as carrying model-authored text and must not be published.
+// only: forwarded engine output (TD-20a) reproduces the reason text wherever the
+// engine renders the threat_detection_result invocation the model made. Framing
+// makes those lines identifiable and inert, but does not remove the text, so a
+// captured stderr file must be treated as carrying model-authored text and must
+// not be published.
 //
 // A failure to write the full result is non-fatal: it is diagnostic-only, and a
 // read-only or missing detection directory must not turn a completed detection

@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
+	"github.com/github/gh-aw-threat-detection/pkg/engine"
 )
 
 // Exit codes for the conclude subcommand. These map directly onto whether the
@@ -580,6 +581,10 @@ func (c *concluder) detectionFailureReason() (reason, errCode string) {
 // "" if the file cannot be read or no such line is present. Only the last
 // occurrence is used because a retried run may have emitted earlier lines from
 // unrelated invocations captured in the same file.
+//
+// Lines carrying engine.PassthroughPrefix are forwarded engine subprocess output
+// — untrusted, model-authored text — and are skipped so a status line the
+// detector never emitted cannot drive the reported failure reason.
 func lastDetectionStatusReason(path string) string {
 	if path == "" {
 		return ""
@@ -590,6 +595,9 @@ func lastDetectionStatusReason(path string) string {
 	}
 	reason := ""
 	for _, line := range strings.Split(string(data), "\n") {
+		if isForwardedEngineLine(line) {
+			continue
+		}
 		idx := strings.Index(line, statusPrefix)
 		if idx < 0 {
 			continue
@@ -606,6 +614,14 @@ func lastDetectionStatusReason(path string) string {
 		reason = lineReason
 	}
 	return reason
+}
+
+// isForwardedEngineLine reports whether a captured-log line is engine subprocess
+// output the detector forwarded, rather than a diagnostic the detector authored.
+// Leading whitespace is tolerated so a line indented by an outer log capture is
+// still recognized.
+func isForwardedEngineLine(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t"), engine.PassthroughPrefix)
 }
 
 // fail records a failure verdict and decides whether to fail closed. It mirrors

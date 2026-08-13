@@ -131,9 +131,11 @@ line. The rendered prompt itself is never echoed.
 Untrusted values interpolated into these detector-authored lines are escaped to a
 single physical line and listings are bounded, so neither a model-authored string
 nor a hostile filename can forge a workflow command or flood the job log. The
-engine subprocess's own stdout/stderr are a separate stream: they are forwarded
-verbatim (so harness output and engine errors appear in real time) and are not
-detector-attested.
+engine subprocess's own stdout/stderr are a separate, untrusted stream: they are
+forwarded line by line in real time (so harness output and engine errors stay
+visible), each line prefixed with `[engine] ` and stripped of its ability to open
+a workflow command. Forwarded lines are not detector-attested — log consumers
+must ignore any `THREAT_DETECTION_*` marker that carries the `[engine] ` prefix.
 
 ```text
 [threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
@@ -170,10 +172,11 @@ Consequences worth knowing:
   retained.
 - No diagnostic the detector writes echoes the reasons, because hosts routinely
   tee stdout and stderr into published files. This covers detector-authored
-  output only — the engine transcript is forwarded verbatim and reproduces the
-  reason text wherever the engine renders the `threat_detection_result`
-  invocation the model made, so a captured stderr file must be treated as
-  carrying model-authored text and must not be uploaded.
+  output only — forwarded engine output (the `[engine] `-prefixed lines) still
+  reproduces the reason text wherever the engine renders the
+  `threat_detection_result` invocation the model made. Framing makes those lines
+  identifiable and inert, but does not remove the text, so a captured stderr file
+  must be treated as carrying model-authored text and must not be uploaded.
 - A failure to write the full result is non-fatal — it carries no verdict, so a
   read-only detection directory does not turn a completed detection into an
   infrastructure error.
