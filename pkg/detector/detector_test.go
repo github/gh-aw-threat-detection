@@ -152,6 +152,9 @@ func TestDefaultPromptTemplateReasonRequirements(t *testing.T) {
 		"quoted verbatim",
 		"never write the secret value itself",
 		"[REDACTED",
+		// TD-10e: reasons quoting artifact content must not travel by shell.
+		"--reasons-file",
+		"Never put evidence on the command line",
 	} {
 		if !strings.Contains(tmpl, expected) {
 			t.Errorf("template missing reason guidance %q", expected)

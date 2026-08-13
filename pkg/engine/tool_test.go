@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,6 +43,42 @@ func TestProvisionResultTool(t *testing.T) {
 	}
 	if info.Mode().Perm()&0o100 == 0 {
 		t.Fatalf("wrapper not executable: %o", info.Mode().Perm())
+	}
+}
+
+// TestResultToolScriptForwardsArgsIntact verifies the provisioned wrapper passes
+// each argument through as one intact argument. Reason text quotes
+// attacker-authored content, so the wrapper must use double-quoted "$@" and
+// never re-split or glob what it was given.
+func TestResultToolScriptForwardsArgsIntact(t *testing.T) {
+	script := resultToolScript("/opt/bin/threat detect")
+	if !strings.Contains(script, `"$@"`) {
+		t.Fatalf("wrapper must forward double-quoted \"$@\", got: %q", script)
+	}
+	if !strings.Contains(script, `'/opt/bin/threat detect'`) {
+		t.Fatalf("wrapper must quote the binary path, got: %q", script)
+	}
+
+	dir := t.TempDir()
+	// Stand in for the detector binary: print each received argument on its own
+	// line so re-splitting or globbing by the wrapper is observable.
+	echoArgs := filepath.Join(dir, "echo args")
+	if err := os.WriteFile(echoArgs, []byte("#!/bin/sh\nfor a in \"$@\"; do echo \"[$a]\"; done\n"), 0o700); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	wrapper := filepath.Join(dir, "threat_detection_result")
+	if err := os.WriteFile(wrapper, []byte(resultToolScript(echoArgs)), 0o700); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	hostile := "EVIDENCE: $(id) `id` a b\t*  ; rm -rf /"
+	out, err := exec.Command(wrapper, "--reasons-file", hostile).CombinedOutput()
+	if err != nil {
+		t.Fatalf("wrapper error = %v (output: %s)", err, out)
+	}
+	want := "[report-result]\n[--reasons-file]\n[" + hostile + "]\n"
+	if string(out) != want {
+		t.Fatalf("wrapper mangled arguments:\ngot:  %q\nwant: %q", out, want)
 	}
 }
 

@@ -38,7 +38,7 @@ const (
 
 	detectionCorrectionPrefix      = "Your previous response did not record a verdict"
 	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
-	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false, plus a --reason for every threat set to true."
+	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false. When any of them is true, write your reasons with your file-editing tool as a JSON array of strings and pass that file with --reasons-file; do not paste quoted artifact content onto the command line."
 	promptAnalysisValidationCode   = "ERR_VALIDATION"
 
 	// maxInventoryEntries bounds the artifact inventory printed to stderr so a

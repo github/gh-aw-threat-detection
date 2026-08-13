@@ -200,6 +200,55 @@ func ReadResultFile(path string) (*Result, error) {
 	return ParseStructuredResult(data)
 }
 
+// ReadReasonsFile reads path and parses it as a JSON array of reason strings.
+//
+// This is the shell-free transport for reasons. Reasons quote attacker-authored
+// artifact content verbatim, and the detection engine reports its verdict by
+// running the threat_detection_result wrapper through a shell — so evidence
+// passed as a `--reason` argument would be subject to shell expansion
+// (`$(...)`, backticks, quoting) before the tool ever received it. Routing that
+// text through a file the engine writes with its file-editing tool keeps it out
+// of any command line, and a malformed file is a correctable parse error rather
+// than an executed command.
+//
+// Only the element types are validated here; the count and per-entry bounds are
+// applied by validateRawResult so every transport is bounded identically.
+func ReadReasonsFile(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading reasons file: %w", err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, MaxResultFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading reasons file %q: %w", path, err)
+	}
+	if int64(len(data)) > MaxResultFileBytes {
+		return nil, fmt.Errorf("reasons file %q exceeds the maximum size of %d bytes", path, MaxResultFileBytes)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, fmt.Errorf("reasons file %q is empty; it must contain a JSON array of reason strings", path)
+	}
+	var raw []any
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("reasons file %q must contain a JSON array of strings: %w", path, err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("reasons file %q must contain exactly one JSON array", path)
+	}
+	reasons := make([]string, 0, len(raw))
+	for i, entry := range raw {
+		text, ok := entry.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid type for reasons file entry [%d]: expected string, got %T (%v)", i, entry, entry)
+		}
+		reasons = append(reasons, text)
+	}
+	return reasons, nil
+}
+
 // BuildResultFromReport constructs a *Result from individual report fields.
 // reasons may be nil; it is normalized to a non-nil empty slice.
 func BuildResultFromReport(promptInjection, secretLeak, maliciousPatch bool, reasons []string) *Result {

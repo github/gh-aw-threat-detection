@@ -100,6 +100,17 @@ remediation. For secret-leak findings the instructions MUST require the
 credential value to be masked rather than reproduced, while still requiring
 provenance sufficient to locate and rotate it.
 
+**TD-10e**: Because reasons quote attacker-authored artifact content verbatim
+(TD-10d) and the engine invokes the `threat_detection_result` tool through a
+shell, the implementation MUST provide a transport that carries reason text from
+the engine to the tool without passing it through a shell command line, and the
+prompt MUST direct the engine to use that transport for any reason quoting
+artifact content. Malformed transport input MUST be reported to the engine as a
+correctable error (TD-10a). Reasons supplied through this transport MUST be
+subject to the same bounds as any other transport (TD-10b). Prompt-level quoting
+guidance MUST NOT be the only protection against shell interpretation of reason
+text.
+
 **TD-10a**: The result reported through the `threat_detection_result` tool MUST
 use the same JSON object shape as TD-08 with required boolean `prompt_injection`,
 `secret_leak`, and `malicious_patch` fields and a required string-array `reasons`

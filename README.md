@@ -82,11 +82,24 @@ provisions a `threat_detection_result` command on the model's `PATH` and sets
 invocation. The model reports its verdict by running the command exactly once:
 
 ```bash
-threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reason "..."
+threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reasons-file <path>
 ```
 
 The three boolean flags accept both the space-separated form shown above and the
-`--prompt-injection=true` form. The command validates the input synchronously: on bad input it prints
+`--prompt-injection=true` form.
+
+Reasons are transported through a **file**, not the command line. Reasons quote
+attacker-authored artifact content verbatim, and the model runs this command
+through a shell, so evidence containing `$(...)`, backticks, or quotes passed as
+a `--reason` argument would be expanded or executed by the shell before the tool
+received it. `--reasons-file` points at a file — written by the model with its
+file-editing tool — containing a JSON array of reason strings, which is parsed
+by the tool itself. A malformed file is a correctable parse error rather than an
+executed command. A repeatable `--reason "<text>"` flag remains for short,
+model-authored text that quotes nothing; both sources are validated against the
+same bounds and concatenated in order.
+
+The command validates the input synchronously: on bad input it prints
 `THREAT_DETECTION_RESULT_ERROR:` and exits non-zero without recording anything,
 so the model can correct it in-session; on valid input it atomically records the
 canonical JSON verdict to the sink (first valid write wins, idempotent) and

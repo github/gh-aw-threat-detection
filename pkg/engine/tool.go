@@ -31,8 +31,7 @@ func provisionResultTool(sinkPath string) (env []string, cleanup func(), err err
 	cleanup = func() { os.RemoveAll(toolDir) }
 
 	wrapperPath := filepath.Join(toolDir, "threat_detection_result")
-	script := "#!/bin/sh\nexec " + shellQuote(self) + " report-result \"$@\"\n"
-	if err := os.WriteFile(wrapperPath, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(wrapperPath, []byte(resultToolScript(self)), 0o700); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("writing result tool wrapper: %w", err)
 	}
@@ -61,6 +60,20 @@ func watchResultSink(ctx context.Context, cancel context.CancelFunc, sinkPath st
 			}
 		}
 	}
+}
+
+// resultToolScript renders the threat_detection_result wrapper that execs self's
+// report-result subcommand.
+//
+// The arguments are forwarded with "$@" (double-quoted, never $* or bare $@) so
+// each argument the engine passed reaches the subcommand as one intact
+// argument, without a second round of word splitting or globbing. This matters
+// because reason text quotes attacker-authored artifact content; the wrapper
+// must never re-interpret it. It is only half the boundary, though — the engine
+// composes the command line in its own shell, which is why reason text is
+// transported through --reasons-file rather than as an argument.
+func resultToolScript(self string) string {
+	return "#!/bin/sh\nexec " + shellQuote(self) + " report-result \"$@\"\n"
 }
 
 // shellQuote wraps a value in single quotes for safe use in a POSIX shell script.
