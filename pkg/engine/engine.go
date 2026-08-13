@@ -455,13 +455,19 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 	}
 
 	var stdout, stderr bytes.Buffer
-	// Tee both stdout and stderr to os.Stderr so that harness lifecycle output
-	// ([copilot-harness], [claude-harness], [codex-harness]) and engine errors
-	// appear in the GitHub Actions job log in real-time, mirroring the agent
-	// job's "2>&1 | tee" pattern. The buffers are still populated for error
+	// Tee both stdout and stderr to the detector's stderr so that harness
+	// lifecycle output ([copilot-harness], [claude-harness], [codex-harness])
+	// and engine errors appear in the GitHub Actions job log in real-time,
+	// mirroring the agent job's "2>&1 | tee" pattern. Forwarding goes through a
+	// framer: the engine is analyzing attacker-controlled artifacts, so each
+	// forwarded line is prefixed (PassthroughPrefix) and stripped of its ability
+	// to open a workflow command, keeping it distinguishable from
+	// detector-attested diagnostics. The buffers are still populated for error
 	// reporting and sink-result checking.
-	cmd.Stdout = io.MultiWriter(&stdout, os.Stderr)
-	cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
+	framer := newPassthroughFramer(enginePassthroughStderr)
+	defer framer.Close()
+	cmd.Stdout = io.MultiWriter(&stdout, framer.writer())
+	cmd.Stderr = io.MultiWriter(&stderr, framer.writer())
 
 	if err := cmd.Run(); err != nil {
 		if sinkPath != "" {
@@ -521,6 +527,10 @@ func tailTruncate(s string, max int) string {
 // line. It is a package variable so tests can capture the emitted output; in
 // production it is os.Stderr, matching the GitHub Actions job log.
 var engineInvokeStderr io.Writer = os.Stderr
+
+// enginePassthroughStderr is the destination for forwarded engine subprocess
+// output. It is a package variable for the same reason as engineInvokeStderr.
+var enginePassthroughStderr io.Writer = os.Stderr
 
 // logEngineInvoke logs the engine subprocess invocation details to stderr. It is
 // called immediately before the engine process starts so that silent engine
