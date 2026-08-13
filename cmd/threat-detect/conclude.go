@@ -51,8 +51,17 @@ const (
 	maxListedFiles       = 200
 	maxEchoedLogLines    = 50
 	maxEchoedLineRunes   = 500
+	maxReasonLogLines    = 40
 	diagnosticLogMaxSize = 8 << 20 // 8 MiB: read no more of the detection log
 )
+
+// reasonContinuationGutter prefixes every physical line of a multi-line reason
+// after the first. Reasons are untrusted text and a line of theirs could start
+// with "::", which the Actions runner would interpret as a workflow command
+// (leading whitespace is not protection — the runner trims it). The gutter puts
+// a non-"::" character first on every continuation line, so the line stays a
+// plain log line while remaining readable and copy-pasteable.
+const reasonContinuationGutter = "         | "
 
 // bannerRule is the horizontal rule framing the conclude banners. It mirrors
 // gh-aw's inline conclusion step so both paths read identically in job logs.
@@ -239,7 +248,7 @@ func (c *concluder) conclude(resultFile string) int {
 			for _, reason := range result.Reasons {
 				safe = append(safe, sanitizeLogValue(truncateRunes(reason, maxEchoedLineRunes)))
 			}
-			message += "\nReasons: " + strings.Join(safe, "; ")
+			message += "\nReasons (full detail in the verdict block above): " + strings.Join(safe, "; ")
 		}
 		return c.fail(result, detector.ReasonThreatDetected, message)
 	}
@@ -273,11 +282,42 @@ func (c *concluder) reportVerdict(result *detector.Result) {
 	if len(result.Reasons) > 0 {
 		c.info(fmt.Sprintf("   reasons (%d):", len(result.Reasons)))
 		for i, reason := range result.Reasons {
-			c.info(fmt.Sprintf("     [%d] %s", i+1, sanitizeLogValue(reason)))
+			lines := reasonLogLines(reason)
+			c.info(fmt.Sprintf("     [%d] %s", i+1, lines[0]))
+			for _, line := range lines[1:] {
+				c.info(reasonContinuationGutter + line)
+			}
 		}
 	} else {
 		c.info("   reasons          : (none)")
 	}
+}
+
+// reasonLogLines renders an untrusted, model-authored reason as the physical
+// log lines to print. Reasons carry forensic detail — verbatim quotes of the
+// triggering content, file and line references — which is only usable if it
+// keeps its line structure, so embedded newlines become real lines rather than
+// escaped "\n" runs. Each returned line is individually sanitized (so no line
+// can carry a control character or start a line of its own) and bounded, and
+// the line count is capped so one pathological reason cannot flood the job log.
+// The result always has at least one element.
+func reasonLogLines(reason string) []string {
+	normalized := strings.ReplaceAll(reason, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	raw := strings.Split(normalized, "\n")
+	truncated := false
+	if len(raw) > maxReasonLogLines {
+		raw = raw[:maxReasonLogLines]
+		truncated = true
+	}
+	lines := make([]string, 0, len(raw)+1)
+	for _, line := range raw {
+		lines = append(lines, sanitizeLogValue(truncateRunes(line, maxEchoedLineRunes)))
+	}
+	if truncated {
+		lines = append(lines, "… (reason truncated)")
+	}
+	return lines
 }
 
 // listDirectory prints a recursive listing of dir so a missing or unusable
@@ -426,15 +466,36 @@ func readBounded(path string, limit int64) ([]byte, int64, error) {
 	return data, totalBytes, nil
 }
 
+// legacyCommandMarker is the runner's legacy workflow-command marker,
+// "##[command]data". The Actions runner honors it in addition to the "::" form,
+// and — unlike "::", which it accepts only at the start of a line (after
+// trimming leading whitespace) — it locates this marker with an unanchored
+// IndexOf. A legacy marker anywhere inside a log line is therefore a live
+// command, so no line prefix, gutter, or indentation can render it inert: the
+// value itself must be broken up. Reachable commands include add-mask (which
+// redacts arbitrary text from the log) and stop-commands (which suppresses
+// every later command, including this program's own threat annotation).
+const legacyCommandMarker = "##["
+
+// legacyCommandMarkerEscaped is the inert rendering of legacyCommandMarker. It
+// keeps the sequence readable and greppable while breaking the runner's match.
+const legacyCommandMarkerEscaped = `##\[`
+
 // sanitizeLogValue renders an untrusted string (a model-authored reason, an
-// artifact filename, or a detection-log line) so it cannot break out of its
-// single physical log line. Embedded newlines would otherwise let the value
-// emit a line of its own beginning with "::", which the Actions runner would
-// interpret as a workflow command. Control characters are escaped rather than
-// dropped so the original content stays visible and diagnosable.
+// artifact filename, or a detection-log line) so it cannot act as a workflow
+// command. Two things are neutralized:
+//
+//   - Control characters are escaped rather than dropped, so the original
+//     content stays visible and diagnosable. This confines the value to one
+//     physical line, since an embedded newline would otherwise let it emit a
+//     line of its own beginning with "::" — which the runner would interpret.
+//     (Reasons are rendered across real lines by reasonLogLines, which calls
+//     this per line and prefixes continuations so none can start with "::".)
+//   - The legacy "##[" marker is escaped wherever it appears, because the
+//     runner matches it mid-line and line-position defenses cannot reach it.
 func sanitizeLogValue(s string) string {
 	if !strings.ContainsFunc(s, unicode.IsControl) {
-		return s
+		return strings.ReplaceAll(s, legacyCommandMarker, legacyCommandMarkerEscaped)
 	}
 	var b strings.Builder
 	b.Grow(len(s))
@@ -452,7 +513,9 @@ func sanitizeLogValue(s string) string {
 			b.WriteRune(r)
 		}
 	}
-	return b.String()
+	// The control-character escapes above emit only backslash sequences, so they
+	// can neither create nor hide a "##[" marker; escaping it afterwards is safe.
+	return strings.ReplaceAll(b.String(), legacyCommandMarker, legacyCommandMarkerEscaped)
 }
 
 // truncateRunes shortens s to at most max runes, appending an ellipsis marker

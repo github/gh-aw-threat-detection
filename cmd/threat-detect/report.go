@@ -43,12 +43,14 @@ func runReport(args []string) int {
 		secretLeak      bool
 		maliciousPatch  bool
 		reasons         stringSliceFlag
+		reasonsFile     string
 		resultFile      string
 	)
 	fs.BoolVar(&promptInjection, "prompt-injection", false, "Whether a prompt injection threat was detected (required)")
 	fs.BoolVar(&secretLeak, "secret-leak", false, "Whether a secret leak threat was detected (required)")
 	fs.BoolVar(&maliciousPatch, "malicious-patch", false, "Whether a malicious patch threat was detected (required)")
-	fs.Var(&reasons, "reason", "Reason explaining a detected threat (repeatable)")
+	fs.Var(&reasons, "reason", "Reason explaining a detected threat (repeatable; use --reasons-file for text quoting artifact content)")
+	fs.StringVar(&reasonsFile, "reasons-file", "", "Path to a file containing a JSON array of reason strings; the shell-free way to report reasons that quote artifact content")
 	fs.StringVar(&resultFile, "result-file", os.Getenv("THREAT_DETECTION_RESULT_FILE"), "Path to the result sink file (defaults to env THREAT_DETECTION_RESULT_FILE)")
 
 	if err := fs.Parse(normalizeBoolFlagArgs(args)); err != nil {
@@ -71,7 +73,17 @@ func runReport(args []string) int {
 		return reportExitConfig
 	}
 
+	// Reasons from the file transport are appended after any --reason flags, so
+	// the recorded order matches the order the model supplied them.
 	reasonsSlice := []string(reasons)
+	if reasonsFile != "" {
+		fileReasons, err := detector.ReadReasonsFile(reasonsFile)
+		if err != nil {
+			reportError(detector.TruncateCorrectionMessage(err.Error()))
+			return reportExitInvalid
+		}
+		reasonsSlice = append(reasonsSlice, fileReasons...)
+	}
 	if msg := detector.ValidateReportFields(promptInjection, secretLeak, maliciousPatch, toAnySlice(reasonsSlice)); msg != "" {
 		reportError(msg)
 		return reportExitInvalid
@@ -79,7 +91,7 @@ func runReport(args []string) int {
 
 	// Require at least one reason when any threat is reported.
 	if (promptInjection || secretLeak || maliciousPatch) && len(reasonsSlice) == 0 {
-		reportError("at least one --reason is required when any threat is true")
+		reportError("at least one reason is required when any threat is true; supply --reasons-file (preferred) or --reason")
 		return reportExitInvalid
 	}
 

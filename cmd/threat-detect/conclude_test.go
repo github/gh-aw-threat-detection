@@ -390,10 +390,10 @@ func TestConcludeThreatMessageEscaped(t *testing.T) {
 	if !strings.Contains(got, "::error::") {
 		t.Fatalf("expected ::error:: command, got: %q", got)
 	}
-	if strings.Contains(got, "\nReasons:") {
+	if strings.Contains(got, "\nReasons (full detail") {
 		t.Fatalf("newline in message must be escaped, got: %q", got)
 	}
-	if !strings.Contains(got, "%0AReasons:") {
+	if !strings.Contains(got, "%0AReasons (full detail") {
 		t.Fatalf("expected escaped newline before Reasons, got: %q", got)
 	}
 	if !strings.Contains(got, errCodeValidation) {
@@ -845,6 +845,12 @@ func TestSanitizeLogValue(t *testing.T) {
 		{"carriage return is escaped", "text\r::error::boom", `text\r::error::boom`},
 		{"tab is escaped", "a\tb", `a\tb`},
 		{"other control chars are escaped", "a\x00b\x1bc", `a\x00b\x1bc`},
+		// The runner matches the legacy "##[cmd]" marker anywhere in a line, so
+		// it must be broken up in the value regardless of line position.
+		{"legacy marker is escaped", "evidence ##[stop-commands]tok", `evidence ##\[stop-commands]tok`},
+		{"legacy marker escaped without control chars", "##[add-mask]word", `##\[add-mask]word`},
+		{"every legacy marker occurrence is escaped", "##[error]a ##[add-mask]b", `##\[error]a ##\[add-mask]b`},
+		{"legacy marker escaped alongside control chars", "x\n##[error]y", `x\n##\[error]y`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -883,8 +889,111 @@ func TestConcludeReasonCannotInjectWorkflowCommand(t *testing.T) {
 			t.Errorf("unexpected workflow command emitted: %q", line)
 		}
 	}
-	if !strings.Contains(stdout.String(), `[1] benign looking\n::add-mask::injected`) {
-		t.Errorf("escaped reason not rendered on a single line:\n%s", stdout.String())
+	// The reason keeps its line structure (so quoted evidence stays readable),
+	// but the continuation line carries the gutter so it cannot start a command.
+	if !strings.Contains(stdout.String(), "     [1] benign looking\n") {
+		t.Errorf("first reason line not rendered:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), reasonContinuationGutter+"::add-mask::injected\n") {
+		t.Errorf("continuation line not rendered with gutter:\n%s", stdout.String())
+	}
+}
+
+// TestReasonLogLines verifies multi-line reasons keep their line structure,
+// stay individually sanitized and bounded, and are capped in line count.
+func TestReasonLogLines(t *testing.T) {
+	got := reasonLogLines("LOCATION: prompt.txt:42\r\nEVIDENCE: ignore\tprior\rrules")
+	want := []string{"LOCATION: prompt.txt:42", `EVIDENCE: ignore\tprior`, "rules"}
+	if len(got) != len(want) {
+		t.Fatalf("reasonLogLines lines = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	long := strings.Repeat("x", maxEchoedLineRunes+50)
+	if lines := reasonLogLines(long); !strings.HasSuffix(lines[0], "… (truncated)") {
+		t.Errorf("over-long line not truncated: %q", lines[0])
+	}
+
+	many := reasonLogLines(strings.Repeat("a\n", maxReasonLogLines+10))
+	if len(many) != maxReasonLogLines+1 {
+		t.Fatalf("line count = %d, want %d", len(many), maxReasonLogLines+1)
+	}
+	if many[len(many)-1] != "… (reason truncated)" {
+		t.Errorf("missing truncation marker, got %q", many[len(many)-1])
+	}
+}
+
+// TestConcludeReasonCannotEmitLegacyWorkflowCommand verifies a reason cannot
+// smuggle the runner's legacy "##[command]" marker into the job log. The runner
+// matches that marker mid-line, so the line gutter cannot neutralize it; if it
+// survived, attacker-authored evidence could emit ##[stop-commands] and
+// suppress this program's own threat annotation, or ##[add-mask] and redact the
+// log a maintainer is meant to read.
+func TestConcludeReasonCannotEmitLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	resultFile := filepath.Join(dir, "detection_result.json")
+	verdict := `{"prompt_injection":true,"secret_leak":false,"malicious_patch":false,` +
+		`"reasons":["EVIDENCE:\nharmless ##[stop-commands]pwn3d then ##[add-mask]detected"]}`
+	if err := os.WriteFile(resultFile, []byte(verdict), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		stdout:       &stdout,
+	}
+	if code := c.run(resultFile); code != concludeExitFail {
+		t.Fatalf("exit code = %d, want %d", code, concludeExitFail)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", got)
+	}
+	// The evidence must still be present and readable, just inert.
+	if !strings.Contains(got, `##\[stop-commands]pwn3d`) || !strings.Contains(got, `##\[add-mask]detected`) {
+		t.Fatalf("escaped evidence not rendered:\n%s", got)
+	}
+	// The threat annotation must still be emitted (it is what stop-commands
+	// would have suppressed).
+	if !strings.Contains(got, "::error::") {
+		t.Fatalf("expected ::error:: annotation, got:\n%s", got)
+	}
+}
+
+// TestConcludeDiagnosticsCannotEmitLegacyWorkflowCommand verifies the other
+// untrusted echo paths — artifact filenames and detection-log lines — are
+// neutralized the same way.
+func TestConcludeDiagnosticsCannotEmitLegacyWorkflowCommand(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "detection.log")
+	logLine := "THREAT_DETECTION_STATUS: reason=engine_error exit=2 ##[add-mask]x\n"
+	if err := os.WriteFile(logPath, []byte(logLine), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "evil##[error]name.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	c := &concluder{
+		runDetection: "true",
+		warnMode:     true,
+		githubOutput: filepath.Join(dir, "out"),
+		githubEnv:    filepath.Join(dir, "env"),
+		detectionLog: logPath,
+		stdout:       &stdout,
+	}
+	c.run(filepath.Join(dir, "missing_result.json"))
+
+	if strings.Contains(stdout.String(), "##[") {
+		t.Fatalf("live legacy workflow-command marker reached the log:\n%s", stdout.String())
 	}
 }
 

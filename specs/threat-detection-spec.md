@@ -88,7 +88,32 @@ threat-detection:
 
 **TD-09**: If any threat is detected (`true`), the workflow MUST fail and safe outputs MUST NOT execute.
 
-**TD-10**: The `reasons` array SHOULD contain human-readable explanations for detected threats.
+**TD-10**: The `reasons` array SHOULD contain human-readable explanations for
+detected threats.
+
+**TD-10d**: The default prompt template MUST instruct the detection engine to
+write reasons that let a reader of the job log locate and remediate the finding
+without access to the artifacts. For each reported finding the reasons MUST be
+instructed to identify the artifact and position, quote the triggering content
+verbatim, state its provenance (or that it could not be attributed), and give a
+remediation. For secret-leak findings the instructions MUST require the
+credential value to be masked rather than reproduced, while still requiring
+provenance sufficient to locate and rotate it.
+
+**TD-10e**: Because reasons quote attacker-authored artifact content verbatim
+(TD-10d) and the engine invokes the `threat_detection_result` tool through a
+shell, the implementation MUST provide a transport that carries reason text from
+the engine to the tool without passing it through a shell command line, and the
+prompt MUST direct the engine to use that transport for any reason quoting
+artifact content. The implementation MUST grant the engine the capability that
+transport requires (for example, a file-writing tool) whenever it provisions the
+reporting tool; an engine that cannot use the transport would be forced back
+onto the shell. Malformed transport input MUST be reported to the engine as a
+correctable error (TD-10a). Reasons supplied through this transport MUST be
+subject to the same bounds as any other transport (TD-10b), and any transport
+state left by a previous attempt MUST be discarded before a retry. Prompt-level
+quoting guidance MUST NOT be the only protection against shell interpretation of
+reason text.
 
 **TD-10a**: The result reported through the `threat_detection_result` tool MUST
 use the same JSON object shape as TD-08 with required boolean `prompt_injection`,
@@ -99,7 +124,7 @@ required field, or use the wrong type for any field.
 **TD-10b**: The `reasons` array is model-authored free text and MUST be bounded.
 The implementation MUST reject a result whose `reasons` array contains more than
 20 entries, or whose individual entry is empty, consists solely of whitespace, or
-exceeds 1000 characters. These bounds MUST be enforced identically when a result
+exceeds 2000 characters. These bounds MUST be enforced identically when a result
 is reported through the `threat_detection_result` tool and when a result file is
 read back, so no result the implementation accepts on write can be rejected on
 read. A rejected report MUST be reported to the model as a correctable error
@@ -354,10 +379,19 @@ plus every line containing a `THREAT_DETECTION_STATUS:` or
 the verdict itself — its only non-diagnostic use is the status-line reason
 mapping of TD-20b. Diagnostic output MAY be bounded to keep job logs readable,
 but when it is bounded the output MUST indicate that it was truncated and MUST
-NOT report a bounded prefix as though it were the whole input. Untrusted values
-echoed into the diagnostics (model-authored reasons, artifact filenames, and
-detection-log lines) MUST be escaped so that each is confined to a single
-physical output line and cannot emit a host workflow command. These diagnostics
+NOT report a bounded prefix as though it were the whole input. A model-authored
+reason MAY be rendered across multiple physical lines so its quoted evidence
+stays readable and copy-pasteable (TD-10d); when it is, every line after the
+first MUST be prefixed with a marker that cannot begin a workflow command.
+Untrusted values echoed into the diagnostics (model-authored reasons, artifact
+filenames, and detection-log lines) MUST otherwise be escaped so that each
+physical output line is confined to one line of the value. Such values MUST NOT
+be able to emit a host workflow command in **either** marker form the runner
+accepts: the `::command::` form, which the runner honors only at the start of a
+line after trimming leading whitespace, and the legacy `##[command]` form, which
+the runner locates anywhere within a line. Because line position is no defense
+against the latter, the legacy marker MUST be neutralized within the value
+itself. These diagnostics
 are the sole record of the conclusion; `conclude` MUST NOT write them to any
 separate log artifact (TD-20a).
 

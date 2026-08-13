@@ -78,15 +78,32 @@ infrastructure error.
 
 On the agentic CLI engine path (`copilot`, `claude`, `codex`), the detector
 provisions a `threat_detection_result` command on the model's `PATH` and sets
-`THREAT_DETECTION_RESULT_FILE` to a private sink file before each engine
-invocation. The model reports its verdict by running the command exactly once:
+`THREAT_DETECTION_RESULT_FILE` to a private sink file, plus
+`THREAT_DETECTION_REASONS_FILE` to the path the model writes its reasons to
+(alongside the sink, in a directory every engine can reach), before each engine
+invocation. Any reasons file left by a previous attempt is removed at
+provisioning time so a retry cannot report stale reasons. The model reports its
+verdict by running the command exactly once:
 
 ```bash
-threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reason "..."
+threat_detection_result --prompt-injection <true|false> --secret-leak <true|false> --malicious-patch <true|false> --reasons-file <path>
 ```
 
 The three boolean flags accept both the space-separated form shown above and the
-`--prompt-injection=true` form. The command validates the input synchronously: on bad input it prints
+`--prompt-injection=true` form.
+
+Reasons are transported through a **file**, not the command line. Reasons quote
+attacker-authored artifact content verbatim, and the model runs this command
+through a shell, so evidence containing `$(...)`, backticks, or quotes passed as
+a `--reason` argument would be expanded or executed by the shell before the tool
+received it. `--reasons-file` points at a file — written by the model with its
+file-editing tool — containing a JSON array of reason strings, which is parsed
+by the tool itself. A malformed file is a correctable parse error rather than an
+executed command. A repeatable `--reason "<text>"` flag remains for short,
+model-authored text that quotes nothing; both sources are validated against the
+same bounds and concatenated in order.
+
+The command validates the input synchronously: on bad input it prints
 `THREAT_DETECTION_RESULT_ERROR:` and exits non-zero without recording anything,
 so the model can correct it in-session; on valid input it atomically records the
 canonical JSON verdict to the sink (first valid write wins, idempotent) and
@@ -342,7 +359,7 @@ explicitly treated as untrusted runtime data.
 The three booleans are fully constrained by the schema: all are required, no
 other fields are accepted, and a result that adds, omits, or mistypes a field is
 rejected. `reasons` is model-authored free text and is bounded as well — at most
-20 entries, each non-blank and at most 1000 characters — and the whole result
+20 entries, each non-blank and at most 2000 characters — and the whole result
 file is capped at 1 MiB before it is parsed. The same bounds apply when the model
 reports a result and when the file is read back, so a recorded result can never
 fail validation later. A rejected report is returned to the model as a
