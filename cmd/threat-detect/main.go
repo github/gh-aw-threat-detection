@@ -29,6 +29,7 @@ import (
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 	"github.com/github/gh-aw-threat-detection/pkg/engine"
+	"github.com/github/gh-aw-threat-detection/pkg/logsafe"
 )
 
 const (
@@ -327,9 +328,15 @@ func run() (code int) {
 	// Surface the resolved workflow context on stderr so a dropped CUSTOM_PROMPT
 	// or missing workflow name/description is diagnosable from the job log alone,
 	// not silently absorbed into the prompt.
+	//
+	// Quoting already confines each value to one physical line, but it leaves a
+	// legacy "##[" marker intact, and the runner honors that one anywhere in a
+	// line. Quoting emits backslash escapes only, so it can neither create nor
+	// hide a marker, and escaping afterwards is enough.
 	fmt.Fprintf(os.Stderr,
-		"Prompt context: workflow_name=%q (defaulted=%t) workflow_description=%q (defaulted=%t) custom_prompt_applied=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
-		arts.WorkflowName, nameDefaulted, arts.WorkflowDescription, descriptionDefaulted,
+		"Prompt context: workflow_name=%s (defaulted=%t) workflow_description=%s (defaulted=%t) custom_prompt_applied=%t custom_prompt_source=%s custom_prompt_bytes=%d\n",
+		logsafe.EscapeLegacyCommandMarker(strconv.Quote(arts.WorkflowName)), nameDefaulted,
+		logsafe.EscapeLegacyCommandMarker(strconv.Quote(arts.WorkflowDescription)), descriptionDefaulted,
 		arts.CustomPrompt != "", customPromptSource, len(arts.CustomPrompt))
 
 	// Build the prompt

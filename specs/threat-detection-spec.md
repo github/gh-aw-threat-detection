@@ -135,7 +135,7 @@ result file before parsing it, and MUST reject a file that exceeds that bound as
 a parse error rather than parsing a truncated prefix. The bound MUST be large
 enough to admit every result permitted by TD-10a and TD-10b.
 
-**TD-10d**: `reasons` is model-authored text derived from untrusted input, so it
+**TD-10f**: `reasons` is model-authored text derived from untrusted input, so it
 MUST NOT be persisted in any file the host publishes. The implementation MUST
 therefore split the verdict across two destinations:
 
@@ -335,7 +335,7 @@ trusted framework content in the template copy.
 
 **TD-19**: The detector MUST output the structured JSON result (per TD-08) to
 stdout. That result is the redacted one: its `reasons` array is always empty
-(per TD-10d).
+(per TD-10f).
 
 **TD-20**: The detector MUST support writing the result to a file via the
 `--output` flag, and the companion full result via the `--full-output` flag.
@@ -375,7 +375,12 @@ MUST emit forwarded output one line at a time, MUST prefix every forwarded line
 with a fixed marker that identifies it as engine output, MUST treat both LF and
 CR as line terminators, MUST flush a trailing partial line that arrives without a
 terminator, and MUST ensure no forwarded line can be interpreted by the host as a
-workflow command. A reader MUST therefore be able to distinguish forwarded engine
+workflow command in either marker form of TD-20d. The frame prefix alone
+satisfies this for the `::command::` form, which the runner honors only at the
+start of a line; it does not for the legacy `##[command]` form, which the runner
+locates anywhere within a line and which MUST therefore be neutralized within
+the forwarded text itself. A reader MUST therefore be able to distinguish
+forwarded engine
 output from detector-authored diagnostics by inspecting a single line. Hosts and
 log consumers MUST NOT treat forwarded engine output as detector-attested text,
 and MUST ignore `THREAT_DETECTION_*` markers appearing on forwarded lines.
@@ -437,20 +442,27 @@ NOT report a bounded prefix as though it were the whole input. A model-authored
 reason MAY be rendered across multiple physical lines so its quoted evidence
 stays readable and copy-pasteable (TD-10d); when it is, every line after the
 first MUST be prefixed with a marker that cannot begin a workflow command.
+Where a per-line bound applies to a reason, a line exceeding it MUST be wrapped
+across further physical lines rather than truncated, because a reason within the
+bounds of TD-10b is by definition content the implementation accepted, and
+discarding its located, verbatim evidence would defeat TD-10d.
 Untrusted values echoed into the diagnostics (model-authored reasons, artifact
 filenames, and detection-log lines) MUST otherwise be escaped so that each
-physical output line is confined to one line of the value. Such values MUST NOT
+physical output line carries only the value's own content and cannot start a
+line of its own. Such values MUST NOT
 be able to emit a host workflow command in **either** marker form the runner
 accepts: the `::command::` form, which the runner honors only at the start of a
 line after trimming leading whitespace, and the legacy `##[command]` form, which
 the runner locates anywhere within a line. Because line position is no defense
 against the latter, the legacy marker MUST be neutralized within the value
-itself. These diagnostics
+itself — including when the value is carried as the data portion of a workflow
+command the implementation itself emits, which the runner also scans. These
+diagnostics
 are the sole record of the conclusion; `conclude` MUST NOT write them to any
 separate log artifact (TD-20a).
 
 **TD-20e**: Because the result file read by `conclude` carries no reasons
-(TD-10d), `conclude` MUST recover them from the companion full result. It MUST
+(TD-10f), `conclude` MUST recover them from the companion full result. It MUST
 accept a `--full-result-file <path>` option and, when the option is not given,
 MUST derive the path from `--result-file` using the same convention the
 detection run uses for `--full-output`. An explicitly empty value MUST disable

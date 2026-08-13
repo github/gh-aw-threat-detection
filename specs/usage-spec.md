@@ -151,7 +151,7 @@ verdict payload and MUST read it from the location it configured (stdout, or the
 `--output` path, or the `detection_result.json` sink used by `conclude`).
 
 **U-08a**: The result the host reads and publishes carries no reasons: its
-`reasons` array is always empty (per TD-10d). The reasons are written to the
+`reasons` array is always empty (per TD-10f). The reasons are written to the
 companion full result (`--full-output`, by default `detection_result_full.json`
 beside the result file). A host MUST NOT upload, publish, or otherwise persist
 the full result; it exists so `conclude` can render the reasons into the job log
@@ -159,7 +159,7 @@ the full result; it exists so `conclude` can render the reasons into the job log
 log retention. A host that needs the reasons after the fact MUST read them from
 the retained job log, not from an artifact.
 
-A host MUST treat failure to write the full result as non-fatal (per TD-10d). If
+A host MUST treat failure to write the full result as non-fatal (per TD-10f). If
 it places the result file in a directory it uploads wholesale rather than by
 exact path, it MUST either point `--full-output` outside that directory or pass
 an explicitly empty `--full-output` to disable it.
@@ -170,7 +170,7 @@ only diagnostic output (per TD-20a). The host MUST NOT publish that capture as a
 artifact: it carries the forwarded engine transcript, which reproduces the
 model-authored reasons wherever the engine renders its own tool activity — in
 particular the file write that produces the reasons file passed to
-`threat_detection_result` (per TD-10d). The job log is the intended
+`threat_detection_result` (per TD-10f). The job log is the intended
 destination for that text; a file uploaded alongside the result is not. The detector does not produce a separate
 run-log artifact and does not write to the GitHub Actions step summary; the
 recursive artifact inventory, the prompt metadata, the per-attempt trace, and the
@@ -187,6 +187,10 @@ versions.
 | `--engine {copilot\|claude\|codex}` | Select the AI engine (default `copilot`) |
 | `--model <name>` | Override the engine model (see U-13) |
 | `--prompt-template <path>` | Override the embedded default prompt |
+| `--workflow-name <name>` | Workflow name folded into the prompt; overrides `WORKFLOW_NAME` |
+| `--workflow-description <text>` | Workflow description folded into the prompt; overrides `WORKFLOW_DESCRIPTION` |
+| `--custom-prompt <text>` | Additional detection instructions appended to the prompt (per TD-11, TD-12); overrides `CUSTOM_PROMPT` |
+| `--custom-prompt-file <path>` | Read the additional instructions from a file; wins over `--custom-prompt` |
 | `--output <path>` | Write the JSON result to a file instead of stdout (reasons always empty, per U-08a) |
 | `--full-output <path>` | Write the result including reasons; defaults to the `--output` path with `_full` inserted before the extension, and an explicitly empty value disables it. MUST NOT be uploaded |
 | `--retries <n>` | Retries for malformed detection outputs (default `1`) |
