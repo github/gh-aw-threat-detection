@@ -832,10 +832,29 @@ w("")
 
 w("## Verdict availability")
 w("")
-w("| State | Count |")
-w("|---|---|")
-for key, count in sorted(s["verdict_availability"].items(), key=lambda kv: -kv[1]):
-    w(f"| `{key}` | {count} |")
+w("| State | Meaning | Count |")
+w("|---|---|---|")
+# Fixed ordering + human-readable descriptions so readers don't have to guess
+# what `not_fetched` or `present` mean. Zero-count rows are omitted; unknown
+# states (should never happen, but the aggregator is defensive) are appended
+# verbatim at the end.
+VERDICT_STATE_DESCRIPTIONS = [
+    ("present", "detection artifact downloaded and parsed"),
+    ("absent", "detection job ran but published no artifact (soft failure)"),
+    ("expired", "detection artifact existed but had already expired"),
+    ("not_fetched", "detection job was skipped, so no artifact was expected"),
+    ("download_failed", "artifact zip download failed (HTTP error)"),
+    ("lookup_failed", "artifact listing failed (HTTP error)"),
+    ("unreadable", "artifact zip could not be unpacked"),
+    ("malformed", "detection_result.json was missing required fields"),
+]
+availability = dict(s["verdict_availability"])
+for key, description in VERDICT_STATE_DESCRIPTIONS:
+    count = availability.pop(key, 0)
+    if count:
+        w(f"| `{key}` | {description} | {count} |")
+for key, count in sorted(availability.items(), key=lambda kv: -kv[1]):
+    w(f"| `{key}` | (unknown state) | {count} |")
 w("")
 w(f"Green detection jobs that published no verdict: **{s['soft_failures']['count']}** "
   "(detection steps are `continue-on-error`, so a missing verdict artifact is the "

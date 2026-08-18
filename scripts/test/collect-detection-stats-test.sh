@@ -478,6 +478,15 @@ for section in "## Totals" "## Detection job outcomes" "## Verdict availability"
   "## Detection results" "## Reasons reported by gh-aw" "## By workflow" "## Notable runs"; do
   grep -qF "$section" "${out}/summary.md" || fail "summary.md is missing section: ${section}"
 done
+# The verdict-availability table must explain each state — the raw keys
+# (`present`, `not_fetched`) are opaque to a reader. `not_fetched` in particular
+# needs to be tied to skipped detection jobs, not to a fetch failure.
+grep -qF "| State | Meaning | Count |" "${out}/summary.md" ||
+  fail "summary.md verdict table is missing its Meaning column"
+grep -qF "detection job was skipped" "${out}/summary.md" ||
+  fail "summary.md must explain that not_fetched means the detection job was skipped"
+grep -qF "detection artifact downloaded and parsed" "${out}/summary.md" ||
+  fail "summary.md must describe successful (present) downloads"
 
 # --- budget exhaustion degrades gracefully rather than failing ---------------
 out2="${work}/out-budget"
