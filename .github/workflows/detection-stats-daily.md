@@ -46,13 +46,17 @@ safe-outputs:
     title-prefix: "[detection-stats] "
     labels: [automation, detection-stats]
     max: 1
-timeout-minutes: 30
+timeout-minutes: 150
 jobs:
   # The collector runs in its own job so the token that reads the target
   # repository never enters the agent job's environment.
   collect_detection_stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Verdict fetching is currently serial (~7 targets/min after a rate-limit
+    # pause), so a full day of ~400 external-detector runs needs on the order
+    # of an hour. Give it ~2h of wall clock; the agent job that renders the
+    # report only needs a few minutes after that.
+    timeout-minutes: 130
     permissions:
       contents: read
     steps:
@@ -67,9 +71,12 @@ jobs:
           TARGET_REPO: ${{ inputs.target_repo || 'github/gh-aw' }}
           TARGET_DATE: ${{ inputs.date }}
           FETCH_RESULTS: ${{ inputs.fetch_results || 'true' }}
-          MAX_REQUESTS: ${{ inputs.max_requests || '3000' }}
+          # A full day at ~85 req/min plus rate-limit pauses can reach ~6-7k
+          # requests; leave headroom above that so the API budget doesn't
+          # bind before the wall-clock deadline does.
+          MAX_REQUESTS: ${{ inputs.max_requests || '8000' }}
           OUTPUT_DIR: /tmp/gh-aw/detection-stats
-          DEADLINE_MINUTES: "18"
+          DEADLINE_MINUTES: "120"
         run: bash scripts/collect-detection-stats.sh
       - name: Upload detection statistics
         if: always()
