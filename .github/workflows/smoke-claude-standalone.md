@@ -13,7 +13,7 @@ engine:
   id: claude
   max-turns: 20
   bare: true
-model: claude-sonnet-4.6
+model: claude-sonnet-5
 strict: false
 features:
   gh-aw-detection: true
@@ -38,7 +38,7 @@ safe-outputs:
     engine:
       id: claude
       env:
-        ANTHROPIC_MODEL: claude-sonnet-4.6
+        ANTHROPIC_MODEL: claude-sonnet-5
   create-issue:
     expires: 2h
     close-older-issues: true
