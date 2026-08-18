@@ -72,6 +72,17 @@ MUST NOT download an unpinned "latest" reference directly.
 detector repository, including when that repository is private but the consuming
 repository is approved (per TD-27).
 
+**U-05a**: A host that fails to acquire the detector MUST NOT treat that failure
+more strictly than its configured detection-failure policy. In warn mode
+(`GH_AW_DETECTION_CONTINUE_ON_ERROR` other than `"false"`) the host SHOULD retry
+the download, then surface an unrecoverable acquisition failure as a warning
+with the `agent_failure` outcome (per U-20) rather than as a job failure — the
+absent detector is the same non-fatal condition its conclusion step already
+tolerates. In strict mode the acquisition failure MUST fail the job, because
+detection cannot run. In either mode the host MUST NOT synthesize a verdict:
+warn mode records the run as a detection failure it chose to tolerate, not as a
+`safe` result.
+
 Example acquisition (informative):
 
 ```bash
