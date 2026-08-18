@@ -41,8 +41,9 @@ pkg/engine/               AI engine abstraction
 specs/                    Normative spec (threat-detection-spec.md)
 skills/                   Repo-relevant agent skills (console-rendering, error-messages)
 scratchpad/               Retained design references inherited from gh-aw
-.github/workflows/        CI, release, promote, replay-detection, smoke-{copilot,claude,codex}-standalone
+.github/workflows/        CI, release, promote, replay-detection, detection-stats-daily, smoke-{copilot,claude,codex}-standalone
 .devcontainer/            Codespaces / devcontainer setup (Go, gh, Copilot CLI, optional Vertex)
+scripts/                  Repo helper scripts (+ scripts/test/ shell tests, `make test-scripts`)
 Makefile                  All build/test/lint/release targets
 ```
 
@@ -55,6 +56,7 @@ make deps            # go mod download + tidy
 make deps-dev        # + install gosec, govulncheck, golangci-lint v2.8.0
 make build           # builds bin/threat-detect with version ldflag
 make test            # go test -v -race ./...
+make test-scripts    # offline shell tests in scripts/test (no Go toolchain needed)
 make test-coverage   # writes coverage.out + coverage.html
 make lint            # go vet ./...
 make golint          # golangci-lint (requires deps-dev)
@@ -63,7 +65,7 @@ make fmt-check       # CI-style gofmt check
 make security-scan   # gosec + govulncheck
 make smoke           # build + run bin/threat-detect --version
 make sbom            # SPDX + CycloneDX SBOMs (requires syft)
-make agent-finish    # full maintainer validation: deps-dev, fmt, lint, build, test, security-scan
+make agent-finish    # full maintainer validation: deps-dev, fmt, lint, build, test, test-scripts, security-scan
 ```
 
 **Always run `make agent-finish` (or at minimum `make fmt lint build test`) before declaring a code change complete.**
@@ -158,6 +160,22 @@ Required Actions secrets/variables for smokes are documented in [README.md → D
 ## Replay Workflow
 
 `.github/workflows/replay-detection.yml` — manual dispatch to rerun detection against artifacts from a prior `gh-aw` run. Supports two detector sources (`current`, `release`), engine and model overrides, custom prompt injection, and AWF mode (`use_awf=true`). Uploads a sanitized `replay-detection-<run_id>` artifact with manifest, inventory, replay result, and comparison to the original result. Logs and reasons stay runner-local and job-log only — they carry the forwarded engine transcript and are never uploaded. Uses the dispatching repo's `GITHUB_TOKEN` — no extra replay token needed. `run_attempt` is only safe for the latest attempt of a run.
+
+## Detection Statistics Workflow
+
+`.github/workflows/detection-stats-daily.{md,lock.yml}` — daily (and dispatchable for any prior UTC `date`) statistics on detection-job error rates and detection results in `github/gh-aw`, restricted to runs using this repo's external detector.
+
+**Collection is deterministic, not agentic.** A dedicated `collect_detection_stats` job runs `scripts/collect-detection-stats.sh` and uploads a `detection-stats-<run id>` artifact; the agent job downloads it and only reads the pre-rendered `summary.md`. Never move that work into the agent — it would be slow, incomplete, and would burn the API budget. The collector's token also stays out of the agent job.
+
+Key mechanics to preserve when editing:
+
+- External-detector runs are identified by a `detection`-job step named `Install threat-detect binary`, **rolled up per workflow `path`**: skipped jobs expose no steps and cancelled/setup-failed ones expose a truncated list, so per-run classification would push exactly the failures being measured into the built-in bucket and out of every rate. If any run of a workflow shows the marker that day, all its detection jobs are external; unresolved ones are `indeterminate`, never built-in. Agentic runs are identified for free by `run.path` ending in `.lock.yml`.
+- The `/jobs` and `/artifacts` listings are paginated on `total_count`. Assuming one page would report a matrix-heavy run's detection job (or a verdict artifact) as absent, which the report would then count as a detector reliability problem.
+- Verdicts come from the `detection` artifact (`detection_result.json`). A **green** detection job with no artifact is a soft failure — detection steps are `continue-on-error`, so step conclusions are rewritten to `success` and cannot show this.
+- Reasons (`threat_detected`, `agent_failure`, `parse_error`) are harvested from gh-aw's `[aw] Detection Runs` tracking issue, which it only comments on for `warning`/`failure` conclusions.
+- The Actions run listing caps at 1000 results per query, so the day window is recursively bisected on time. Requests are serial with rate-limit/reset backoff, under a request budget and wall-clock deadline; exceeding either records a truncation note and still reports. Uninspected runs are recorded as `not_inspected` rather than dropped, and because collection works forward through the day the rates are flagged (`rates_cover_partial_day`) as a partial-day sample, not a lower bound.
+
+Covered offline by `scripts/test/collect-detection-stats-test.sh` (`make test-scripts`), which stubs the GitHub API.
 
 ## Coding Guidance
 
