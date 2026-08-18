@@ -1,4 +1,4 @@
-.PHONY: all build test test-coverage lint golint clean smoke \
+.PHONY: all build test test-scripts test-coverage lint golint clean smoke \
 	check-node-version deps deps-dev tools install-golangci-lint fmt fmt-go fmt-check \
 	license-check license-report security-scan security-gosec security-govulncheck \
 	sbom agent-finish help
@@ -96,6 +96,13 @@ smoke: build
 test:
 	go test -v -race ./...
 
+test-scripts:
+	@echo "Running shell script tests..."
+	@for t in scripts/test/*-test.sh; do \
+		echo "--> $$t"; \
+		bash "$$t" || exit 1; \
+	done
+
 test-coverage:
 	go test -v -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
@@ -158,13 +165,14 @@ sbom:
 	syft packages . -o cyclonedx-json=sbom.cdx.json
 	@echo "SBOM files generated: sbom.spdx.json, sbom.cdx.json"
 
-agent-finish: deps-dev fmt lint build test security-scan
+agent-finish: deps-dev fmt lint build test test-scripts security-scan
 	@echo "Agent finished tasks successfully."
 
 help:
 	@echo "Available targets:"
 	@echo "  build          - Build the binary"
 	@echo "  test           - Run Go tests"
+	@echo "  test-scripts   - Run the shell script tests in scripts/test"
 	@echo "  test-coverage  - Run tests with coverage report"
 	@echo "  fmt            - Format Go code"
 	@echo "  fmt-check      - Validate Go formatting"

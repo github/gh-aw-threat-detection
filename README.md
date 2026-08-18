@@ -580,6 +580,38 @@ Optional Actions variables:
 | `GH_AW_MODEL_AGENT_COPILOT`, `GH_AW_MODEL_AGENT_CLAUDE`, `GH_AW_MODEL_AGENT_CODEX` | Override the agent model for each smoke workflow. |
 | `GH_AW_MODEL_DETECTION_COPILOT`, `GH_AW_MODEL_DETECTION_CLAUDE`, `GH_AW_MODEL_DETECTION_CODEX` | Override the detection model for each engine. When `--model` is not passed, the detector reads the variable matching the selected engine; if it is unset, it falls back to the engine CLI's native model env var (`COPILOT_MODEL` for copilot, `ANTHROPIC_MODEL` for claude). |
 
+### Detection Statistics Workflow
+
+`.github/workflows/detection-stats-daily.md` (compiled to `detection-stats-daily.lock.yml`) is a daily agentic workflow that reports **error rates and detection results** for the `detection` jobs of another repository's agentic workflow runs — by default `github/gh-aw` — restricted to the runs that use the external `threat-detect` binary this repository ships.
+
+It runs on a daily schedule and can be dispatched for any prior UTC date:
+
+| Input | Default | Purpose |
+|-------|---------|---------|
+| `date` | yesterday | UTC day to analyse, `YYYY-MM-DD`. Backfill is bounded by the target repository's artifact retention: verdicts for expired artifacts are reported as `expired`. |
+| `target_repo` | `github/gh-aw` | Repository to analyse, `owner/repo`. |
+| `fetch_results` | `true` | Set to `false` for a cheap outcome-only scan that skips artifact downloads. |
+| `max_requests` | `3000` | API request budget for the collector. |
+
+**Data collection is deterministic, not agentic.** A dedicated `collect_detection_stats` job runs [`scripts/collect-detection-stats.sh`](scripts/collect-detection-stats.sh) before the agent and uploads a `detection-stats-<run id>` artifact; the agent only reads the pre-rendered digest and files the report issue. Keeping collection out of the agent is what makes the volume tractable — and it keeps the token that reads the target repository out of the agent job entirely.
+
+What the collector records per run:
+
+- whether the run had a `detection` job at all, and which detector it used. The `Install threat-detect binary` marker step is only observable on a job that got far enough to reach it — a skipped job reports no steps at all, and a cancelled or setup-failed one reports a truncated list — so classifying per run would drop exactly the failures this report exists to measure into the "built-in" bucket and out of every rate. The evidence is therefore rolled up per **workflow**: if any run of a workflow showed the marker that day, all of its detection jobs count as external. Anything still unresolved is reported as `indeterminate_detector_runs`, never as built-in;
+- the detection job's `status`/`conclusion` (`success`, `failure`, `cancelled`, `skipped`, `timed_out`, `action_required`, or still `in_progress`) and the names of any failed steps;
+- whether the job published a `detection_result.json` artifact and, if so, the `prompt_injection` / `secret_leak` / `malicious_patch` verdict. The published result deliberately carries `reasons: []`, so explanations are not available here — use the [replay workflow](#replay-workflow) when you need them;
+- the `conclusion`/`reason` pairs (`threat_detected`, `agent_failure`, `parse_error`) that gh-aw itself posts to its `[aw] Detection Runs` tracking issue.
+
+A **green** detection job that published no verdict artifact is counted separately as a soft failure: gh-aw marks detection steps `continue-on-error`, so the Actions runner rewrites their `conclusion` to `success` and step conclusions cannot reveal these.
+
+**Pagination.** Runs are enumerated with a server-side `created=<from>..<to>` filter. The Actions API refuses to page past 1000 results per query, so a window holding more than that is recursively bisected on time until every slice fits; results are merged and de-duplicated by run id. Non-agentic runs are then dropped for free, because the run listing already carries `path` and only `*.lock.yml` runs can have a detection job.
+
+**Rate limits.** Every request goes through one helper that runs strictly serially (concurrency is what triggers GitHub's secondary limits), pauses between requests, sleeps until `x-ratelimit-reset` (or honours `retry-after`) on a 403/429 with no quota left, backs off exponentially on 5xx, and proactively pauses when the remaining primary quota drops below a floor. A request budget and a wall-clock deadline bound the whole run; when either is hit the collector **degrades gracefully** — it records a truncation note, marks `collection.complete: false`, and still emits a report rather than failing. Runs it never reached are still counted, as `runs_not_inspected`, so the shortfall stays visible instead of quietly shrinking the population every rate is computed over. Because collection works forward through the day, the inspected subset is the earlier part of it, so `collection.rates_cover_partial_day` marks the rates as a partial-day sample rather than a lower bound. Phases run cheapest-first, so a squeeze costs the most expensive data (verdicts) last.
+
+Give the workflow a token with a generous quota. It prefers `GH_AW_GITHUB_MCP_SERVER_TOKEN`, then `GH_AW_GITHUB_TOKEN`, then `GITHUB_TOKEN`; the built-in `GITHUB_TOKEN` is limited to 1,000 requests/hour and will truncate on a busy day.
+
+The collector is exercised offline by `scripts/test/collect-detection-stats-test.sh` (`make test-scripts`), which stubs the GitHub API and asserts window bisection, retry/backoff, multi-page jobs and artifacts listings, detector classification (including skipped and in-progress jobs), verdict classification and graceful truncation.
+
 ### Build
 
 ```bash
@@ -590,6 +622,13 @@ make build
 
 ```bash
 make test
+```
+
+Shell-script tests (currently the detection-statistics collector) run separately
+and need no Go toolchain:
+
+```bash
+make test-scripts
 ```
 
 ### Lint
