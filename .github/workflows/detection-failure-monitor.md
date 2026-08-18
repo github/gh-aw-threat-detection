@@ -63,14 +63,15 @@ detection jobs and **link** to them in a single report issue.
 Use the GitHub tools (do not use `gh` — it is not authenticated). All reads
 target `owner: github`, `repo: gh-aw`.
 
-1. Build the candidate run set from two bounded listings, both restricted to runs
-   whose `created_at` (or `updated_at`) is within the **last 24 hours**, most
-   recent first, and neither paginated further:
-   - a. runs with `status: failure` — at most the 50 most recent (these can
-     hard-fail or soft-fail),
-   - b. runs with `status: success` — at most the 30 most recent (these can only
-     soft-fail: a green run whose detection job never got a verdict is exactly
-     what a broken binary install looks like now).
+1. List recent workflow runs in `github/gh-aw` with `status: completed`, most
+   recent first, restricted to runs whose `created_at` (or `updated_at`) is
+   within the **last 24 hours**. Bound the listing to at most the **80 most
+   recent** such runs — do not paginate further. (The MCP `list_workflow_runs`
+   tool only accepts lifecycle values — `queued`, `in_progress`, `completed`,
+   `requested`, `waiting` — for `status`, so partition on the run's
+   `conclusion` yourself: `failure`, `timed_out`, and `action_required` runs
+   can hard-fail *or* soft-fail; `success` runs can only soft-fail; skip
+   `cancelled` and `skipped` runs and runs still in progress.)
 2. For each candidate run, list its jobs and find the job named `detection`.
    - If the run has no job named `detection`, skip the run (it is not an
      agentic-detection workflow, or detection did not run).
@@ -81,17 +82,24 @@ target `owner: github`, `repo: gh-aw`.
 3. Soft-failure check, applied only to green detection jobs and to **at most 30
    jobs per run of this workflow** (stop checking once you hit that cap and say
    so in the report): fetch only the **last 200 lines** of that job's log and
-   look for any of these markers, which the conclusion step writes when
-   detection did not deliver a clean verdict (use the job-log tool with the job
-   id and a `tail_lines` of 200 — never `failed_only`, which cannot see these):
+   look for any of these **tooling-failure** markers, which the conclusion step
+   writes only when detection could not run or could not produce a parseable
+   verdict (use the job-log tool with the job id and a `tail_lines` of 200 —
+   never `failed_only`, which cannot see these):
    - `threat-detect binary not found on PATH` (the binary never installed),
-   - a `::warning::` line naming threat detection, or a `⚠️` threat-detection
-     warning banner,
-   - `reason=agent_failure`, `reason=parse_error`, or `reason=threat_detected`,
-   - `conclusion=warning`.
-   If any marker is present, record the job as `failure_kind: step`. Never fetch
-   a full job log, and never fetch logs for jobs you already recorded as hard
-   failures.
+   - `reason=agent_failure` (the agent could not run, or produced no verdict),
+   - `reason=parse_error` (the result file was malformed).
+
+   Do NOT match on `reason=threat_detected`, `conclusion=warning`, generic
+   `::warning::` lines, or `⚠️` banners: in warn mode `parse_threat_detection_results.cjs`
+   emits all four of those for a *legitimate* threat verdict (via
+   `setDetectionFailure("threat_detected", ...)` with `mustFail` false), which
+   is a working detector doing its job — not something this monitor should
+   surface as a detector failure.
+
+   If any tooling-failure marker is present, record the job as
+   `failure_kind: step`. Never fetch a full job log, and never fetch logs for
+   jobs you already recorded as hard failures.
 4. For each recorded failing detection job, capture (best effort — never block
    on a single failed read):
    - the workflow display name,
