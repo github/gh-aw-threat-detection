@@ -250,6 +250,24 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.fullmatch(r"/repos/[^/]+/[^/]+/actions/artifacts/(\d+)/zip", path)
         if m:
+            # The real API answers with a 302 redirect to a signed blob URL on
+            # a different host. Mirror that here so the collector's curl config
+            # has to actually follow the redirect (and drop the Authorization
+            # header) to succeed — the way production has to.
+            self.send_response(302)
+            self.send_header(
+                "Location", f"/blob/artifacts/{m.group(1)}/download"
+            )
+            self.end_headers()
+            return
+
+        m = re.fullmatch(r"/blob/artifacts/(\d+)/download", path)
+        if m:
+            # The signed blob URL is unauthenticated in reality; curl strips
+            # the Authorization header on the cross-host hop. Our stub is
+            # single-host, so we don't reject on Authorization here — the
+            # regression we're guarding against is curl not following the
+            # 302 at all (--no-location-trusted silently disabled --location).
             verdict = detection_artifact(int(m.group(1)) - 700000)
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w") as zf:

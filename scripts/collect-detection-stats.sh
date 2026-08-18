@@ -170,14 +170,14 @@ throttle_if_low() {
   return 0
 }
 
-# api_request <url> <body-output-path> [--binary]
+# api_request <url> <body-output-path>
 #
 # Performs one GET against the GitHub API with retry, primary/secondary
 # rate-limit backoff and budget accounting. Returns 0 on 2xx, 1 otherwise (the
 # caller decides whether a miss is fatal). Never aborts the run on a single
 # failed read.
 api_request() {
-  local url="$1" out="$2" binary="${3:-}"
+  local url="$1" out="$2"
   local header_file="${WORK_DIR}/headers.$$"
   local attempt=0 max_attempts=5 status backoff
 
@@ -198,13 +198,13 @@ api_request() {
       --header "X-GitHub-Api-Version: 2022-11-28"
       --header "User-Agent: gh-aw-threat-detection-stats"
     )
-    # Artifact downloads answer with a 302 to a signed blob URL; --location
-    # follows it, but the redirect target rejects the Authorization header.
-    if [ "$binary" = "--binary" ]; then
-      curl_args+=(--header "Accept: application/vnd.github+json" --no-location-trusted)
-    else
-      curl_args+=(--header "Accept: application/vnd.github+json")
-    fi
+    # Artifact downloads answer with a 302 to a signed blob URL on a different
+    # host; --location follows it and curl strips the Authorization header on
+    # the cross-host hop, which is exactly what the blob URL needs (it carries
+    # its own signature). Do NOT add --no-location-trusted here: despite the
+    # name, that flag also disables --location itself, so every artifact fetch
+    # would stop at the 302 and be recorded as download_failed.
+    curl_args+=(--header "Accept: application/vnd.github+json")
 
     status="$(curl "${curl_args[@]}" "$url" 2>/dev/null || echo 000)"
     sleep "$REQUEST_PAUSE_SECONDS"
@@ -523,7 +523,7 @@ if [ "$FETCH_RESULTS" = "true" ]; then
 
     artifact_id="$(jq -r '.id' <<<"$artifact")"
     zip="${WORK_DIR}/detection.zip"
-    if ! api_request "${API_URL}/repos/${TARGET_REPO}/actions/artifacts/${artifact_id}/zip" "$zip" --binary; then
+    if ! api_request "${API_URL}/repos/${TARGET_REPO}/actions/artifacts/${artifact_id}/zip" "$zip"; then
       jq -nc --argjson id "$run_id" '{run_id: $id, result: "download_failed"}' >>"$VERDICTS_FILE"
       continue
     fi
