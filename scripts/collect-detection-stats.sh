@@ -688,7 +688,16 @@ jq -n \
         and (.detection.conclusion == "failure" or .detection.conclusion == "timed_out"
              or .detection.conclusion == "action_required"))) | length),
       verdict_availability: (if $fetch_results != "true" then {not_fetched: $n}
-        else ($ext | map(.verdict.result // "not_fetched")
+        else ($ext | map(
+          if .verdict.result then .verdict.result
+          # Detection jobs that were skipped or were still in progress at
+          # collection time were never eligible for verdict fetching — call
+          # that out explicitly instead of lumping them into not_fetched,
+          # which is reserved for eligible targets the collector never
+          # reached (budget exhausted, etc.).
+          elif .detection.conclusion == "skipped"
+               or .detection.status != "completed" then "skipped"
+          else "not_fetched" end)
               | group_by(.) | map({key: .[0], value: length}) | from_entries) end),
       soft_failures: {
         description: "green detection job that published no verdict artifact",
@@ -731,7 +740,10 @@ jq -n \
             job_url: .detection.job_url,
             conclusion: (.detection.conclusion // .detection.status),
             failed_steps: (.detection.failed_steps // []),
-            verdict: (if .verdict == null then "not_fetched" else .verdict.result end),
+            verdict: (if .verdict != null then .verdict.result
+                      elif .detection.conclusion == "skipped"
+                           or .detection.status != "completed" then "skipped"
+                      else "not_fetched" end),
             threats: (if .verdict.result == "present" then
                 ([if .verdict.prompt_injection then "prompt_injection" else empty end,
                   if .verdict.secret_leak then "secret_leak" else empty end,
@@ -757,7 +769,10 @@ jq -n \
           job_status: .detection.status,
           job_conclusion: .detection.conclusion,
           failed_steps: (.detection.failed_steps // []),
-          verdict: (if .verdict == null then "not_fetched" else .verdict.result end),
+          verdict: (if .verdict != null then .verdict.result
+                    elif .detection.conclusion == "skipped"
+                         or .detection.status != "completed" then "skipped"
+                    else "not_fetched" end),
           prompt_injection: (.verdict.prompt_injection // null),
           secret_leak: (.verdict.secret_leak // null),
           malicious_patch: (.verdict.malicious_patch // null),
@@ -842,7 +857,8 @@ VERDICT_STATE_DESCRIPTIONS = [
     ("present", "detection artifact downloaded and parsed"),
     ("absent", "detection job ran but published no artifact (soft failure)"),
     ("expired", "detection artifact existed but had already expired"),
-    ("not_fetched", "detection job was skipped, so no artifact was expected"),
+    ("skipped", "detection job was skipped or was still running (nothing to fetch)"),
+    ("not_fetched", "detection job ran but the collector didn't reach it (budget exhausted)"),
     ("download_failed", "artifact zip download failed (HTTP error)"),
     ("lookup_failed", "artifact listing failed (HTTP error)"),
     ("unreadable", "artifact zip could not be unpacked"),

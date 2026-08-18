@@ -430,6 +430,13 @@ av = s["verdict_availability"]
 assert av.get("present") == expect_present, (av, expect_present)
 assert av.get("expired") == expect_expired, (av, expect_expired)
 assert av.get("absent") == expect_absent, (av, expect_absent)
+# Skipped detection jobs must be reported under `skipped`, distinct from
+# `not_fetched` (which is reserved for eligible targets the collector
+# didn't reach — e.g. budget exhausted). In the happy-path fixture we
+# reach every target so `not_fetched` must be absent entirely.
+expect_skipped = sum(1 for i in ext if outcome(i) in ("skipped", "in_progress"))
+assert av.get("skipped") == expect_skipped, (av, expect_skipped)
+assert "not_fetched" not in av, av
 
 d = s["detection_results"]
 assert d["with_verdict"] == expect_present, d
@@ -484,7 +491,7 @@ done
 grep -qF "| State | Meaning | Count |" "${out}/summary.md" ||
   fail "summary.md verdict table is missing its Meaning column"
 grep -qF "detection job was skipped" "${out}/summary.md" ||
-  fail "summary.md must explain that not_fetched means the detection job was skipped"
+  fail "summary.md must explain that skipped means the detection job was skipped"
 grep -qF "detection artifact downloaded and parsed" "${out}/summary.md" ||
   fail "summary.md must describe successful (present) downloads"
 
