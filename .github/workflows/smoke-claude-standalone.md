@@ -70,7 +70,7 @@ requirement — do not keep waiting.
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
-2. Use bash to run `make test` in `${{ github.workspace }}` and verify it succeeds.
+2. Use bash to run `make build` in `${{ github.workspace }}` and verify it succeeds.
 3. Use bash to create a minimal artifacts directory under `/tmp/gh-aw/smoke-claude-standalone-${{ github.run_id }}` with:
    - `aw-prompts/prompt.txt`
    - `agent_output.json`
