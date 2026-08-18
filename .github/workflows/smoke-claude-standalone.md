@@ -67,6 +67,13 @@ run and wait for it **once**, for at most 5 minutes total. If it has not
 finished by then, record ❌ for that check and move on to the next
 requirement — do not keep waiting.
 
+Run the test requirements below **strictly in order**. Do not start step N+1
+until step N has completed and you have observed its exit code. Do not issue
+tool calls in parallel — dispatch one command, wait for it to finish, then
+dispatch the next. In particular, `./bin/threat-detect --version` depends on
+`make build` from the previous step and MUST NOT be launched before that build
+has returned.
+
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
