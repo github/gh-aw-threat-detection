@@ -331,13 +331,28 @@ func copilotHarnessAwfConfigEnvAt(harnessDefaultPath string) []string {
 // or a --reason argument — the exact shell-expansion surface the file transport
 // exists to remove — so the tool grant and the prompt must stay in step.
 //
-// This grants no capability beyond Bash, which can already write files.
-var resultToolClaudeTools = []string{"Bash", "Write", "Edit"}
+// Read, Read(/tmp/*), and Read(/tmp/gh-aw/*) let the model load the artifact
+// files the prompt tells it to analyze (workflow prompt file, agent output,
+// patch/bundle, comment memory) directly, without falling back to `Bash cat`.
+// Those artifacts live under /tmp/gh-aw/threat-detection/, outside the
+// process's working directory, so plain "Read" alone is not always sufficient
+// under Claude's workingDir sandbox; the path-scoped grants cover that case.
+//
+// This grants no capability beyond Bash, which can already read and write files.
+var resultToolClaudeTools = []string{"Bash", "Write", "Edit", "Read", "Read(/tmp/*)", "Read(/tmp/gh-aw/*)"}
+
+// claudePermissionMode is passed via --permission-mode when the result-tool
+// grant is active. Claude Code defaults to interactive permission prompting,
+// which has no user to respond in a CI run and denies tool use (including
+// Read outside the working directory) after a few attempts. acceptEdits
+// makes --allowed-tools the effective boundary instead, matching gh-aw's own
+// Claude engine invocation (pkg/workflow/claude_engine.go).
+const claudePermissionMode = "acceptEdits"
 
 func claudeArgs(model string, allowResultTool bool) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowResultTool {
-		args = append(args, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
+		args = append(args, "--permission-mode", claudePermissionMode, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
@@ -352,7 +367,7 @@ func claudeArgs(model string, allowResultTool bool) []string {
 func claudeHarnessArgs(promptPath, model string, allowResultTool bool) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowResultTool {
-		args = append(args, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
+		args = append(args, "--permission-mode", claudePermissionMode, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)

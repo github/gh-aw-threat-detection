@@ -248,7 +248,7 @@ func TestEngineCommandArgs(t *testing.T) {
 
 	t.Run("claude with result-tool grant", func(t *testing.T) {
 		got := claudeArgs("claude-sonnet-4.6", true)
-		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash,Write,Edit", "--model", "claude-sonnet-4.6", "-"}
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--permission-mode", "acceptEdits", "--allowed-tools", "Bash,Write,Edit,Read,Read(/tmp/*),Read(/tmp/gh-aw/*)", "--model", "claude-sonnet-4.6", "-"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
 		}
@@ -256,7 +256,7 @@ func TestEngineCommandArgs(t *testing.T) {
 
 	t.Run("claude harness args", func(t *testing.T) {
 		got := claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true)
-		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--allowed-tools", "Bash,Write,Edit", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--permission-mode", "acceptEdits", "--allowed-tools", "Bash,Write,Edit,Read,Read(/tmp/*),Read(/tmp/gh-aw/*)", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeHarnessArgs() = %#v, want %#v", got, want)
 		}
@@ -279,7 +279,8 @@ func TestEngineCommandArgs(t *testing.T) {
 		wantArgs := []string{
 			harnessPath, "claude",
 			"--print", "--verbose", "--output-format", "stream-json",
-			"--allowed-tools", "Bash,Write,Edit",
+			"--permission-mode", "acceptEdits",
+			"--allowed-tools", "Bash,Write,Edit,Read,Read(/tmp/*),Read(/tmp/gh-aw/*)",
 			"--model", "claude-sonnet-4.6",
 			"--prompt-file", "/tmp/prompt.txt",
 		}
