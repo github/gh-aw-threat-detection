@@ -170,14 +170,14 @@ throttle_if_low() {
   return 0
 }
 
-# api_request <url> <body-output-path> [--binary]
+# api_request <url> <body-output-path>
 #
 # Performs one GET against the GitHub API with retry, primary/secondary
 # rate-limit backoff and budget accounting. Returns 0 on 2xx, 1 otherwise (the
 # caller decides whether a miss is fatal). Never aborts the run on a single
 # failed read.
 api_request() {
-  local url="$1" out="$2" binary="${3:-}"
+  local url="$1" out="$2"
   local header_file="${WORK_DIR}/headers.$$"
   local attempt=0 max_attempts=5 status backoff
 
@@ -198,13 +198,13 @@ api_request() {
       --header "X-GitHub-Api-Version: 2022-11-28"
       --header "User-Agent: gh-aw-threat-detection-stats"
     )
-    # Artifact downloads answer with a 302 to a signed blob URL; --location
-    # follows it, but the redirect target rejects the Authorization header.
-    if [ "$binary" = "--binary" ]; then
-      curl_args+=(--header "Accept: application/vnd.github+json" --no-location-trusted)
-    else
-      curl_args+=(--header "Accept: application/vnd.github+json")
-    fi
+    # Artifact downloads answer with a 302 to a signed blob URL on a different
+    # host; --location follows it and curl strips the Authorization header on
+    # the cross-host hop, which is exactly what the blob URL needs (it carries
+    # its own signature). Do NOT add --no-location-trusted here: despite the
+    # name, that flag also disables --location itself, so every artifact fetch
+    # would stop at the 302 and be recorded as download_failed.
+    curl_args+=(--header "Accept: application/vnd.github+json")
 
     status="$(curl "${curl_args[@]}" "$url" 2>/dev/null || echo 000)"
     sleep "$REQUEST_PAUSE_SECONDS"
@@ -523,7 +523,7 @@ if [ "$FETCH_RESULTS" = "true" ]; then
 
     artifact_id="$(jq -r '.id' <<<"$artifact")"
     zip="${WORK_DIR}/detection.zip"
-    if ! api_request "${API_URL}/repos/${TARGET_REPO}/actions/artifacts/${artifact_id}/zip" "$zip" --binary; then
+    if ! api_request "${API_URL}/repos/${TARGET_REPO}/actions/artifacts/${artifact_id}/zip" "$zip"; then
       jq -nc --argjson id "$run_id" '{run_id: $id, result: "download_failed"}' >>"$VERDICTS_FILE"
       continue
     fi
@@ -688,7 +688,16 @@ jq -n \
         and (.detection.conclusion == "failure" or .detection.conclusion == "timed_out"
              or .detection.conclusion == "action_required"))) | length),
       verdict_availability: (if $fetch_results != "true" then {not_fetched: $n}
-        else ($ext | map(.verdict.result // "not_fetched")
+        else ($ext | map(
+          if .verdict.result then .verdict.result
+          # Detection jobs that were skipped or were still in progress at
+          # collection time were never eligible for verdict fetching — call
+          # that out explicitly instead of lumping them into not_fetched,
+          # which is reserved for eligible targets the collector never
+          # reached (budget exhausted, etc.).
+          elif .detection.conclusion == "skipped"
+               or .detection.status != "completed" then "skipped"
+          else "not_fetched" end)
               | group_by(.) | map({key: .[0], value: length}) | from_entries) end),
       soft_failures: {
         description: "green detection job that published no verdict artifact",
@@ -731,7 +740,10 @@ jq -n \
             job_url: .detection.job_url,
             conclusion: (.detection.conclusion // .detection.status),
             failed_steps: (.detection.failed_steps // []),
-            verdict: (if .verdict == null then "not_fetched" else .verdict.result end),
+            verdict: (if .verdict != null then .verdict.result
+                      elif .detection.conclusion == "skipped"
+                           or .detection.status != "completed" then "skipped"
+                      else "not_fetched" end),
             threats: (if .verdict.result == "present" then
                 ([if .verdict.prompt_injection then "prompt_injection" else empty end,
                   if .verdict.secret_leak then "secret_leak" else empty end,
@@ -757,7 +769,10 @@ jq -n \
           job_status: .detection.status,
           job_conclusion: .detection.conclusion,
           failed_steps: (.detection.failed_steps // []),
-          verdict: (if .verdict == null then "not_fetched" else .verdict.result end),
+          verdict: (if .verdict != null then .verdict.result
+                    elif .detection.conclusion == "skipped"
+                         or .detection.status != "completed" then "skipped"
+                    else "not_fetched" end),
           prompt_injection: (.verdict.prompt_injection // null),
           secret_leak: (.verdict.secret_leak // null),
           malicious_patch: (.verdict.malicious_patch // null),
@@ -832,10 +847,30 @@ w("")
 
 w("## Verdict availability")
 w("")
-w("| State | Count |")
-w("|---|---|")
-for key, count in sorted(s["verdict_availability"].items(), key=lambda kv: -kv[1]):
-    w(f"| `{key}` | {count} |")
+w("| State | Meaning | Count |")
+w("|---|---|---|")
+# Fixed ordering + human-readable descriptions so readers don't have to guess
+# what `not_fetched` or `present` mean. Zero-count rows are omitted; unknown
+# states (should never happen, but the aggregator is defensive) are appended
+# verbatim at the end.
+VERDICT_STATE_DESCRIPTIONS = [
+    ("present", "detection artifact downloaded and parsed"),
+    ("absent", "detection job ran but published no artifact (soft failure)"),
+    ("expired", "detection artifact existed but had already expired"),
+    ("skipped", "detection job was skipped or was still running (nothing to fetch)"),
+    ("not_fetched", "detection job ran but the collector didn't reach it (budget exhausted)"),
+    ("download_failed", "artifact zip download failed (HTTP error)"),
+    ("lookup_failed", "artifact listing failed (HTTP error)"),
+    ("unreadable", "artifact zip could not be unpacked"),
+    ("malformed", "detection_result.json was missing required fields"),
+]
+availability = dict(s["verdict_availability"])
+for key, description in VERDICT_STATE_DESCRIPTIONS:
+    count = availability.pop(key, 0)
+    if count:
+        w(f"| `{key}` | {description} | {count} |")
+for key, count in sorted(availability.items(), key=lambda kv: -kv[1]):
+    w(f"| `{key}` | (unknown state) | {count} |")
 w("")
 w(f"Green detection jobs that published no verdict: **{s['soft_failures']['count']}** "
   "(detection steps are `continue-on-error`, so a missing verdict artifact is the "

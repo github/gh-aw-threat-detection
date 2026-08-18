@@ -250,6 +250,24 @@ class Handler(BaseHTTPRequestHandler):
 
         m = re.fullmatch(r"/repos/[^/]+/[^/]+/actions/artifacts/(\d+)/zip", path)
         if m:
+            # The real API answers with a 302 redirect to a signed blob URL on
+            # a different host. Mirror that here so the collector's curl config
+            # has to actually follow the redirect (and drop the Authorization
+            # header) to succeed — the way production has to.
+            self.send_response(302)
+            self.send_header(
+                "Location", f"/blob/artifacts/{m.group(1)}/download"
+            )
+            self.end_headers()
+            return
+
+        m = re.fullmatch(r"/blob/artifacts/(\d+)/download", path)
+        if m:
+            # The signed blob URL is unauthenticated in reality; curl strips
+            # the Authorization header on the cross-host hop. Our stub is
+            # single-host, so we don't reject on Authorization here — the
+            # regression we're guarding against is curl not following the
+            # 302 at all (--no-location-trusted silently disabled --location).
             verdict = detection_artifact(int(m.group(1)) - 700000)
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w") as zf:
@@ -412,6 +430,13 @@ av = s["verdict_availability"]
 assert av.get("present") == expect_present, (av, expect_present)
 assert av.get("expired") == expect_expired, (av, expect_expired)
 assert av.get("absent") == expect_absent, (av, expect_absent)
+# Skipped detection jobs must be reported under `skipped`, distinct from
+# `not_fetched` (which is reserved for eligible targets the collector
+# didn't reach — e.g. budget exhausted). In the happy-path fixture we
+# reach every target so `not_fetched` must be absent entirely.
+expect_skipped = sum(1 for i in ext if outcome(i) in ("skipped", "in_progress"))
+assert av.get("skipped") == expect_skipped, (av, expect_skipped)
+assert "not_fetched" not in av, av
 
 d = s["detection_results"]
 assert d["with_verdict"] == expect_present, d
@@ -460,6 +485,15 @@ for section in "## Totals" "## Detection job outcomes" "## Verdict availability"
   "## Detection results" "## Reasons reported by gh-aw" "## By workflow" "## Notable runs"; do
   grep -qF "$section" "${out}/summary.md" || fail "summary.md is missing section: ${section}"
 done
+# The verdict-availability table must explain each state — the raw keys
+# (`present`, `not_fetched`) are opaque to a reader. `not_fetched` in particular
+# needs to be tied to skipped detection jobs, not to a fetch failure.
+grep -qF "| State | Meaning | Count |" "${out}/summary.md" ||
+  fail "summary.md verdict table is missing its Meaning column"
+grep -qF "detection job was skipped" "${out}/summary.md" ||
+  fail "summary.md must explain that skipped means the detection job was skipped"
+grep -qF "detection artifact downloaded and parsed" "${out}/summary.md" ||
+  fail "summary.md must describe successful (present) downloads"
 
 # --- budget exhaustion degrades gracefully rather than failing ---------------
 out2="${work}/out-budget"
