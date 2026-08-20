@@ -675,6 +675,8 @@ jq -n \
           verdict: ($vmap[(.id | tostring)] // null),
           reported: ($rmap[(.id | tostring)] // null)
         })) as $ext
+  | ($ext | map(.id | tostring)) as $ext_ids
+  | ($reasons | map(select(.run_id as $rid | $ext_ids | index($rid)))) as $ext_reasons
   | ($ext | map(select(.detection.status == "completed" and .detection.conclusion == "success"))) as $green
   | ($ext | map(select(.verdict != null and .verdict.result == "present"))) as $withverdict
   | ($withverdict | map(select(.verdict.prompt_injection or .verdict.secret_leak or .verdict.malicious_patch))) as $threats
@@ -744,7 +746,7 @@ jq -n \
         threat_rate_pct: (if ($withverdict | length) == 0 then 0
           else ((($threats | length) * 10000 / ($withverdict | length)) | round) / 100 end)
       },
-      reported_reasons: ($reasons | map(.reason // "unknown")
+      reported_reasons: ($ext_reasons | map(.reason // "unknown")
         | group_by(.) | map({key: .[0], value: length}) | from_entries),
       by_workflow: ($ext | group_by(.name) | map({
           workflow: .[0].name,
@@ -928,7 +930,8 @@ w("")
 if s["reported_reasons"]:
     w("## Reasons reported by gh-aw")
     w("")
-    w("From the `[aw] Detection Runs` tracking issue (warning/failure conclusions only).")
+    w("From the `[aw] Detection Runs` tracking issue (warning/failure conclusions "
+      "only), restricted to runs in the external-detector population above.")
     w("")
     w("| Reason | Count |")
     w("|---|---|")

@@ -289,8 +289,15 @@ class Handler(BaseHTTPRequestHandler):
             comments = []
             for run_id, reason in (
                 (2, "agent_failure"),
-                (12, "parse_error"),
+                # 22 is agentic (22 % 3 != 0) and external (22 % 4 != 1); 12
+                # would be non-agentic so its reason would rightly be filtered
+                # out of the external-scope reported_reasons.
+                (22, "parse_error"),
                 (206, "threat_detected"),
+                # run 5 is on the built-in workflow (5 % 4 == 1), so its
+                # tracked reason must not leak into the external-detector
+                # reported_reasons counts.
+                (5, "agent_failure"),
             ):
                 comments.append(
                     {
@@ -464,6 +471,10 @@ assert s["notable_runs"][0]["threats"], s["notable_runs"][0]
 
 assert s["reported_reasons"].get("agent_failure") == 1, s["reported_reasons"]
 assert s["reported_reasons"].get("parse_error") == 1, s["reported_reasons"]
+# The built-in wf1 comment for run 5 must not inflate the external-scope
+# reported_reasons; the fixture posts two agent_failure comments but only one
+# is for an external run.
+assert sum(s["reported_reasons"].values()) == 3, s["reported_reasons"]
 
 by_run = {r["run_id"]: r for r in s["notable_runs"]}
 assert by_run[2]["reported_reason"] == "agent_failure", by_run.get(2)

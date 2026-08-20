@@ -161,7 +161,9 @@ issue: call the `noop` safe-output tool with a short message such as
   here; point readers at the `replay-detection` workflow when they want reasons.
 - **Reasons reported by gh-aw** — harvested from the `[aw] Detection Runs`
   tracking issue, which gh-aw comments on only for `warning`/`failure`
-  conclusions. `threat_detected` is a **working** detector reporting a finding;
+  conclusions, and restricted to runs in the external-detector population
+  above so the counts line up with the rest of the report.
+  `threat_detected` is a **working** detector reporting a finding;
   `agent_failure` and `parse_error` are **tooling failures**.
 - **Truncations** — the collector hit a budget or API limit. When present, say so
   prominently. Counts are lower bounds, and because the collector works forward
