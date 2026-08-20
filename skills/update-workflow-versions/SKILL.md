@@ -27,6 +27,7 @@ track **different** gh-aw versions:
 |----------|-----------------------|---------------|
 | standard | anything else, e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release |
 | standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** |
+| prerelease-tracking | `gh-aw-issue-digest.lock.yml` | latest `github/gh-aw` release **or prerelease** |
 
 **Only the gh-aw version needs bumping.** The detector version is *not* pinned in
 the locks: gh-aw emits the literal `latest` to
@@ -67,15 +68,15 @@ Use the **stable** tag for standard workflows and the **latest** tag for
 `*-standalone.md` smokes. The released `gh aw` extension is the simplest route:
 
 ```bash
-# standard workflows (everything that is not a *-standalone.md):
+# standard workflows (everything that is not a *-standalone.md or gh-aw-issue-digest.md):
 gh extension install github/gh-aw --pin <TARGET_GH_AW_STABLE>
 gh aw compile --action-mode action --action-tag <TARGET_GH_AW_STABLE> --no-check-update \
   <the affected standard .md files>
 
-# standalone smoke workflows:
+# standalone smoke workflows and gh-aw-issue-digest:
 gh extension install github/gh-aw --pin <TARGET_GH_AW_LATEST> --force
 gh aw compile --action-mode action --action-tag <TARGET_GH_AW_LATEST> --no-check-update \
-  .github/workflows/*-standalone.md
+  .github/workflows/*-standalone.md .github/workflows/gh-aw-issue-digest.md
 ```
 
 ### Building the compiler from source instead

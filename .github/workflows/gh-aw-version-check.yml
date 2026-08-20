@@ -5,6 +5,7 @@ name: gh-aw Version Check
 #
 #   * standard workflows        -> latest STABLE github/gh-aw release
 #   * standalone smoke workflows-> latest github/gh-aw release OR prerelease
+#   * gh-aw-issue-digest        -> latest github/gh-aw release OR prerelease
 #
 # Only the gh-aw compiler version is checked. The detector version is no longer
 # baked into a lock: gh-aw resolves `latest` at runtime from the detector's
@@ -103,8 +104,9 @@ jobs:
           for lock in "${lock_files[@]}"; do
             base="$(basename "$lock" .lock.yml)"
             case "$base" in
-              *-standalone) category="standalone smoke" ;;
-              *)            category="standard" ;;
+              *-standalone)       category="standalone smoke" ;;
+              gh-aw-issue-digest) category="prerelease-tracking" ;;
+              *)                  category="standard" ;;
             esac
 
             cur_ghaw="$(lock_compiler_version "$lock")"
@@ -142,6 +144,7 @@ jobs:
             echo "|----------|--------|---------|"
             echo "| standard | latest **stable** \`${GH_AW_REPO}\` release | \`${gh_aw_stable}\` |"
             echo "| standalone smoke | latest \`${GH_AW_REPO}\` release **or prerelease** | \`${gh_aw_latest}\` |"
+            echo "| prerelease-tracking | latest \`${GH_AW_REPO}\` release **or prerelease** | \`${gh_aw_latest}\` |"
             echo
             echo "### Workflows needing an update"
             echo
