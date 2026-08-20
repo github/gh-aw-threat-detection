@@ -36,10 +36,12 @@ const (
 	exitThreat = 1
 	exitError  = 2
 
-	detectionCorrectionPrefix      = "Your previous response did not record a verdict"
-	detectionCorrectionMessage     = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
-	detectionCorrectionInstruction = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false. When any of them is true, use your file-writing tool to write your reasons as a JSON array of strings to the path in $THREAT_DETECTION_REASONS_FILE and pass it with --reasons-file; do not paste quoted artifact content onto the command line."
-	promptAnalysisValidationCode   = "ERR_VALIDATION"
+	detectionCorrectionPrefix        = "Your previous response did not record a verdict"
+	detectionCorrectionMessage       = "The threat_detection_result command was not run, or it reported an error and exited before a verdict was recorded."
+	detectionCorrectionInstruction   = "Run the threat_detection_result command exactly once with --prompt-injection, --secret-leak, and --malicious-patch each set to true or false. When any of them is true, use your file-writing tool to write your reasons as a JSON array of strings to the path in $THREAT_DETECTION_REASONS_FILE and pass it with --reasons-file; do not paste quoted artifact content onto the command line."
+	eligibilityCorrectionPrefix      = "Your previous verdict was rejected as structurally ineligible"
+	eligibilityCorrectionInstruction = "A threat category can only be reported true when the artifacts contain the input that category is defined against. Re-analyze the artifacts and run threat_detection_result again with the ineligible category set to false, keeping any category you can still support with evidence from the artifacts listed above."
+	promptAnalysisValidationCode     = "ERR_VALIDATION"
 
 	// maxInventoryEntries bounds the artifact inventory printed to stderr so a
 	// pathological artifacts directory cannot flood the job log.
@@ -519,6 +521,21 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		// threat_detection_result tool, which records it to the sink.
 		result, err := detector.ReadResultFile(sinkPath)
 		if err == nil {
+			// Re-check the recorded verdict against the eligibility this
+			// process computed from the artifacts. The identical check in the
+			// report-result subprocess reads its inputs from an environment
+			// carried on a command line the model composes, so the model can
+			// override or omit it; this check reads artifacts the model never
+			// touched, and is therefore the binding one. An ineligible verdict
+			// is treated exactly like a malformed one: discarded, fed back as a
+			// correction, and retried. No verdict is ever rewritten here — the
+			// sink remains the sole source of a recorded result.
+			if msg := eligibility.ValidateResult(result); msg != "" {
+				lastErr = fmt.Errorf("recorded verdict is not structurally eligible: %s", msg)
+				stderrf("[threat-detect] attempt %d recorded an ineligible verdict; discarding: %s", i+1, sanitizeLogValue(msg))
+				currentPrompt = detector.BuildCorrectionPrompt(prompt, eligibilityCorrectionPrefix, msg, eligibilityCorrectionInstruction)
+				continue
+			}
 			stderrf("[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool", i+1)
 			return result, nil
 		}
@@ -526,7 +543,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		stderrf("[threat-detect] attempt %d recorded no usable verdict: %v", i+1, err)
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
-	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
+	return nil, fmt.Errorf("detection model did not record a usable verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
 }
 
 // writeResult writes the verdict to its two destinations and returns the exit

@@ -514,6 +514,108 @@ func runWithTestArgsCapture(t *testing.T, args []string, env map[string]string) 
 	return code, stderr
 }
 
+// TestRunRejectsIneligibleVerdictFromSink verifies the detector-side eligibility
+// revalidation (TD-10g): a sink result claiming malicious_patch when no patch
+// was staged is discarded even though it is schema-valid, because the check that
+// binds is the one the detector performs against its own artifact-derived
+// eligibility — not the environment-based check in the report subprocess, whose
+// inputs the model controls.
+func TestRunRejectsIneligibleVerdictFromSink(t *testing.T) {
+	artifactsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(artifactsDir, "aw-prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	// A prompt template with no placeholders: analysis is not degraded and there
+	// is no untrusted input, so prompt_injection is ineligible too.
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"), []byte("static prompt"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-prompts", "prompt-template.txt"), []byte("static prompt"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	// Deliberately no aw-*.patch file: malicious_patch is ineligible.
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	// The fake engine writes the sink directly, bypassing report-result entirely
+	// — the strongest form of the bypass the env transport cannot prevent.
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":true,"reasons":["fabricated patch finding"]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-retries", "1",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (ineligible verdict must not be recorded); stderr:\n%s", code, exitError, stderr)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no result file for an ineligible verdict, stat err = %v", err)
+	}
+	for _, want := range []string{
+		"[threat-detect] eligibility: prompt_injection=false secret_leak=true malicious_patch=false",
+		"recorded an ineligible verdict; discarding",
+		"THREAT_DETECTION_STATUS: reason=invalid_report_exhausted exit=2",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+		}
+	}
+}
+
+// TestRunAcceptsEligibleThreatVerdict is the companion to the test above: the
+// same threat verdict is recorded normally once the artifact bundle can support
+// it, so eligibility rejects impossible claims without suppressing real ones.
+func TestRunAcceptsEligibleThreatVerdict(t *testing.T) {
+	artifactsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(artifactsDir, "aw-prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"), []byte("static prompt"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-prompts", "prompt-template.txt"), []byte("static prompt"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "aw-changes.patch"), []byte("diff --git a/x b/x\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":true,"reasons":["real patch finding"]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitThreat {
+		t.Fatalf("run() exit code = %d, want %d (eligible threat must be recorded); stderr:\n%s", code, exitThreat, stderr)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("expected a result file for an eligible verdict, stat err = %v", err)
+	}
+	if !strings.Contains(stderr, "THREAT_DETECTION_STATUS: reason=result_recorded exit=1") {
+		t.Fatalf("stderr missing recorded status line, got:\n%s", stderr)
+	}
+}
+
 func writeFakeCopilotWithSink(t *testing.T, markerPath, sinkJSON string, sleepSeconds int) string {
 	t.Helper()
 	return writeFakeCopilotWithSinkAndStdout(t, markerPath, sinkJSON, "no result line here", sleepSeconds)

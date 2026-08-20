@@ -8,6 +8,12 @@ import (
 )
 
 func TestComputeEligibility(t *testing.T) {
+	// A non-degraded analysis: the prompt template artifact was available, so
+	// an empty UntrustedInputs list genuinely means "no untrusted content".
+	withTemplate := func(inputs ...UntrustedInput) *PromptAnalysis {
+		return &PromptAnalysis{PromptTemplate: "template body", UntrustedInputs: inputs}
+	}
+
 	tests := []struct {
 		name     string
 		arts     *artifacts.Artifacts
@@ -15,41 +21,51 @@ func TestComputeEligibility(t *testing.T) {
 		want     Eligibility
 	}{
 		{
-			name:     "nil inputs yield all-false",
+			name:     "nil analysis is degraded so prompt_injection is permitted",
 			arts:     nil,
 			analysis: nil,
+			want:     Eligibility{PromptInjection: true},
+		},
+		{
+			name:     "no untrusted content with a template yields all-false",
+			arts:     &artifacts.Artifacts{},
+			analysis: withTemplate(),
 			want:     Eligibility{},
 		},
 		{
-			name: "untrusted input enables prompt_injection",
-			arts: &artifacts.Artifacts{},
-			analysis: &PromptAnalysis{
-				UntrustedInputs: []UntrustedInput{
-					{Placeholder: "{{issue_body}}", Content: "hello"},
-				},
-			},
-			want: Eligibility{PromptInjection: true},
+			name:     "missing template is degraded so prompt_injection is permitted",
+			arts:     &artifacts.Artifacts{},
+			analysis: &PromptAnalysis{},
+			want:     Eligibility{PromptInjection: true},
 		},
 		{
-			name: "whitespace-only untrusted input does not enable prompt_injection",
-			arts: &artifacts.Artifacts{},
-			analysis: &PromptAnalysis{
-				UntrustedInputs: []UntrustedInput{
-					{Placeholder: "{{issue_body}}", Content: "   \n\t "},
-				},
-			},
-			want: Eligibility{},
+			name:     "untrusted input enables prompt_injection",
+			arts:     &artifacts.Artifacts{},
+			analysis: withTemplate(UntrustedInput{Placeholder: "{{issue_body}}", Content: "hello"}),
+			want:     Eligibility{PromptInjection: true},
+		},
+		{
+			name:     "whitespace-only untrusted input does not enable prompt_injection",
+			arts:     &artifacts.Artifacts{},
+			analysis: withTemplate(UntrustedInput{Placeholder: "{{issue_body}}", Content: "   \n\t "}),
+			want:     Eligibility{},
+		},
+		{
+			name:     "comment memory enables prompt_injection and secret_leak",
+			arts:     &artifacts.Artifacts{CommentMemoryFiles: []string{"comment-memory/a.md"}},
+			analysis: withTemplate(),
+			want:     Eligibility{PromptInjection: true, SecretLeak: true},
 		},
 		{
 			name:     "agent output enables secret_leak but not malicious_patch",
 			arts:     &artifacts.Artifacts{AgentOutputFileSize: 42},
-			analysis: &PromptAnalysis{},
+			analysis: withTemplate(),
 			want:     Eligibility{SecretLeak: true},
 		},
 		{
 			name:     "patch enables both secret_leak and malicious_patch",
 			arts:     &artifacts.Artifacts{PatchFiles: []string{"aw-1.patch"}},
-			analysis: &PromptAnalysis{},
+			analysis: withTemplate(),
 			want:     Eligibility{SecretLeak: true, MaliciousPatch: true},
 		},
 		{
@@ -57,11 +73,10 @@ func TestComputeEligibility(t *testing.T) {
 			arts: &artifacts.Artifacts{
 				AgentOutputFileSize: 1,
 				PatchFiles:          []string{"aw-1.patch"},
+				CommentMemoryFiles:  []string{"comment-memory/a.md"},
 			},
-			analysis: &PromptAnalysis{
-				UntrustedInputs: []UntrustedInput{{Placeholder: "{{x}}", Content: "y"}},
-			},
-			want: Eligibility{PromptInjection: true, SecretLeak: true, MaliciousPatch: true},
+			analysis: withTemplate(UntrustedInput{Placeholder: "{{x}}", Content: "y"}),
+			want:     Eligibility{PromptInjection: true, SecretLeak: true, MaliciousPatch: true},
 		},
 	}
 	for _, tt := range tests {
@@ -106,6 +121,30 @@ func TestEligibilityFromEnvUnparseableIsPermissive(t *testing.T) {
 	got := EligibilityFromEnv()
 	if !got.PromptInjection {
 		t.Fatalf("unparseable value should default to true; got %+v", got)
+	}
+}
+
+func TestEligibilityValidateResult(t *testing.T) {
+	e := Eligibility{PromptInjection: true}
+
+	if msg := e.ValidateResult(nil); msg != "" {
+		t.Fatalf("ValidateResult(nil) = %q, want empty", msg)
+	}
+
+	eligible := &Result{PromptInjection: true, Reasons: []string{"x"}}
+	if msg := e.ValidateResult(eligible); msg != "" {
+		t.Fatalf("ValidateResult(eligible) = %q, want empty", msg)
+	}
+
+	ineligible := &Result{MaliciousPatch: true, Reasons: []string{"x"}}
+	msg := e.ValidateResult(ineligible)
+	if !strings.Contains(msg, "--malicious-patch=true is not eligible") {
+		t.Fatalf("ValidateResult(ineligible) = %q, want malicious-patch rejection", msg)
+	}
+
+	safe := &Result{Reasons: []string{}}
+	if msg := (Eligibility{}).ValidateResult(safe); msg != "" {
+		t.Fatalf("ValidateResult(all-false) = %q, want empty", msg)
 	}
 }
 

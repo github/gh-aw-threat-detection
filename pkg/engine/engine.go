@@ -205,9 +205,7 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
 // sink path is configured, returning the env additions and a cleanup func. When
-// sinkPath is empty it returns no env and a no-op cleanup. The eligibility, if
-// non-nil, is appended to the env so the subprocess can reject structurally
-// impossible verdicts.
+// sinkPath is empty it returns no env and a no-op cleanup.
 func maybeProvisionResultTool(sinkPath string) (env []string, cleanup func(), err error) {
 	if sinkPath == "" {
 		return nil, func() {}, nil
@@ -217,6 +215,13 @@ func maybeProvisionResultTool(sinkPath string) (env []string, cleanup func(), er
 
 // appendEligibilityEnv appends eligibility transport variables to env when
 // eligibility is non-nil, returning the extended slice.
+//
+// This transport is advisory. It reaches the report-result subprocess through a
+// command line the detection model composes, so the model can override or strip
+// it; the binding check is the detector's own revalidation of the sink result
+// against the eligibility it computed from artifacts. What this buys is a fast
+// in-session correction for a model that is simply mistaken, which is the
+// common case and much cheaper than another engine pass.
 func appendEligibilityEnv(env []string, eligibility *detector.Eligibility) []string {
 	if eligibility == nil {
 		return env

@@ -122,24 +122,46 @@ exclusively from the sink; it does not scrape the engine transcript.
 
 #### Structural eligibility
 
-Each threat category is only structurally raisable against an artifact bundle
-that could plausibly exhibit it. `threat_detection_result` enforces this before
-recording:
+Each threat category is only raisable against an artifact bundle that could
+plausibly exhibit it:
 
-- `prompt_injection` requires at least one non-empty untrusted region in the
-  prompt analysis (an interpolated placeholder, an import-tree entry, or the
-  activation-context summary). A workflow whose prompt received no untrusted
-  content cannot exhibit prompt injection, and the report is rejected.
+- `prompt_injection` requires untrusted content that could have reached this
+  run's inputs — a non-empty untrusted region in the prompt analysis, or a
+  comment-memory file (which the agent reads back into its prompt).
 - `malicious_patch` requires at least one `.patch` or `.bundle` file in the
-  artifact bundle. A report claiming a malicious patch when no patch was
-  produced is rejected. Framework-rejected safe-output validation errors are
-  the guardrails working; they are not patches.
-- `secret_leak` requires either a non-empty agent output or at least one patch
-  or bundle — a channel a secret could have leaked through.
+  artifact bundle. Framework-rejected safe-output validation errors are the
+  guardrails working; they are not patches.
+- `secret_leak` requires a channel a secret could have reached — a non-empty
+  agent output, a patch or bundle, or a comment-memory file.
 
-An ineligible report is treated the same as a malformed one: the tool prints
-`THREAT_DETECTION_RESULT_ERROR:` naming the ineligible category and what would
-make it eligible, and the model re-answers within the same session. See spec
+When the prompt analysis is degraded (for example the optional
+`prompt-template.txt` was not staged), the absence of untrusted regions proves
+nothing, so `prompt_injection` stays eligible. Eligibility fails open when
+provenance cannot be established: a missing optional artifact must not suppress
+a real finding.
+
+The check runs in two places, with different standing:
+
+- **In the reporting tool**, from `THREAT_DETECTION_ELIGIBLE_*` environment
+  variables, so an ineligible report is corrected in-session without another
+  engine pass. The tool prints `THREAT_DETECTION_RESULT_ERROR:` naming the
+  category and what would make it eligible. This check is **advisory** — the
+  model composes the command line that carries those variables, so it can
+  override or omit them.
+- **In the detector process**, against the eligibility it computed from the
+  artifacts itself. Every result read from the sink is re-checked here before
+  it is recorded, so a verdict that bypassed the tool (or overrode its
+  environment) is still rejected. This is the binding check.
+
+An ineligible result is treated exactly like a malformed one: discarded, fed
+back as a self-correction, and retried; exhaustion yields
+`invalid_report_exhausted` and exit 2. The detector never rewrites a verdict —
+the sink stays the sole source of any recorded result.
+
+Eligibility is scoped to the artifact bundle. MCP tool results, fetched web
+content, and the engine transcript are never staged as artifacts, so an
+injection delivered only through those channels leaves no evidence in the
+analyzed inputs and is outside what this detection pass can see. See spec
 TD-10g.
 
 The detector also emits a single machine-readable status line to stderr at the end

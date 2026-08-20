@@ -179,35 +179,58 @@ the files the detector itself writes.
 
 **TD-10g**: The implementation MUST enforce structural eligibility for each
 threat category against the loaded artifact bundle, rejecting a reported result
-that sets an ineligible category to `true` as a correctable error (TD-10a)
-rather than recording it. The following categories are eligible only under the
-stated preconditions:
+that sets an ineligible category to `true` rather than recording it. The
+following categories are eligible only under the stated preconditions:
 
-- `prompt_injection` is eligible only when at least one non-empty untrusted
-  input region is present in the prompt analysis (a runtime-interpolated
-  placeholder, an import-tree entry, or the activation-context summary). By
-  definition, prompt injection requires untrusted content to have reached the
-  instruction channel; a workflow whose prompt received no untrusted content
-  cannot exhibit it, and instruction non-compliance from the agent under those
-  conditions is a quality signal, not a security verdict.
+- `prompt_injection` is eligible only when untrusted content could have reached
+  the run's own inputs: at least one non-empty untrusted input region in the
+  prompt analysis, or at least one comment-memory file (which the agent reads
+  back into its prompt). Instruction non-compliance by the agent, absent
+  untrusted content that could have caused it, is a quality signal and not a
+  security verdict.
 - `malicious_patch` is eligible only when the artifact bundle contains at least
   one `.patch` or `.bundle` file. A framework-rejected safe-output validation
   error is the guardrail working and MUST NOT be treated as a patch.
-- `secret_leak` is eligible only when the artifact bundle contains at least
-  one channel a secret could have leaked through — a non-empty agent output
-  file or at least one patch or bundle file.
+- `secret_leak` is eligible only when the artifact bundle contains at least one
+  channel a secret could have reached — a non-empty agent output file, at least
+  one patch or bundle file, or at least one comment-memory file.
 
-Eligibility MUST be evaluated against the same artifact bundle and prompt
-analysis the engine received, and its enforcement MUST be structural — no prompt
-wording alone MUST be sufficient to ship a structurally impossible verdict such
-as `malicious_patch=true` with zero patch files. When a report is rejected on
-eligibility, the correction message MUST name the ineligible category and
-explain what would make it eligible, so the model can re-answer within the same
-session. The default prompt template MUST additionally document the eligibility
-rules and the taxonomic distinctions they enforce (instruction non-compliance is
-not a security verdict; framework-rejected validation errors are defenses
-working; `prompt_injection` requires an untrusted origin), so eligible verdicts
-are the norm rather than the exception.
+Where the prompt analysis is degraded — for example when the optional prompt
+template artifact is absent, which TD-18b permits — the absence of untrusted
+input regions does not establish that no untrusted content was present, and
+`prompt_injection` MUST remain eligible. Eligibility MUST fail open when
+provenance cannot be established, so a missing optional artifact cannot suppress
+a real finding.
+
+Eligibility MUST be evaluated by the implementation against the same artifact
+bundle and prompt analysis used to build the detection prompt, and the binding
+evaluation MUST be performed in a context the detection model cannot influence.
+An implementation MAY additionally expose the eligibility to the in-session
+reporting tool so an ineligible report can be corrected without a further engine
+pass, but because the reporting tool is invoked over a command line the model
+composes, any such check MUST be treated as advisory: the implementation MUST
+re-evaluate eligibility against every result it reads from the sink before
+recording it, and MUST NOT rely on the reporting tool's check alone.
+
+A result rejected on eligibility MUST be treated as an unusable report: the
+implementation MUST discard it, MAY retry with a bounded self-correction prompt
+naming the ineligible category and what would make it eligible, and MUST treat
+retry exhaustion as an infrastructure error (TD-06a). The implementation MUST
+NOT record a verdict it synthesized in place of the rejected one; the sink
+remains the sole source of any recorded result (TD-06a).
+
+The scope of this requirement is the artifact bundle. Channels that reach the
+agent only during execution — MCP tool results, fetched web content, and the
+engine transcript — are not staged as artifacts, so an injection delivered
+exclusively through one of them leaves no evidence in the analyzed inputs. Such
+an injection is outside the evidentiary reach of the detection pass, and
+eligibility neither detects nor claims to detect it.
+
+The default prompt template MUST additionally document the eligibility rules and
+the taxonomic distinctions they enforce (instruction non-compliance is not a
+security verdict; framework-rejected validation errors are defenses working;
+`prompt_injection` requires an untrusted origin), so eligible verdicts are the
+norm rather than the exception.
 
 
 ---

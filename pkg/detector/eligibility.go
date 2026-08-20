@@ -14,20 +14,40 @@ import (
 // A category is eligible only when the bundle contains the input that category
 // is defined against. Setting a category to true when it is ineligible is not a
 // judgment error the prompt can talk the model out of — it is a claim that
-// cannot be evaluated from the artifacts at hand, so the report-result tool
-// wrapper rejects it as a correction. Together with the prompt-taxonomy
-// guidance, this gives detection a deterministic safety net: the model cannot
-// ship a structurally impossible verdict such as `malicious_patch=true` with
-// zero patch files or `prompt_injection=true` with zero untrusted input.
+// cannot be evaluated from the artifacts at hand, so it is rejected.
+//
+// Enforcement happens in two places with different standing:
+//
+//   - The report-result subprocess checks eligibility from environment
+//     variables so an ineligible claim is rejected in-session and the model can
+//     re-answer immediately. This is an optimization: the environment reaches
+//     the subprocess through a command line the model composes, so the model
+//     can override or strip it. It is not authoritative.
+//   - The detector process re-checks every sink result against the eligibility
+//     it computed itself, from artifacts the model never touched. That check is
+//     the actual invariant (see ValidateResult).
+//
+// The scope of this check is the artifact bundle. Channels that reach the agent
+// mid-run — MCP tool results, fetched web content, the engine transcript — are
+// not staged as artifacts, so an injection delivered exclusively through one of
+// them leaves no evidence the detector can see, and is outside the reach of
+// both this check and the detection pass generally.
 type Eligibility struct {
-	// PromptInjection is true when at least one non-empty untrusted region
-	// reached the workflow prompt. Without any untrusted content in the
-	// instruction channel, there is nothing an injection could have arrived
-	// through, so a prompt_injection finding cannot be raised.
+	// PromptInjection is true when untrusted content could have reached this
+	// run's inputs: a non-empty untrusted region in the prompt analysis, a
+	// comment-memory file (which the agent reads back into the prompt), or a
+	// degraded analysis that cannot rule untrusted content out.
+	//
+	// This gate is deliberately narrow. The activation context is appended as
+	// an untrusted input whenever aw_info.json parses, so in practice the gate
+	// only rejects workflows with no untrusted input at all — a cron-triggered
+	// workflow with no interpolation and no activation metadata. It is not a
+	// general defense against over-reporting prompt injection; the prompt
+	// taxonomy owns that.
 	PromptInjection bool
 	// SecretLeak is true when there is a channel a secret could have leaked
-	// through: the agent output has non-zero content or at least one patch or
-	// bundle file was produced.
+	// through: a non-empty agent output, at least one patch or bundle file, or
+	// at least one comment-memory file (a persisted channel the agent writes).
 	SecretLeak bool
 	// MaliciousPatch is true when at least one .patch or .bundle file was
 	// produced by the agent. Framework-rejected safe-output validation errors
@@ -46,25 +66,51 @@ const (
 )
 
 // ComputeEligibility derives per-category eligibility from the loaded artifacts
-// and the static prompt analysis. It is safe to call with nil inputs — nil is
-// treated as "no artifacts, no analysis" and yields an all-false eligibility.
+// and the static prompt analysis. It is safe to call with nil inputs: a nil
+// analysis is maximally degraded, so prompt-injection eligibility is granted,
+// while a nil artifact set offers no channel for the output-derived categories.
 func ComputeEligibility(arts *artifacts.Artifacts, analysis *PromptAnalysis) Eligibility {
 	e := Eligibility{}
-	if analysis != nil {
-		for _, u := range analysis.UntrustedInputs {
-			if strings.TrimSpace(u.Content) != "" {
-				e.PromptInjection = true
-				break
-			}
+
+	for _, u := range analysisUntrustedInputs(analysis) {
+		if strings.TrimSpace(u.Content) != "" {
+			e.PromptInjection = true
+			break
 		}
 	}
-	if arts != nil && (arts.AgentOutputFileSize > 0 || len(arts.PatchFiles) > 0) {
-		e.SecretLeak = true
+	// A degraded analysis cannot rule untrusted content out. BuildPromptAnalysis
+	// leaves UntrustedInputs empty when the optional prompt-template artifact is
+	// missing (the degraded mode TD-18b permits), even though the rendered
+	// prompt may well have had untrusted content interpolated into it. Failing
+	// closed there would reject a real finding because of a missing artifact, so
+	// eligibility is granted whenever provenance could not be established.
+	if analysis == nil || analysis.PromptTemplate == "" {
+		e.PromptInjection = true
 	}
-	if arts != nil && len(arts.PatchFiles) > 0 {
-		e.MaliciousPatch = true
+	// Comment memory is read back into a later run's prompt, so it is an
+	// untrusted input channel for this run's analysis.
+	if arts != nil && len(arts.CommentMemoryFiles) > 0 {
+		e.PromptInjection = true
+	}
+
+	if arts != nil {
+		// Every channel a secret could have reached: the agent's structured
+		// output, committed code, or the persisted comment-memory channel.
+		if arts.AgentOutputFileSize > 0 || len(arts.PatchFiles) > 0 || len(arts.CommentMemoryFiles) > 0 {
+			e.SecretLeak = true
+		}
+		if len(arts.PatchFiles) > 0 {
+			e.MaliciousPatch = true
+		}
 	}
 	return e
+}
+
+func analysisUntrustedInputs(analysis *PromptAnalysis) []UntrustedInput {
+	if analysis == nil {
+		return nil
+	}
+	return analysis.UntrustedInputs
 }
 
 // Env returns the environment variable assignments used to transport e to a
@@ -79,11 +125,16 @@ func (e Eligibility) Env() []string {
 }
 
 // EligibilityFromEnv reads the transport variables set by Env. A missing or
-// unparseable variable defaults to true — the check is a guard against
-// impossible claims made by a detector that already computed eligibility, so an
-// unset transport (a caller that predates the variables, or a direct
-// report-result invocation from a test) must not tighten the contract in a way
-// that would reject otherwise valid reports.
+// unparseable variable defaults to true so a caller that predates the variables
+// (or a direct report-result invocation) is not tightened into rejecting
+// otherwise valid reports.
+//
+// The values this reads are not authoritative. They arrive through the
+// environment of a command line the detection model composes, so the model can
+// set them to true or omit them entirely and this check will pass. It exists to
+// give a confused model a fast in-session correction, not to constrain a model
+// that is trying to get around it. The binding check is the detector's own
+// ValidateResult call against the eligibility it computed from artifacts.
 func EligibilityFromEnv() Eligibility {
 	return Eligibility{
 		PromptInjection: envBoolDefault(envEligiblePromptInjection, true),
@@ -113,15 +164,27 @@ func (e Eligibility) Validate(promptInjection, secretLeak, maliciousPatch bool) 
 	var problems []string
 	if promptInjection && !e.PromptInjection {
 		problems = append(problems,
-			"--prompt-injection=true is not eligible: no untrusted input reached the workflow prompt (the Prompt Analysis section listed zero non-empty untrusted regions), so a prompt-injection finding cannot be raised from these artifacts. Instruction non-compliance without any attacker-controlled content causing it is a quality signal, not a security verdict.")
+			"--prompt-injection=true is not eligible: no untrusted input reached this run's inputs — the Prompt Analysis listed no non-empty untrusted region and no comment-memory file was staged — so a prompt-injection finding cannot be raised from these artifacts. Instruction non-compliance without attacker-controlled content causing it is a quality signal, not a security verdict.")
 	}
 	if secretLeak && !e.SecretLeak {
 		problems = append(problems,
-			"--secret-leak=true is not eligible: the agent output is empty and no patch or bundle was produced, so there is no channel a secret could have leaked through.")
+			"--secret-leak=true is not eligible: the agent output is empty and no patch, bundle, or comment-memory file was produced, so there is no channel a secret could have leaked through.")
 	}
 	if maliciousPatch && !e.MaliciousPatch {
 		problems = append(problems,
 			"--malicious-patch=true is not eligible: no .patch or .bundle file was produced by the agent, so there is no code change to be malicious. Framework-rejected safe-output validation errors (for example a review_id type mismatch that the framework rejected) are the guardrails working, not a malicious patch.")
 	}
 	return strings.Join(problems, " ")
+}
+
+// ValidateResult applies Validate to a parsed result. It is the detector-side
+// enforcement point: the eligibility it is called on is computed by the
+// detector process from the artifact bundle, so unlike the environment-based
+// check in the report-result subprocess it cannot be influenced by the
+// detection model. A non-empty return means the result must not be recorded.
+func (e Eligibility) ValidateResult(r *Result) string {
+	if r == nil {
+		return ""
+	}
+	return e.Validate(r.PromptInjection, r.SecretLeak, r.MaliciousPatch)
 }
