@@ -372,10 +372,12 @@ def external_wf(i):
 
 present = [i for i in agentic if bucket(i) != 0]
 ext = [i for i in present if external_wf(i)]
-# Workflow wf1 never shows the marker. Its conclusive jobs are built-in; its
-# skipped / cancelled / in-progress jobs expose no steps and stay unknown.
-builtin = [i for i in present if not external_wf(i) and bucket(i) not in (3, 4, 5)]
-unknown_detector = [i for i in present if not external_wf(i) and bucket(i) in (3, 4, 5)]
+# Workflow wf1 never shows the marker but has completed detection jobs with
+# steps every day, so the symmetric built-in path rollup promotes every wf1
+# run (including its skipped / cancelled / in-progress ones with zero
+# observable steps) to `builtin`. No wf1 run should land in `unknown`.
+builtin = [i for i in present if not external_wf(i)]
+unknown_detector = []
 
 def outcome(i):
     b = bucket(i)
@@ -397,7 +399,7 @@ assert t["builtin_detector_runs"] == len(builtin), t
 assert t["indeterminate_detector_runs"] == len(unknown_detector), t
 assert t["runs_unknown"] == 0, t
 assert t["runs_not_inspected"] == 0, t
-assert len(builtin) > 0 and len(unknown_detector) > 0, (len(builtin), len(unknown_detector))
+assert len(builtin) > 0, len(builtin)
 
 outcomes = s["job_outcomes"]
 for name in ("failure", "cancelled", "skipped", "in_progress", "success"):
