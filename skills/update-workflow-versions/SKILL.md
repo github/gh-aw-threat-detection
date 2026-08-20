@@ -1,6 +1,6 @@
 ---
 name: update-workflow-versions
-description: How to manually regenerate the compiled agentic workflow .lock.yml files when the gh-aw Version Check workflow reports version drift (standard and standalone smoke workflows).
+description: How to manually regenerate the compiled agentic workflow .lock.yml files when the gh-aw Version Check workflow reports version drift. All workflows track the newest github/gh-aw release or prerelease.
 ---
 
 # Updating Agentic Workflow Versions
@@ -20,13 +20,10 @@ recompile locally and opens a PR.
 
 Each agentic workflow source (`.github/workflows/*.md`) is compiled by the
 `gh-aw` compiler into a committed `*.lock.yml`. The version baked into a lock is
-whatever compiler produced it, and the workflows fall into two categories that
-track **different** gh-aw versions:
-
-| Category | Lock filename pattern | gh-aw version |
-|----------|-----------------------|---------------|
-| standard | anything else, e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release |
-| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** |
+whatever compiler produced it, and **every** workflow tracks the same gh-aw
+version: the newest `github/gh-aw` release **or prerelease**, whichever was
+published most recently. There are no per-workflow categories — a bump
+recompiles all the locks together.
 
 **Only the gh-aw version needs bumping.** The detector version is *not* pinned in
 the locks: gh-aw emits the literal `latest` to
@@ -35,47 +32,32 @@ the locks: gh-aw emits the literal `latest` to
 **non-prerelease** release. Promoting a detector release is therefore enough to
 put it into the smokes; no recompile is required.
 
-## 1. Determine the target gh-aw versions
+## 1. Determine the target gh-aw version
 
-The drift issue lists them. To confirm or resolve them yourself (any method
-works — `gh`, `curl`, or the GitHub Releases UI). Newest = most recent by publish
-date whose tag looks like `v<digit>...`; ignore drafts:
-
-- **stable gh-aw** — newest **non-prerelease** `github/gh-aw` release.
-- **latest gh-aw** — newest `github/gh-aw` release **or** prerelease.
+The drift issue lists it. To confirm or resolve it yourself (any method works —
+`gh`, `curl`, or the GitHub Releases UI): newest `github/gh-aw` release **or**
+prerelease, i.e. the most recent by publish date whose tag looks like
+`v<digit>...`; ignore drafts.
 
 For example, with `gh` available:
 
 ```bash
-# stable gh-aw (newest non-prerelease):
-gh api repos/github/gh-aw/releases --paginate \
-  --jq '.[] | select(.draft == false and .prerelease == false) | select(.tag_name | test("^v[0-9]")) | [.published_at, .tag_name] | @tsv' \
-  | sort | tail -n1 | cut -f2
-
-# latest gh-aw (newest release or prerelease):
 gh api repos/github/gh-aw/releases --paginate \
   --jq '.[] | select(.draft == false) | select(.tag_name | test("^v[0-9]")) | [.published_at, .tag_name] | @tsv' \
   | sort | tail -n1 | cut -f2
 ```
 
-In the steps below, refer to these as `<TARGET_GH_AW_STABLE>` and
-`<TARGET_GH_AW_LATEST>`.
+In the steps below, refer to this as `<TARGET_GH_AW>`.
 
 ## 2. Recompile the locks
 
-Use the **stable** tag for standard workflows and the **latest** tag for
-`*-standalone.md` smokes. The released `gh aw` extension is the simplest route:
+Recompile every workflow with the same tag. The released `gh aw` extension is
+the simplest route:
 
 ```bash
-# standard workflows (everything that is not a *-standalone.md):
-gh extension install github/gh-aw --pin <TARGET_GH_AW_STABLE>
-gh aw compile --action-mode action --action-tag <TARGET_GH_AW_STABLE> --no-check-update \
-  <the affected standard .md files>
-
-# standalone smoke workflows:
-gh extension install github/gh-aw --pin <TARGET_GH_AW_LATEST> --force
-gh aw compile --action-mode action --action-tag <TARGET_GH_AW_LATEST> --no-check-update \
-  .github/workflows/*-standalone.md
+gh extension install github/gh-aw --pin <TARGET_GH_AW> --force
+gh aw compile --action-mode action --action-tag <TARGET_GH_AW> --no-check-update \
+  .github/workflows/*.md
 ```
 
 ### Building the compiler from source instead

@@ -1,10 +1,13 @@
 name: gh-aw Version Check
 
 # Daily read-only check that the compiled agentic workflow `.lock.yml` files are
-# pinned to the versions each category is supposed to track:
+# pinned to the version every workflow tracks:
 #
-#   * standard workflows        -> latest STABLE github/gh-aw release
-#   * standalone smoke workflows-> latest github/gh-aw release OR prerelease
+#   * all workflows -> newest github/gh-aw release OR prerelease
+#
+# There is a single target for every lock: whichever github/gh-aw release or
+# prerelease was published most recently. Drafts and non-`v<digit>` tags are
+# ignored.
 #
 # Only the gh-aw compiler version is checked. The detector version is no longer
 # baked into a lock: gh-aw resolves `latest` at runtime from the detector's
@@ -61,39 +64,28 @@ jobs:
           DETECTOR_REPO="github/gh-aw-threat-detection"
           BODY="${RUNNER_TEMP}/version-drift.md"
 
-          # newest_tag <repo> <include_prereleases:true|false>
+          # newest_tag <repo>
           # Newest release tag by publish date whose name looks like a semantic
-          # version (v<digit>...), excluding drafts and rolling refs. Both repos
-          # have >100 releases, so paginate everything.
+          # version (v<digit>...), counting prereleases, excluding drafts and
+          # rolling refs. The repo has >100 releases, so paginate everything.
           newest_tag() {
-            local repo="$1" include_pre="$2" filter
-            if [ "$include_pre" = "true" ]; then
-              filter='select(.draft == false)'
-            else
-              filter='select(.draft == false and .prerelease == false)'
-            fi
-            gh api "repos/${repo}/releases" --paginate \
-              --jq ".[] | ${filter} | select(.tag_name | test(\"^v[0-9]\")) | [.published_at, .tag_name] | @tsv" \
+            gh api "repos/$1/releases" --paginate \
+              --jq '.[] | select(.draft == false) | select(.tag_name | test("^v[0-9]")) | [.published_at, .tag_name] | @tsv' \
               | sort | tail -n1 | cut -f2
           }
 
-          gh_aw_stable="$(newest_tag "$GH_AW_REPO" false)"
-          gh_aw_latest="$(newest_tag "$GH_AW_REPO" true)"
-          for pair in "gh-aw stable:$gh_aw_stable" "gh-aw latest:$gh_aw_latest"; do
-            val="${pair#*:}"
-            [ -n "$val" ] && [ "$val" != "null" ] || { echo "::error::could not resolve ${pair%%:*} version"; exit 1; }
-          done
+          gh_aw_latest="$(newest_tag "$GH_AW_REPO")"
+          [ -n "$gh_aw_latest" ] && [ "$gh_aw_latest" != "null" ] || { echo "::error::could not resolve gh-aw latest version"; exit 1; }
 
-          echo "Target versions:"
-          echo "  gh-aw (stable)   : $gh_aw_stable"
-          echo "  gh-aw (latest)   : $gh_aw_latest"
+          echo "Target version:"
+          echo "  gh-aw (latest release or prerelease): $gh_aw_latest"
           echo
 
           # gh-aw compiler version baked into a lock file.
           lock_compiler_version() { grep -o '"compiler_version":"[^"]*"' "$1" | head -n1 | sed 's/.*:"//;s/"//'; }
 
           drift_rows=""
-          add_row() { drift_rows+="${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\t'"${5}"$'\n'; }
+          add_row() { drift_rows+="${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
 
           shopt -s nullglob
           lock_files=(.github/workflows/*.lock.yml)
@@ -102,22 +94,13 @@ jobs:
 
           for lock in "${lock_files[@]}"; do
             base="$(basename "$lock" .lock.yml)"
-            case "$base" in
-              *-standalone) category="standalone smoke" ;;
-              *)            category="standard" ;;
-            esac
-
             cur_ghaw="$(lock_compiler_version "$lock")"
             [ -n "$cur_ghaw" ] || { echo "::error::no compiler_version in $lock"; exit 1; }
-            case "$category" in
-              standard) want_ghaw="$gh_aw_stable" ;;
-              *)        want_ghaw="$gh_aw_latest" ;;
-            esac
-            if [ "$cur_ghaw" != "$want_ghaw" ]; then
-              add_row "$base" "$category" "gh-aw" "$cur_ghaw" "$want_ghaw"
-              echo "DRIFT  $base [$category] gh-aw $cur_ghaw -> $want_ghaw"
+            if [ "$cur_ghaw" != "$gh_aw_latest" ]; then
+              add_row "$base" "gh-aw" "$cur_ghaw" "$gh_aw_latest"
+              echo "DRIFT  $base gh-aw $cur_ghaw -> $gh_aw_latest"
             else
-              echo "ok     $base [$category] gh-aw $cur_ghaw"
+              echo "ok     $base gh-aw $cur_ghaw"
             fi
           done
 
@@ -136,20 +119,17 @@ jobs:
             echo
             echo "One or more compiled workflow \`.lock.yml\` files are pinned to an outdated version."
             echo
-            echo "### Target versions"
+            echo "### Target version"
             echo
-            echo "| Category | Tracks | Version |"
-            echo "|----------|--------|---------|"
-            echo "| standard | latest **stable** \`${GH_AW_REPO}\` release | \`${gh_aw_stable}\` |"
-            echo "| standalone smoke | latest \`${GH_AW_REPO}\` release **or prerelease** | \`${gh_aw_latest}\` |"
+            echo "Every compiled lock tracks the newest \`${GH_AW_REPO}\` release **or prerelease**: \`${gh_aw_latest}\`"
             echo
             echo "### Workflows needing an update"
             echo
-            echo "| Workflow | Category | Field | Current | Target |"
-            echo "|----------|----------|-------|---------|--------|"
-            printf '%s' "$drift_rows" | while IFS=$'\t' read -r wf cat field cur tgt; do
+            echo "| Workflow | Field | Current | Target |"
+            echo "|----------|-------|---------|--------|"
+            printf '%s' "$drift_rows" | while IFS=$'\t' read -r wf field cur tgt; do
               [ -n "$wf" ] || continue
-              echo "| \`${wf}\` | ${cat} | ${field} | \`${cur}\` | \`${tgt}\` |"
+              echo "| \`${wf}\` | ${field} | \`${cur}\` | \`${tgt}\` |"
             done
             echo
             echo "### How to fix"

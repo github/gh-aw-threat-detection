@@ -543,14 +543,9 @@ Because `releases/latest` ignores prereleases, an **unpromoted** prerelease is n
 
 ### Keeping the Compiled Locks Current
 
-The compiled workflow locks fall into two version categories:
+Every compiled workflow lock tracks a single gh-aw version: the newest `github/gh-aw` release **or prerelease**, whichever was published most recently (drafts and non-`v<digit>` tags ignored). There are no per-workflow categories — a bump recompiles all the locks together.
 
-| Category | Lock filename pattern | gh-aw version |
-|----------|-----------------------|---------------|
-| standard | e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release |
-| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** |
-
-The `.github/workflows/gh-aw-version-check.yml` workflow runs daily (and on demand). It is **read-only** — it builds and compiles nothing. It reads the `compiler_version` already baked into each `.lock.yml`, compares it against the target for that category, and, when any lock is stale, opens (or updates) a single tracking issue listing every workflow that needs regenerating and the target versions. When everything is in sync it closes that issue.
+The `.github/workflows/gh-aw-version-check.yml` workflow runs daily (and on demand). It is **read-only** — it builds and compiles nothing. It reads the `compiler_version` already baked into each `.lock.yml`, compares it against that single target, and, when any lock is stale, opens (or updates) a single tracking issue listing every workflow that needs regenerating and the target version. When everything is in sync it closes that issue.
 
 Regenerating the locks is a **separate, manual, human-reviewed step** because pushing changes under `.github/workflows/` requires a token with the `workflows` permission, which the built-in `GITHUB_TOKEN` lacks. Follow the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill: recompile the affected sources with the target gh-aw version, then open a PR.
 
