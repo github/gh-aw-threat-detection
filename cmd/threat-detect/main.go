@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
@@ -58,15 +59,38 @@ const (
 	reasonResultRecorded         = "result_recorded"          // verdict obtained (exit 0 or 1)
 	reasonConfigError            = "config_error"             // setup/validation failed before the engine ran
 	reasonEngineError            = "engine_error"             // engine subprocess failed without recording a verdict
+	reasonEngineTimeout          = "engine_timeout"           // per-attempt wall-clock timeout expired without a verdict
 	reasonInvalidReportExhausted = "invalid_report_exhausted" // engine ran but never recorded a valid verdict across retries
 	reasonCancelled              = "cancelled"                // run was interrupted before a verdict
 	reasonOutputWriteError       = "output_write_error"       // verdict obtained but writing the result failed
+)
+
+// Default budgets bounding a single detection attempt. Both are conservative
+// enough to catch a runaway model while leaving comfortable headroom under the
+// smoke workflows' 15-minute job timeout with retries=1 (2 attempts).
+const (
+	// defaultEngineTimeout bounds a single engine invocation. Two attempts at
+	// 5m each plus artifact prep and upload fits well inside the 15-minute
+	// smoke job budget. Zero (via --engine-timeout=0 or an unparseable env)
+	// disables the wall-clock cap.
+	defaultEngineTimeout = 5 * time.Minute
+	// defaultMaxTurns bounds the number of agentic tool-use turns per attempt.
+	// A verdict-only run typically needs ~5-15 turns; 20 matches the current
+	// gh-aw smoke workflow convention. Zero disables the cap.
+	defaultMaxTurns = 20
 )
 
 // errEngineExecution marks a failure of the engine subprocess itself (as
 // opposed to the engine running but never recording a verdict). It lets run()
 // distinguish engine_error from invalid_report_exhausted on the status line.
 var errEngineExecution = errors.New("engine execution failed")
+
+// errEngineTimeout marks a per-attempt wall-clock timeout expiring before the
+// engine recorded a verdict. It is treated as an engine failure within
+// analyzeWithRetries so the retry loop still applies, but propagates a distinct
+// terminal reason (reasonEngineTimeout) so the daily statistics can separate
+// runaway-model kills from other engine failures.
+var errEngineTimeout = errors.New("engine timeout")
 
 // stderrf writes one diagnostic line to standard error.
 //
@@ -134,6 +158,8 @@ func run() (code int) {
 		stepSummary         string
 		version             bool
 		retries             int
+		maxTurns            int
+		engineTimeout       time.Duration
 	)
 
 	// Parse flags with ContinueOnError so usage/flag errors return through the
@@ -157,6 +183,10 @@ func run() (code int) {
 	flag.StringVar(&stepSummary, "step-summary", "", "Deprecated and ignored; the detector no longer writes a GitHub Actions step summary")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
 	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
+	flag.IntVar(&maxTurns, "max-turns", envMaxTurns(defaultMaxTurns),
+		"Maximum agentic tool-use turns per attempt; 0 disables the cap. Exported to the engine subprocess as GH_AW_MAX_TURNS and passed as --max-turns to engines whose CLI accepts it (env: THREAT_DETECTION_MAX_TURNS, GH_AW_MAX_TURNS)")
+	flag.DurationVar(&engineTimeout, "engine-timeout", envDuration("THREAT_DETECTION_ENGINE_TIMEOUT", defaultEngineTimeout),
+		"Wall-clock timeout per detection attempt (e.g. 5m, 300s); 0 disables. On expiry the engine subprocess is killed; if all attempts time out the run exits 2 with reason engine_timeout (env: THREAT_DETECTION_ENGINE_TIMEOUT)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		// -h/-help prints usage and exits cleanly with no status line.
 		if errors.Is(err, flag.ErrHelp) {
@@ -197,9 +227,9 @@ func run() (code int) {
 	if modelDesc == "" {
 		modelDesc = "(none; using engine default)"
 	}
-	stderrf("[threat-detect] run start: version=%s engine=%s model=%s retries=%d",
+	stderrf("[threat-detect] run start: version=%s engine=%s model=%s retries=%d max_turns=%d engine_timeout=%s",
 		sanitizeLogValue(detector.Version), sanitizeLogValue(engine.Canonical(engineID)),
-		sanitizeLogValue(modelDesc), retries)
+		sanitizeLogValue(modelDesc), retries, maxTurns, formatTimeout(engineTimeout))
 
 	// Determine artifacts directory from positional args
 	args := flag.Args()
@@ -404,7 +434,7 @@ func run() (code int) {
 	os.Remove(sinkPath)
 	defer os.Remove(sinkPath)
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
+	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries, maxTurns, engineTimeout)
 	if err != nil {
 		// The message can embed captured engine output (engineExitError), which
 		// is untrusted; stderrf renders it inert.
@@ -412,6 +442,8 @@ func run() (code int) {
 		switch {
 		case ctx.Err() != nil:
 			reason = reasonCancelled
+		case errors.Is(err, errEngineTimeout):
+			reason = reasonEngineTimeout
 		case errors.Is(err, errEngineExecution):
 			reason = reasonEngineError
 		default:
@@ -492,7 +524,7 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 	)
 }
 
-func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
+func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries, maxTurns int, engineTimeout time.Duration) (*detector.Result, error) {
 	if sinkPath == "" {
 		return nil, fmt.Errorf("result sink path is required for detection")
 	}
@@ -506,18 +538,51 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		stderrf("[threat-detect] detection attempt %d of %d", i+1, attempts)
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
-		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
-			return nil, fmt.Errorf("%w: %w", errEngineExecution, err)
+
+		// Apply the per-attempt wall-clock timeout. The parent ctx still carries
+		// interrupt cancellation (Ctrl+C, SIGTERM), so this narrows rather than
+		// replaces the deadline for each engine invocation. A completed verdict
+		// races the deadline: if the engine records a result and the sink
+		// watcher cancels the process before the timeout fires, the read below
+		// still succeeds and the run reports result_recorded.
+		attemptCtx := ctx
+		var attemptCancel context.CancelFunc = func() {}
+		if engineTimeout > 0 {
+			attemptCtx, attemptCancel = context.WithTimeout(ctx, engineTimeout)
 		}
-		// The verdict must be reported in-session through the
-		// threat_detection_result tool, which records it to the sink.
-		result, err := detector.ReadResultFile(sinkPath)
-		if err == nil {
+
+		opts := engine.AnalyzeOptions{ResultSinkPath: sinkPath, MaxTurns: maxTurns}
+		_, execErr := eng.Analyze(attemptCtx, currentPrompt, opts)
+
+		// The verdict might still have been written just before the deadline
+		// fired; check the sink first, regardless of the engine's exit path.
+		result, readErr := detector.ReadResultFile(sinkPath)
+		attemptCancel()
+		if readErr == nil {
 			stderrf("[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool", i+1)
 			return result, nil
 		}
-		lastErr = err
-		stderrf("[threat-detect] attempt %d recorded no usable verdict: %v", i+1, err)
+
+		if execErr != nil {
+			// Distinguish a per-attempt timeout from other engine failures so
+			// the terminal status reason can name it separately. The parent
+			// ctx is checked first: if the user cancelled the whole run, that
+			// takes precedence over any per-attempt deadline.
+			if ctx.Err() == nil && attemptCtx.Err() == context.DeadlineExceeded {
+				stderrf("[threat-detect] attempt %d timed out after %s without recording a verdict",
+					i+1, formatTimeout(engineTimeout))
+				if i == attempts-1 {
+					return nil, fmt.Errorf("%w: detection engine did not record a verdict within %s across %d attempt(s)",
+						errEngineTimeout, formatTimeout(engineTimeout), attempts)
+				}
+				lastErr = fmt.Errorf("%w after %s", errEngineTimeout, formatTimeout(engineTimeout))
+			} else {
+				return nil, fmt.Errorf("%w: %w", errEngineExecution, execErr)
+			}
+		} else {
+			lastErr = readErr
+			stderrf("[threat-detect] attempt %d recorded no usable verdict: %v", i+1, readErr)
+		}
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
@@ -586,6 +651,53 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// envMaxTurns resolves the default value for the --max-turns flag. It prefers
+// the detector-specific THREAT_DETECTION_MAX_TURNS variable, then falls back to
+// gh-aw's universal GH_AW_MAX_TURNS (which gh-aw's harnesses read directly), so
+// a caller who has configured the turn budget in either place gets the same
+// behavior in the standalone detector. A non-integer or negative value is
+// ignored in favor of the compile-time fallback rather than silently disabling
+// the cap.
+func envMaxTurns(fallback int) int {
+	for _, key := range []string{"THREAT_DETECTION_MAX_TURNS", "GH_AW_MAX_TURNS"} {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			continue
+		}
+		return parsed
+	}
+	return fallback
+}
+
+// envDuration parses a duration env var (e.g. "5m", "300s"). A negative value
+// or an unparseable string falls back to the default rather than silently
+// disabling the timeout; zero is honored and disables the cap.
+func envDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
+// formatTimeout renders a duration for the run log. Zero is rendered as
+// "(disabled)" so a caller reading the log can tell the difference between
+// "not configured" and "set to zero".
+func formatTimeout(d time.Duration) string {
+	if d <= 0 {
+		return "(disabled)"
+	}
+	return d.String()
 }
 
 // samePath reports whether a and b refer to the same file. It first compares

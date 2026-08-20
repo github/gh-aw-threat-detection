@@ -518,9 +518,44 @@ than `gh-aw`'s native engine step: a recorded verdict (exit 0 or 1) and an
 "engine ran but recorded no verdict" outcome (exit 2 with status reason
 `invalid_report_exhausted`) MUST NOT mark the detection step as failed. Only a
 genuine engine or configuration failure (e.g. status reason `engine_error`,
-`config_error`, `cancelled`) may surface as a step failure. This prevents the
-common flaky-output case from blocking safe outputs in warn mode, where `gh-aw`
-treats a missing verdict as a recoverable `parse_error` and proceeds.
+`engine_timeout`, `config_error`, `cancelled`) may surface as a step failure.
+This prevents the common flaky-output case from blocking safe outputs in warn
+mode, where `gh-aw` treats a missing verdict as a recoverable `parse_error` and
+proceeds.
+
+**TD-21b**: The detector MUST bound each detection attempt with a wall-clock
+timeout and MUST bound the agentic loop with a turn cap, so a runaway model
+can be killed without relying on the enclosing GitHub Actions job timeout.
+
+- The per-attempt wall-clock timeout is exposed via the `--engine-timeout` flag
+  and the `THREAT_DETECTION_ENGINE_TIMEOUT` environment variable, accepts a Go
+  duration string (e.g. `5m`, `300s`), and defaults to `5m`. A value of `0`
+  disables the cap. The timeout applies to each engine invocation
+  independently, so a retry (see the `--retries` flag) gets a fresh budget.
+- When the deadline fires, the detector MUST kill the engine subprocess and
+  MUST first check the result sink for a verdict written just before the
+  deadline. If the sink holds a valid verdict, the verdict wins over the
+  timeout and the run reports `result_recorded`. Otherwise the attempt is
+  treated as a failure and the retry loop applies; if all attempts time out
+  the run exits `2` with the status reason `engine_timeout`, which is distinct
+  from `engine_error` so daily statistics can separate runaway-model kills
+  from other engine failures.
+- The turn cap is exposed via the `--max-turns` flag and the
+  `THREAT_DETECTION_MAX_TURNS` environment variable, and MUST also honor
+  `gh-aw`'s universal `GH_AW_MAX_TURNS` as a fallback so a single turn budget
+  set for the harness-driven detection path applies to the standalone detector
+  too. The default is `20`; `0` disables the cap. The value is exported to the
+  engine subprocess as `GH_AW_MAX_TURNS` (which the Claude, Codex, and Copilot
+  harnesses read) and additionally passed as an explicit `--max-turns` flag to
+  engines whose bare CLI accepts one (Claude). The bare Copilot CLI does not
+  accept a turn-limit flag, so on that path the wall-clock timeout is the
+  only enforceable cap; the detector MUST log a diagnostic when a non-zero
+  `--max-turns` is set for the bare Copilot CLI path so the caller is not
+  misled about which control is active.
+- Both budgets are per-attempt, not aggregate. The compile-time defaults
+  (`5m` × `retries+1` attempts) MUST comfortably fit inside the enclosing
+  GitHub Actions job timeout used by the `gh-aw` smoke workflows (currently
+  15 minutes), leaving headroom for artifact preparation and result upload.
 
 ### 8.4 Environment Variables
 

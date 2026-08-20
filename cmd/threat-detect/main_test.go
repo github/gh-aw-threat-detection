@@ -460,6 +460,190 @@ func TestRunReportsArtifactInventoryOnStderr(t *testing.T) {
 	}
 }
 
+// TestRunEmitsEngineTimeoutStatusWhenAllAttemptsExceedDeadline verifies that
+// a runaway engine — one that neither records a verdict nor exits — is killed
+// on the per-attempt --engine-timeout, that every retry also times out, and
+// that the terminal status reason is the distinct engine_timeout (not the
+// generic engine_error), so daily statistics can separate runaway-model kills
+// from other failure modes.
+func TestRunEmitsEngineTimeoutStatusWhenAllAttemptsExceedDeadline(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	// The fake sleeps far longer than the configured per-attempt budget so the
+	// wall-clock kill path is taken deterministically.
+	fakeBinDir := writeFakeCopilotHanging(t, copilotMarker, 30)
+
+	start := time.Now()
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-engine-timeout", "500ms",
+		"-retries", "1",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+	elapsed := time.Since(start)
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitError, stderr)
+	}
+	// Two attempts × 500ms plus prompt build overhead: comfortably under 15s.
+	if elapsed > 15*time.Second {
+		t.Fatalf("run did not honor per-attempt timeout: took %v", elapsed)
+	}
+	if _, err := os.Stat(copilotMarker); err != nil {
+		t.Fatalf("expected copilot to run: %v", err)
+	}
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no result file to be written, stat err = %v", err)
+	}
+	want := "THREAT_DETECTION_STATUS: reason=engine_timeout exit=2"
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr missing status line %q, got:\n%s", want, stderr)
+	}
+	// The per-attempt timeout diagnostic must name the duration so the job log
+	// alone diagnoses the kill switch that fired.
+	if !strings.Contains(stderr, "attempt 1 timed out after 500ms") {
+		t.Fatalf("stderr missing per-attempt timeout diagnostic, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "attempt 2 timed out after 500ms") {
+		t.Fatalf("stderr missing retry timeout diagnostic, got:\n%s", stderr)
+	}
+}
+
+// TestRunHonorsVerdictWrittenBeforeDeadline covers the race where the sink is
+// populated by the engine but the wall-clock timeout also fires. A recorded
+// verdict must win over the timeout, otherwise a healthy run near its budget
+// would be reclassified as a runaway kill.
+func TestRunHonorsVerdictWrittenBeforeDeadline(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	// The fake writes the sink immediately and then sleeps well past the
+	// per-attempt budget. Early-cancel on sink-write should still let the run
+	// report result_recorded.
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 30)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-engine-timeout", "500ms",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "THREAT_DETECTION_STATUS: reason=result_recorded exit=0") {
+		t.Fatalf("stderr missing result_recorded status line, got:\n%s", stderr)
+	}
+}
+
+// TestRunExportsMaxTurnsToEngineEnv verifies that --max-turns is exported to the
+// engine subprocess as GH_AW_MAX_TURNS, which is the universal gh-aw contract
+// the Claude, Codex, and Copilot harnesses read to enforce turn limits.
+func TestRunExportsMaxTurnsToEngineEnv(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	envDumpPath := filepath.Join(t.TempDir(), "env-dump")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotDumpingEnv(t, copilotMarker, envDumpPath, sinkJSON, []string{"GH_AW_MAX_TURNS"})
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-max-turns", "17",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	data, err := os.ReadFile(envDumpPath)
+	if err != nil {
+		t.Fatalf("reading env dump: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(data)), "GH_AW_MAX_TURNS=17"; got != want {
+		t.Fatalf("engine env dump = %q, want %q", got, want)
+	}
+}
+
+// TestRunOmitsMaxTurnsEnvWhenDisabled verifies that --max-turns=0 does NOT
+// export GH_AW_MAX_TURNS. Setting the env var to "0" would collide with a
+// downstream harness's own default resolution and mislead it into treating
+// zero as a hard cap.
+func TestRunOmitsMaxTurnsEnvWhenDisabled(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	envDumpPath := filepath.Join(t.TempDir(), "env-dump")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotDumpingEnv(t, copilotMarker, envDumpPath, sinkJSON, []string{"GH_AW_MAX_TURNS"})
+
+	code := runWithTestArgs(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		"-max-turns", "0",
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
+	}
+	data, err := os.ReadFile(envDumpPath)
+	if err != nil {
+		t.Fatalf("reading env dump: %v", err)
+	}
+	// GH_AW_MAX_TURNS should be unset (empty value in the dump line).
+	if got := strings.TrimSpace(string(data)); got != "GH_AW_MAX_TURNS=" {
+		t.Fatalf("engine env dump = %q, want %q (var must be unset when max-turns disabled)", got, "GH_AW_MAX_TURNS=")
+	}
+}
+
+// TestRunResolvesMaxTurnsFromGhAwEnv verifies that when neither --max-turns nor
+// THREAT_DETECTION_MAX_TURNS is set, the detector falls back to gh-aw's
+// universal GH_AW_MAX_TURNS. This matches how the smoke workflows plumb the
+// turn budget through and keeps the standalone detector consistent with the
+// harness-driven path.
+func TestRunResolvesMaxTurnsFromGhAwEnv(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":            fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_MAX_TURNS": "42",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d; stderr:\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "max_turns=42") {
+		t.Fatalf("stderr does not show max_turns=42 resolved from GH_AW_MAX_TURNS, got:\n%s", stderr)
+	}
+}
+
 func runWithTestArgs(t *testing.T, args []string, env map[string]string) int {
 	t.Helper()
 	code, _ := runWithTestArgsCapture(t, args, env)
@@ -580,6 +764,56 @@ func writeFakeCopilotFailing(t *testing.T, markerPath, stdout string, exitCode i
 		"",
 	}, "\n")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fake copilot: %v", err)
+	}
+	return binDir
+}
+
+// writeFakeCopilotHanging writes a fake copilot that never writes the sink and
+// blocks for sleepSeconds — enough to reliably exceed a short --engine-timeout
+// so the wall-clock kill path is exercised.
+func writeFakeCopilotHanging(t *testing.T, markerPath string, sleepSeconds int) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "copilot")
+	script := strings.Join([]string{
+		"#!/bin/sh",
+		"cat >/dev/null",
+		"printf called > " + shellQuote(markerPath),
+		"sleep " + strconv.Itoa(sleepSeconds),
+		"",
+	}, "\n")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("writing fake copilot: %v", err)
+	}
+	return binDir
+}
+
+// writeFakeCopilotDumpingEnv writes a fake copilot that records selected env
+// variables into envDumpPath (one per line as KEY=VALUE) and then records a
+// safe verdict via the sink. It is used to assert env-var propagation
+// (e.g. GH_AW_MAX_TURNS) into the engine subprocess.
+func writeFakeCopilotDumpingEnv(t *testing.T, markerPath, envDumpPath, sinkJSON string, envKeys []string) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "copilot")
+	lines := []string{
+		"#!/bin/sh",
+		"cat >/dev/null",
+		"printf called > " + shellQuote(markerPath),
+		": > " + shellQuote(envDumpPath),
+	}
+	for _, key := range envKeys {
+		lines = append(lines,
+			"printf '%s=%s\\n' "+shellQuote(key)+" \"${"+key+"}\" >> "+shellQuote(envDumpPath))
+	}
+	lines = append(lines,
+		"printf '%s' "+shellQuote(sinkJSON)+" > \"$THREAT_DETECTION_RESULT_FILE\"",
+		"",
+	)
+	if err := os.WriteFile(scriptPath, []byte(strings.Join(lines, "\n")), 0o700); err != nil {
 		t.Fatalf("writing fake copilot: %v", err)
 	}
 	return binDir

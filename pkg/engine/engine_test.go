@@ -239,7 +239,7 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("claude", func(t *testing.T) {
-		got := claudeArgs("claude-sonnet-4.6", false)
+		got := claudeArgs("claude-sonnet-4.6", false, 0)
 		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "-"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
@@ -247,16 +247,32 @@ func TestEngineCommandArgs(t *testing.T) {
 	})
 
 	t.Run("claude with result-tool grant", func(t *testing.T) {
-		got := claudeArgs("claude-sonnet-4.6", true)
+		got := claudeArgs("claude-sonnet-4.6", true, 0)
 		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--permission-mode", "acceptEdits", "--allowed-tools", "Bash,Write,Edit,Read,Read(/tmp/*),Read(/tmp/gh-aw/*)", "--model", "claude-sonnet-4.6", "-"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
 		}
 	})
 
+	t.Run("claude with max-turns", func(t *testing.T) {
+		got := claudeArgs("claude-sonnet-4.6", false, 20)
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "--max-turns", "20", "-"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("claudeArgs() = %#v, want %#v", got, want)
+		}
+	})
+
 	t.Run("claude harness args", func(t *testing.T) {
-		got := claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true)
+		got := claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true, 0)
 		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--permission-mode", "acceptEdits", "--allowed-tools", "Bash,Write,Edit,Read,Read(/tmp/*),Read(/tmp/gh-aw/*)", "--model", "claude-sonnet-4.6", "--prompt-file", "/tmp/prompt.txt"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("claudeHarnessArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("claude harness args with max-turns", func(t *testing.T) {
+		got := claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", false, 12)
+		want := []string{"--print", "--verbose", "--output-format", "stream-json", "--model", "claude-sonnet-4.6", "--max-turns", "12", "--prompt-file", "/tmp/prompt.txt"}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("claudeHarnessArgs() = %#v, want %#v", got, want)
 		}
@@ -274,7 +290,7 @@ func TestEngineCommandArgs(t *testing.T) {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
 
-		gotName, gotArgs := nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true)...)
+		gotName, gotArgs := nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("/tmp/prompt.txt", "claude-sonnet-4.6", true, 0)...)
 		wantName := "/custom/node"
 		wantArgs := []string{
 			harnessPath, "claude",
@@ -522,8 +538,8 @@ func TestClaudeGrantsFileToolsForReasonsTransport(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"claudeArgs", claudeArgs("", true)},
-		{"claudeHarnessArgs", claudeHarnessArgs("/tmp/prompt.txt", "", true)},
+		{"claudeArgs", claudeArgs("", true, 0)},
+		{"claudeHarnessArgs", claudeHarnessArgs("/tmp/prompt.txt", "", true, 0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			granted := ""
@@ -545,7 +561,7 @@ func TestClaudeGrantsFileToolsForReasonsTransport(t *testing.T) {
 	}
 
 	// Without the result sink no tool is granted at all, so nothing to write.
-	if got := claudeArgs("", false); slices.Contains(got, "--allowed-tools") {
+	if got := claudeArgs("", false, 0); slices.Contains(got, "--allowed-tools") {
 		t.Errorf("unexpected tool grant without a result sink: %#v", got)
 	}
 }

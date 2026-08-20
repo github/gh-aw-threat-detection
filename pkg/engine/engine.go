@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
@@ -23,6 +24,32 @@ type AnalyzeOptions struct {
 	// the engine provisions the wrapper on PATH, sets THREAT_DETECTION_RESULT_FILE,
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
+
+	// MaxTurns bounds the number of agentic tool-use turns the engine may take
+	// before the CLI exits on its own. Zero means "no cap". The value is
+	// exported to the engine subprocess as GH_AW_MAX_TURNS (matching gh-aw's
+	// universal turn-limit contract, honored by all supported engine harnesses)
+	// and, for engines whose bare CLI accepts a dedicated flag, also passed as
+	// an explicit flag (e.g. `--max-turns` for Claude). The bare Copilot CLI
+	// has no equivalent flag; only the wall-clock timeout constrains it there.
+	MaxTurns int
+}
+
+// MaxTurnsEnvVar is the environment-variable name used to convey the turn cap
+// to engine harnesses. It matches gh-aw's `GH_AW_MAX_TURNS` contract so the
+// standalone detector and the harness-driven detection path enforce turn
+// limits through a single mechanism.
+const MaxTurnsEnvVar = "GH_AW_MAX_TURNS"
+
+// maxTurnsEnv returns the env-var assignment used to convey the turn cap to
+// engine subprocesses, or nil when no cap is configured. When MaxTurns is 0
+// the caller must not export the variable so a downstream harness can still
+// fall back to its own default rather than treating "0" as a hard cap.
+func maxTurnsEnv(maxTurns int) []string {
+	if maxTurns <= 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s=%d", MaxTurnsEnvVar, maxTurns)}
 }
 
 // Engine represents an AI engine capable of analyzing content for threats.
@@ -127,6 +154,7 @@ type copilotEngine struct {
 func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error) {
 	env := copilotEnv(e.model)
 	env = append(env, copilotHarnessAwfConfigEnv()...)
+	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
 	toolEnv, cleanup, err := maybeProvisionResultTool(opts.ResultSinkPath)
 	if err != nil {
 		return "", err
@@ -139,6 +167,13 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
 		}, "", env, opts.ResultSinkPath)
+	}
+	if opts.MaxTurns > 0 {
+		// The bare Copilot CLI does not accept a turn-limit flag; the wall-clock
+		// timeout is the only bound for the direct-CLI path. Announce this once
+		// per invocation so a caller who set --max-turns knows the cap will not
+		// be enforced by the CLI itself.
+		fmt.Fprintf(engineInvokeStderr, "[threat-detect] copilot bare CLI does not accept a turn-limit flag; --max-turns=%d is advisory here and the wall-clock timeout remains the only cap\n", opts.MaxTurns)
 	}
 	logEngineInvoke("copilot", "copilot", copilotDirectArgs("<prompt-file>"), e.model)
 	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
@@ -157,17 +192,19 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		return "", err
 	}
 	defer cleanup()
+	env := append([]string(nil), toolEnv...)
+	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
 	enableResultTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
-		logEngineInvoke("claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableResultTool)...), e.model)
+		logEngineInvoke("claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableResultTool, opts.MaxTurns)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
-			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableResultTool)...)
-		}, "", toolEnv, opts.ResultSinkPath)
+			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableResultTool, opts.MaxTurns)...)
+		}, "", env, opts.ResultSinkPath)
 	}
-	args := claudeArgs(e.model, enableResultTool)
+	args := claudeArgs(e.model, enableResultTool, opts.MaxTurns)
 	logEngineInvoke("claude", "claude", args, e.model)
-	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIEnvWithSink(ctx, "claude", args, prompt, env, opts.ResultSinkPath)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -181,18 +218,20 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		return "", err
 	}
 	defer cleanup()
+	env := append([]string(nil), toolEnv...)
+	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
 	provider := codexForcedProvider(codexConfigPath())
 
 	if harnessPath, ok := codexHarnessPath(); ok {
 		logEngineInvoke("codex", nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs(promptPath, e.model, provider)...)
-		}, "", toolEnv, opts.ResultSinkPath)
+		}, "", env, opts.ResultSinkPath)
 	}
 	// Codex embeds the prompt as a positional argument; pass a placeholder here
 	// so the logged args do not expose the detection prompt.
 	logEngineInvoke("codex", "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
-	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, env, opts.ResultSinkPath)
 }
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
@@ -349,13 +388,16 @@ var resultToolClaudeTools = []string{"Bash", "Write", "Edit", "Read", "Read(/tmp
 // Claude engine invocation (pkg/workflow/claude_engine.go).
 const claudePermissionMode = "acceptEdits"
 
-func claudeArgs(model string, allowResultTool bool) []string {
+func claudeArgs(model string, allowResultTool bool, maxTurns int) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowResultTool {
 		args = append(args, "--permission-mode", claudePermissionMode, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if maxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(maxTurns))
 	}
 	return append(args, "-")
 }
@@ -364,13 +406,16 @@ func claudeArgs(model string, allowResultTool bool) []string {
 // identical to claudeArgs except that it uses --prompt-file <path> instead of
 // the stdin sentinel "-", matching the invocation pattern used by the gh-aw
 // claude_harness.cjs script.
-func claudeHarnessArgs(promptPath, model string, allowResultTool bool) []string {
+func claudeHarnessArgs(promptPath, model string, allowResultTool bool, maxTurns int) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowResultTool {
 		args = append(args, "--permission-mode", claudePermissionMode, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if maxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(maxTurns))
 	}
 	return append(args, "--prompt-file", promptPath)
 }
