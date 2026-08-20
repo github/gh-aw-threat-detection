@@ -129,14 +129,23 @@ issue: call the `noop` safe-output tool with a short message such as
 ## What the numbers mean
 
 - **External detector runs** — runs whose `detection` job used the `threat-detect`
-  binary. This is decided per **workflow**, not per run: a job that was skipped,
-  cancelled, or died during setup reports few or no steps, so the
-  `Install threat-detect binary` marker is invisible on exactly the runs that
-  matter most. If any run of a workflow showed the marker that day, all of that
-  workflow's detection jobs count as external. Everything under "rates" is
-  measured over this population. Runs using gh-aw's built-in detection are
-  counted separately, and runs the evidence cannot settle are reported as
-  **detector could not be determined** — never folded into either bucket.
+  binary. Since gh-aw #54111 (merged 2026-08-20) the external detector is the
+  compile-time default, so this covers every `.lock.yml` run unless the
+  workflow opts out with `features: gh-aw-detection: false`. Detection is
+  decided per **workflow**, not per run: a job that was skipped, cancelled, or
+  died during setup reports few or no steps, so the `Install threat-detect
+  binary` marker is invisible on exactly the runs that matter most. If any
+  run of a workflow showed the marker that day, all of that workflow's
+  detection jobs count as external; if any run had a **successful** detection
+  job with steps but no marker, all of that workflow's detection jobs count
+  as built-in. A failed or cancelled job is inconclusive built-in evidence
+  (it may have died before the install step's position), so it is not enough
+  to flip a workflow to built-in on its own. On or after the cutover date,
+  agentic runs with neither signal default to external (matching the new
+  gh-aw default); on **prior** days, the collector keeps them `unknown`
+  rather than back-labelling residual runs onto the new default. Only runs
+  the evidence still cannot settle are reported as **detector could not be
+  determined** — never folded into either bucket.
 - **Job outcomes** — the `detection` job's `conclusion` (`success`, `failure`,
   `cancelled`, `skipped`, `timed_out`, `action_required`) or `in_progress` when
   the job had not finished at scan time. The **error rate** counts only
@@ -157,7 +166,9 @@ issue: call the `noop` safe-output tool with a short message such as
   here; point readers at the `replay-detection` workflow when they want reasons.
 - **Reasons reported by gh-aw** — harvested from the `[aw] Detection Runs`
   tracking issue, which gh-aw comments on only for `warning`/`failure`
-  conclusions. `threat_detected` is a **working** detector reporting a finding;
+  conclusions, and restricted to runs in the external-detector population
+  above so the counts line up with the rest of the report.
+  `threat_detected` is a **working** detector reporting a finding;
   `agent_failure` and `parse_error` are **tooling failures**.
 - **Truncations** — the collector hit a budget or API limit. When present, say so
   prominently. Counts are lower bounds, and because the collector works forward

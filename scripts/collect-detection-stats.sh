@@ -46,7 +46,10 @@ REQUEST_PAUSE_SECONDS="${REQUEST_PAUSE_SECONDS:-0.1}"
 readonly WINDOW_RESULT_CAP=1000
 readonly PER_PAGE=100
 # A job step with this name is emitted only when gh-aw installs the external
-# `threat-detect` binary released by this repository.
+# `threat-detect` binary released by this repository. Since gh-aw PR #54111
+# the `gh-aw-detection` feature defaults to enabled, so the marker is present
+# on every compiled workflow that does not explicitly opt out with
+# `features: gh-aw-detection: false` in frontmatter.
 readonly EXTERNAL_DETECTOR_STEP="Install threat-detect binary"
 readonly DETECTION_JOB_NAME="detection"
 readonly DETECTION_ARTIFACT_NAME="detection"
@@ -107,6 +110,25 @@ esac
 
 WINDOW_FROM="${TARGET_DATE}T00:00:00Z"
 WINDOW_TO="${TARGET_DATE}T23:59:59Z"
+
+# gh-aw PR #54111 (merged 2026-08-20T01:27:02Z) made the external threat
+# detector the compile-time default. Runs on days before the cutover cannot
+# assume that default: workflows compiled from earlier gh-aw versions used
+# built-in detection when no `gh-aw-detection` flag was present. When the
+# collector is re-run for a pre-cutover day, keep residual `.lock.yml` runs
+# with no direct evidence in the `unknown` bucket rather than mis-labelling
+# them external. Overrideable so a future flip can be recorded without a
+# code change.
+GHAW_EXTERNAL_DEFAULT_DATE="${GHAW_EXTERNAL_DEFAULT_DATE:-2026-08-20}"
+case "$GHAW_EXTERNAL_DEFAULT_DATE" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+  *) die "GHAW_EXTERNAL_DEFAULT_DATE must be YYYY-MM-DD, got: ${GHAW_EXTERNAL_DEFAULT_DATE}" ;;
+esac
+if [ "$TARGET_DATE" \< "$GHAW_EXTERNAL_DEFAULT_DATE" ]; then
+  EXTERNAL_DEFAULT_APPLIES=false
+else
+  EXTERNAL_DEFAULT_APPLIES=true
+fi
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
@@ -416,13 +438,41 @@ done < <(jq -c '.[]' "${WORK_DIR}/agentic-runs.json")
 # The marker step is only observable on a detection job that got far enough to
 # reach it. Classifying per run would therefore drop exactly the failures this
 # report exists to measure (skipped jobs, cancellations, setup failures) into
-# the "built-in detector" bucket and out of every rate. Roll the evidence up to
-# the workflow instead: if any run of a workflow shows the marker on the target
-# day, that workflow uses the external detector, so all of its detection jobs
-# count. Anything still unresolved is reported as `unknown`, never as built-in.
-jq -s '
+# the wrong bucket. Roll the evidence up to the workflow path instead, both
+# ways.
+#
+# External evidence: any run on the path emitted the `Install threat-detect
+# binary` step. One such observation is enough — the step is emitted at
+# compile time and the workflow can't switch detectors mid-day.
+#
+# Built-in evidence: a run on the path had a *successful* `detection` job with
+# steps but no marker. `success` matters: a job that failed during
+# `Setup Scripts` (before the install step's position) is not evidence that
+# the workflow opted out — its own step list is truncated for the same reason
+# skipped and cancelled jobs' are, so treating it as built-in evidence would
+# mis-classify sibling runs on external workflows that had a bad setup day.
+# A completed `success` job, on the other hand, ran to the end of the
+# detection recipe; if it never mentioned the marker it really is built-in.
+#
+# Since gh-aw PR #54111 the external detector is the compile-time default, so
+# an agentic `.lock.yml` run with no evidence either way is far more likely
+# external than built-in. On or after `$default_date` we default residual
+# agentic runs to `external`; before the cutover we leave them `unknown`
+# rather than back-date the new default onto historical runs.
+jq -s --argjson external_default_applies "$EXTERNAL_DEFAULT_APPLIES" '
   . as $records
   | ($records | map(select(.detection.marker_seen == true) | .path) | unique) as $external_paths
+  | ($records
+      | map(select(
+          .detection.state == "present"
+          and .detection.marker_seen == false
+          and .detection.status == "completed"
+          and .detection.conclusion == "success"
+          and (.detection.steps_seen // 0) > 0)
+        | .path)
+      | unique) as $builtin_paths
+  | ($records
+      | map(select(.path | test("\\.lock\\.ya?ml$"))) | map(.path) | unique) as $agentic_paths
   | $records
   | map(
       if .detection.state != "present" then .
@@ -431,12 +481,23 @@ jq -s '
         | .detection.detector =
             (if $r.detection.marker_seen then "external"
              elif ($external_paths | index($r.path)) then "external"
-             # A completed job that ran its steps and never mentioned the
-             # marker really did use gh-aw'"'"'s built-in detection.
+             elif ($builtin_paths | index($r.path)) then "builtin"
+             # A completed *and successful* job that ran its steps and never
+             # mentioned the marker really did use gh-aw'"'"'s built-in
+             # detection. A failed or cancelled job with a truncated step
+             # list is inconclusive and falls through to the residual rules
+             # below.
              elif $r.detection.status == "completed"
-               and $r.detection.conclusion != "skipped"
-               and $r.detection.conclusion != "cancelled"
+               and $r.detection.conclusion == "success"
                and $r.detection.steps_seen > 0 then "builtin"
+             # No conclusive evidence either way. External is the compile-
+             # time default for `.lock.yml` workflows since gh-aw #54111, so
+             # from that cutover forward residual agentic runs count as
+             # external. Before the cutover the default was built-in, so
+             # residual runs stay `unknown` rather than being back-labelled.
+             # Non-agentic paths shouldn'"'"'t reach this branch (they were
+             # filtered out earlier), but stay defensive if they do.
+             elif $external_default_applies and ($agentic_paths | index($r.path)) then "external"
              else "unknown" end)
       end)
 ' "$RECORDS_FILE" >"${WORK_DIR}/records.json"
@@ -644,6 +705,8 @@ jq -n \
           verdict: ($vmap[(.id | tostring)] // null),
           reported: ($rmap[(.id | tostring)] // null)
         })) as $ext
+  | ($ext | map(.id | tostring)) as $ext_ids
+  | ($reasons | map(select(.run_id as $rid | $ext_ids | index($rid)))) as $ext_reasons
   | ($ext | map(select(.detection.status == "completed" and .detection.conclusion == "success"))) as $green
   | ($ext | map(select(.verdict != null and .verdict.result == "present"))) as $withverdict
   | ($withverdict | map(select(.verdict.prompt_injection or .verdict.secret_leak or .verdict.malicious_patch))) as $threats
@@ -713,7 +776,7 @@ jq -n \
         threat_rate_pct: (if ($withverdict | length) == 0 then 0
           else ((($threats | length) * 10000 / ($withverdict | length)) | round) / 100 end)
       },
-      reported_reasons: ($reasons | map(.reason // "unknown")
+      reported_reasons: ($ext_reasons | map(.reason // "unknown")
         | group_by(.) | map({key: .[0], value: length}) | from_entries),
       by_workflow: ($ext | group_by(.name) | map({
           workflow: .[0].name,
@@ -823,10 +886,13 @@ if t["runs_not_inspected"]:
     w(f"| Runs never inspected (budget exhausted) | {t['runs_not_inspected']} |")
 w("")
 w("All rates below are over the **external detector** population "
-  f"({t['external_detector_runs']} runs). A run is external when its `detection` "
-  "job showed the `Install threat-detect binary` step, or when another run of "
-  "the same workflow did that day — a job that was skipped or died during setup "
-  "reports no steps and would otherwise be miscounted.")
+  f"({t['external_detector_runs']} runs). Since gh-aw #54111 the external "
+  "detector is the compile-time default; a run counts as external when its "
+  "`detection` job showed the `Install threat-detect binary` step, when "
+  "another run of the same workflow did that day, or when the workflow is "
+  "`.lock.yml` and no run showed the built-in shape (a completed detection "
+  "job with steps but no marker). Runs on a workflow that opted out with "
+  "`features: gh-aw-detection: false` count as built-in.")
 if c["rates_cover_partial_day"]:
     w("")
     w("> **The rates below cover only the inspected part of the day.** "
@@ -894,7 +960,8 @@ w("")
 if s["reported_reasons"]:
     w("## Reasons reported by gh-aw")
     w("")
-    w("From the `[aw] Detection Runs` tracking issue (warning/failure conclusions only).")
+    w("From the `[aw] Detection Runs` tracking issue (warning/failure conclusions "
+      "only), restricted to runs in the external-detector population above.")
     w("")
     w("| Reason | Count |")
     w("|---|---|")

@@ -41,16 +41,32 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 TOTAL_RUNS = 1400  # > 1000, so the collector must bisect the day window.
+# A small "residual" workflow whose only detection jobs on the day are failed
+# setup-stage jobs — no marker step, no successful conclusion. It anchors two
+# properties: (a) a failed job is not conclusive built-in evidence, so the
+# workflow must not be classified as built-in; (b) with no evidence either
+# way, the classifier defaults it to `external` post-cutover and `unknown`
+# pre-cutover.
+RESIDUAL_RUN_IDS = tuple(range(TOTAL_RUNS + 1, TOTAL_RUNS + 11))
+RESIDUAL_WF_PATH = ".github/workflows/wf-residual.lock.yml"
+RESIDUAL_WF_NAME = "Workflow residual"
 
 
 def make_run(i):
     """Every third run is a non-agentic (.yml) run that the free path filter drops."""
-    agentic = i % 3 != 0
-    hour = ((i - 1) * 24) // TOTAL_RUNS
+    if i in RESIDUAL_RUN_IDS:
+        agentic = True
+        path = RESIDUAL_WF_PATH
+        name = RESIDUAL_WF_NAME
+    else:
+        agentic = i % 3 != 0
+        path = f".github/workflows/wf{i % 4}." + ("lock.yml" if agentic else "yml")
+        name = f"Workflow {i % 4}"
+    hour = ((i - 1) * 24) // TOTAL_RUNS if i <= TOTAL_RUNS else 23
     return {
         "id": i,
-        "name": f"Workflow {i % 4}",
-        "path": f".github/workflows/wf{i % 4}." + ("lock.yml" if agentic else "yml"),
+        "name": name,
+        "path": path,
         "event": "push",
         "status": "completed",
         "conclusion": "success",
@@ -62,7 +78,7 @@ def make_run(i):
     }
 
 
-RUNS = [make_run(i) for i in range(1, TOTAL_RUNS + 1)]
+RUNS = [make_run(i) for i in range(1, TOTAL_RUNS + 1 + len(RESIDUAL_RUN_IDS))]
 
 # Runs whose jobs / artifacts listings span more than one page.
 PAGINATED_JOBS_RUN = 11
@@ -82,6 +98,21 @@ def detection_job(run_id):
     marker step is therefore invisible on exactly the runs this report cares
     about most, which is what the workflow-level rollup has to repair.
     """
+    if run_id in RESIDUAL_RUN_IDS:
+        # Every residual run failed during Setup Scripts before the install
+        # step could run. No marker, no successful conclusion, no other
+        # workflow-scope evidence — the classifier must not read this as
+        # built-in evidence and must fall through to the residual rule.
+        return {
+            "id": 900000 + run_id,
+            "name": "detection",
+            "status": "completed",
+            "conclusion": "failure",
+            "started_at": "2026-08-17T01:00:00Z",
+            "completed_at": "2026-08-17T01:05:00Z",
+            "html_url": f"https://github.com/github/gh-aw/actions/runs/{run_id}/job/{900000 + run_id}",
+            "steps": [{"name": "Setup Scripts", "conclusion": "failure"}],
+        }
     bucket = run_id % 10
     if bucket == 0:
         return None  # no detection job at all
@@ -126,6 +157,8 @@ def detection_job(run_id):
 
 def detection_artifact(run_id):
     """None -> no artifact; 'expired' -> expired; else the published verdict."""
+    if run_id in RESIDUAL_RUN_IDS:
+        return None  # failed before publishing
     bucket = run_id % 10
     if bucket in (4, 5, 6):
         return None
@@ -289,8 +322,15 @@ class Handler(BaseHTTPRequestHandler):
             comments = []
             for run_id, reason in (
                 (2, "agent_failure"),
-                (12, "parse_error"),
+                # 22 is agentic (22 % 3 != 0) and external (22 % 4 != 1); 12
+                # would be non-agentic so its reason would rightly be filtered
+                # out of the external-scope reported_reasons.
+                (22, "parse_error"),
                 (206, "threat_detected"),
+                # run 5 is on the built-in workflow (5 % 4 == 1), so its
+                # tracked reason must not leak into the external-detector
+                # reported_reasons counts.
+                (5, "agent_failure"),
             ):
                 comments.append(
                     {
@@ -350,8 +390,8 @@ assert_eq() {
   [ "$1" = "$2" ] || fail "${3}: expected ${2}, got ${1}"
 }
 
-# --- window bisection: all 1400 runs found despite the 1000-result cap -------
-assert_eq "$(jq -r '.totals.runs_in_window' "$stats")" 1400 "runs_in_window"
+# --- window bisection: all 1410 runs (1400 baseline + 10 residual) found -----
+assert_eq "$(jq -r '.totals.runs_in_window' "$stats")" 1410 "runs_in_window"
 grep -q "bisecting" "${work}/stderr.log" ||
   fail "expected the collector to bisect the over-full window"
 
@@ -361,7 +401,10 @@ import json
 import sys
 
 s = json.load(open(sys.argv[1]))
-agentic = [i for i in range(1, 1401) if i % 3 != 0]
+# Runs 1..1400 follow the modular fixture; 1401..1410 are the residual
+# workflow (always agentic, failed-at-setup detection job).
+residual = list(range(1401, 1411))
+agentic = [i for i in range(1, 1401) if i % 3 != 0] + residual
 
 # Mirror of the fixture, so expectations are derived rather than hand-counted.
 def bucket(i):
@@ -370,12 +413,20 @@ def bucket(i):
 def external_wf(i):
     return i % 4 != 1
 
-present = [i for i in agentic if bucket(i) != 0]
-ext = [i for i in present if external_wf(i)]
-# Workflow wf1 never shows the marker. Its conclusive jobs are built-in; its
-# skipped / cancelled / in-progress jobs expose no steps and stay unknown.
-builtin = [i for i in present if not external_wf(i) and bucket(i) not in (3, 4, 5)]
-unknown_detector = [i for i in present if not external_wf(i) and bucket(i) in (3, 4, 5)]
+present = [i for i in agentic if i in residual or bucket(i) != 0]
+ext = [i for i in present if i not in residual and external_wf(i)]
+# Workflow wf1 never shows the marker but has completed detection jobs with
+# steps every day, so the symmetric built-in path rollup promotes every wf1
+# run (including its skipped / cancelled / in-progress ones with zero
+# observable steps) to `builtin`. No wf1 run should land in `unknown`.
+builtin = [i for i in present if i not in residual and not external_wf(i)]
+# The residual workflow's only detection jobs failed during Setup Scripts:
+# no marker, no successful conclusion. Under the tightened built-in evidence
+# rule it must not be classified as built-in. The default TARGET_DATE is
+# 2026-08-17, which is before the GHAW_EXTERNAL_DEFAULT_DATE cutover
+# (2026-08-20), so the residual runs must land in `unknown` rather than
+# being back-labelled as external.
+unknown_detector = residual
 
 def outcome(i):
     b = bucket(i)
@@ -391,13 +442,14 @@ def outcome(i):
 
 t = s["totals"]
 assert t["agentic_runs"] == len(agentic), t
-assert t["runs_without_detection_job"] == sum(1 for i in agentic if bucket(i) == 0), t
+assert t["runs_without_detection_job"] == sum(1 for i in agentic if i not in residual and bucket(i) == 0), t
 assert t["external_detector_runs"] == len(ext), t
 assert t["builtin_detector_runs"] == len(builtin), t
 assert t["indeterminate_detector_runs"] == len(unknown_detector), t
+assert t["indeterminate_detector_runs"] == len(residual), t
 assert t["runs_unknown"] == 0, t
 assert t["runs_not_inspected"] == 0, t
-assert len(builtin) > 0 and len(unknown_detector) > 0, (len(builtin), len(unknown_detector))
+assert len(builtin) > 0, len(builtin)
 
 outcomes = s["job_outcomes"]
 for name in ("failure", "cancelled", "skipped", "in_progress", "success"):
@@ -462,6 +514,10 @@ assert s["notable_runs"][0]["threats"], s["notable_runs"][0]
 
 assert s["reported_reasons"].get("agent_failure") == 1, s["reported_reasons"]
 assert s["reported_reasons"].get("parse_error") == 1, s["reported_reasons"]
+# The built-in wf1 comment for run 5 must not inflate the external-scope
+# reported_reasons; the fixture posts two agent_failure comments but only one
+# is for an external run.
+assert sum(s["reported_reasons"].values()) == 3, s["reported_reasons"]
 
 by_run = {r["run_id"]: r for r in s["notable_runs"]}
 assert by_run[2]["reported_reason"] == "agent_failure", by_run.get(2)
@@ -473,6 +529,55 @@ assert s["collection"]["complete"] is True, s["collection"]
 assert s["collection"]["rates_cover_partial_day"] is False, s["collection"]
 assert s["collection"]["rate_limit_sleeps"] >= 1, s["collection"]
 print("aggregation assertions OK")
+PY
+
+# --- post-cutover default: residual runs flip from `unknown` to `external` ---
+# Same fixture, same day, but with a GHAW_EXTERNAL_DEFAULT_DATE that predates
+# TARGET_DATE — so the collector applies the external-is-default rule for
+# residual `.lock.yml` runs.
+out_post="${work}/out-postcutover"
+GH_TOKEN=stub-token \
+  GITHUB_API_URL="http://127.0.0.1:${port}" \
+  TARGET_REPO="github/gh-aw" \
+  TARGET_DATE="2026-08-17" \
+  GHAW_EXTERNAL_DEFAULT_DATE="2026-08-15" \
+  OUTPUT_DIR="$out_post" \
+  REQUEST_PAUSE_SECONDS=0 \
+  DEADLINE_MINUTES=10 \
+  MAX_REQUESTS=20000 \
+  MAX_RESULT_FETCHES=20000 \
+  bash "$script" >"${work}/stderr-postcutover.log" 2>&1 || {
+  cat "${work}/stderr-postcutover.log" >&2
+  fail "collector exited non-zero for post-cutover run"
+}
+python3 - "${out_post}/stats.json" "$stats" <<'PY'
+import json
+import sys
+
+post = json.load(open(sys.argv[1]))
+pre = json.load(open(sys.argv[2]))
+residual = 10  # matches RESIDUAL_RUN_IDS
+
+# The only classification difference between the two runs must be the 10
+# residual `.lock.yml` runs moving from indeterminate to external.
+assert (
+    post["totals"]["external_detector_runs"]
+    == pre["totals"]["external_detector_runs"] + residual
+), (post["totals"], pre["totals"])
+assert post["totals"]["indeterminate_detector_runs"] == 0, post["totals"]
+assert post["totals"]["builtin_detector_runs"] == pre["totals"]["builtin_detector_runs"], (
+    post["totals"], pre["totals"]
+)
+# Failed setup steps on the residual runs must now count in the external
+# error rate (they weren't in `$ext` before).
+assert post["job_outcomes"].get("failure", 0) >= pre["job_outcomes"].get("failure", 0) + residual, (
+    post["job_outcomes"], pre["job_outcomes"]
+)
+# And the missing verdicts must show up as `absent` in verdict availability.
+assert post["verdict_availability"].get("absent", 0) >= pre["verdict_availability"].get("absent", 0) + residual, (
+    post["verdict_availability"], pre["verdict_availability"]
+)
+print("post-cutover assertions OK")
 PY
 
 # --- summary is bounded and renders the headline numbers --------------------
