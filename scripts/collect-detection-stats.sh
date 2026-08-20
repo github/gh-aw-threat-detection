@@ -111,6 +111,25 @@ esac
 WINDOW_FROM="${TARGET_DATE}T00:00:00Z"
 WINDOW_TO="${TARGET_DATE}T23:59:59Z"
 
+# gh-aw PR #54111 (merged 2026-08-20T01:27:02Z) made the external threat
+# detector the compile-time default. Runs on days before the cutover cannot
+# assume that default: workflows compiled from earlier gh-aw versions used
+# built-in detection when no `gh-aw-detection` flag was present. When the
+# collector is re-run for a pre-cutover day, keep residual `.lock.yml` runs
+# with no direct evidence in the `unknown` bucket rather than mis-labelling
+# them external. Overrideable so a future flip can be recorded without a
+# code change.
+GHAW_EXTERNAL_DEFAULT_DATE="${GHAW_EXTERNAL_DEFAULT_DATE:-2026-08-20}"
+case "$GHAW_EXTERNAL_DEFAULT_DATE" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+  *) die "GHAW_EXTERNAL_DEFAULT_DATE must be YYYY-MM-DD, got: ${GHAW_EXTERNAL_DEFAULT_DATE}" ;;
+esac
+if [ "$TARGET_DATE" \< "$GHAW_EXTERNAL_DEFAULT_DATE" ]; then
+  EXTERNAL_DEFAULT_APPLIES=false
+else
+  EXTERNAL_DEFAULT_APPLIES=true
+fi
+
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 mkdir -p "$OUTPUT_DIR"
@@ -420,19 +439,27 @@ done < <(jq -c '.[]' "${WORK_DIR}/agentic-runs.json")
 # reach it. Classifying per run would therefore drop exactly the failures this
 # report exists to measure (skipped jobs, cancellations, setup failures) into
 # the wrong bucket. Roll the evidence up to the workflow path instead, both
-# ways: if any run of a workflow path shows the marker that day, every
-# detection job of that path used the external detector; if any run shows a
-# completed detection job with steps but no marker, the path opted out via
-# `features: gh-aw-detection: false` and every detection job used the built-in
-# path.
+# ways.
+#
+# External evidence: any run on the path emitted the `Install threat-detect
+# binary` step. One such observation is enough — the step is emitted at
+# compile time and the workflow can't switch detectors mid-day.
+#
+# Built-in evidence: a run on the path had a *successful* `detection` job with
+# steps but no marker. `success` matters: a job that failed during
+# `Setup Scripts` (before the install step's position) is not evidence that
+# the workflow opted out — its own step list is truncated for the same reason
+# skipped and cancelled jobs' are, so treating it as built-in evidence would
+# mis-classify sibling runs on external workflows that had a bad setup day.
+# A completed `success` job, on the other hand, ran to the end of the
+# detection recipe; if it never mentioned the marker it really is built-in.
 #
 # Since gh-aw PR #54111 the external detector is the compile-time default, so
-# a `.lock.yml` run with no evidence either way is far more likely external
-# than built-in. Anything still unresolved after both rollups defaults to
-# external for `.lock.yml` runs (the day-scope filter is already restricted to
-# `.lock.yml`, so this covers every agentic run) and is otherwise reported as
-# `unknown`; nothing is silently marked built-in.
-jq -s '
+# an agentic `.lock.yml` run with no evidence either way is far more likely
+# external than built-in. On or after `$default_date` we default residual
+# agentic runs to `external`; before the cutover we leave them `unknown`
+# rather than back-date the new default onto historical runs.
+jq -s --argjson external_default_applies "$EXTERNAL_DEFAULT_APPLIES" '
   . as $records
   | ($records | map(select(.detection.marker_seen == true) | .path) | unique) as $external_paths
   | ($records
@@ -440,8 +467,7 @@ jq -s '
           .detection.state == "present"
           and .detection.marker_seen == false
           and .detection.status == "completed"
-          and .detection.conclusion != "skipped"
-          and .detection.conclusion != "cancelled"
+          and .detection.conclusion == "success"
           and (.detection.steps_seen // 0) > 0)
         | .path)
       | unique) as $builtin_paths
@@ -456,18 +482,22 @@ jq -s '
             (if $r.detection.marker_seen then "external"
              elif ($external_paths | index($r.path)) then "external"
              elif ($builtin_paths | index($r.path)) then "builtin"
-             # A completed job that ran its steps and never mentioned the
-             # marker really did use gh-aw'"'"'s built-in detection.
+             # A completed *and successful* job that ran its steps and never
+             # mentioned the marker really did use gh-aw'"'"'s built-in
+             # detection. A failed or cancelled job with a truncated step
+             # list is inconclusive and falls through to the residual rules
+             # below.
              elif $r.detection.status == "completed"
-               and $r.detection.conclusion != "skipped"
-               and $r.detection.conclusion != "cancelled"
+               and $r.detection.conclusion == "success"
                and $r.detection.steps_seen > 0 then "builtin"
-             # No evidence either way. External is the compile-time default
-             # for `.lock.yml` workflows since gh-aw #54111, so residual
-             # agentic runs count as external. Non-agentic paths shouldn'"'"'t
-             # reach this branch (they were filtered out earlier), but stay
-             # defensive if they do.
-             elif ($agentic_paths | index($r.path)) then "external"
+             # No conclusive evidence either way. External is the compile-
+             # time default for `.lock.yml` workflows since gh-aw #54111, so
+             # from that cutover forward residual agentic runs count as
+             # external. Before the cutover the default was built-in, so
+             # residual runs stay `unknown` rather than being back-labelled.
+             # Non-agentic paths shouldn'"'"'t reach this branch (they were
+             # filtered out earlier), but stay defensive if they do.
+             elif $external_default_applies and ($agentic_paths | index($r.path)) then "external"
              else "unknown" end)
       end)
 ' "$RECORDS_FILE" >"${WORK_DIR}/records.json"

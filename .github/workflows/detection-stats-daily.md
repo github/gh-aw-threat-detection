@@ -129,17 +129,22 @@ issue: call the `noop` safe-output tool with a short message such as
 ## What the numbers mean
 
 - **External detector runs** — runs whose `detection` job used the `threat-detect`
-  binary. Since gh-aw #54111 the external detector is the compile-time default,
-  so this covers every `.lock.yml` run unless the workflow opts out with
-  `features: gh-aw-detection: false`. Detection is decided per **workflow**, not
-  per run: a job that was skipped, cancelled, or died during setup reports few
-  or no steps, so the `Install threat-detect binary` marker is invisible on
-  exactly the runs that matter most. If any run of a workflow showed the marker
-  that day, all of that workflow's detection jobs count as external; if any run
-  showed a completed detection job with steps but no marker, all of that
-  workflow's detection jobs count as built-in. Agentic runs with neither signal
-  on the day default to external (the new gh-aw default), and only runs the
-  evidence still cannot settle are reported as **detector could not be
+  binary. Since gh-aw #54111 (merged 2026-08-20) the external detector is the
+  compile-time default, so this covers every `.lock.yml` run unless the
+  workflow opts out with `features: gh-aw-detection: false`. Detection is
+  decided per **workflow**, not per run: a job that was skipped, cancelled, or
+  died during setup reports few or no steps, so the `Install threat-detect
+  binary` marker is invisible on exactly the runs that matter most. If any
+  run of a workflow showed the marker that day, all of that workflow's
+  detection jobs count as external; if any run had a **successful** detection
+  job with steps but no marker, all of that workflow's detection jobs count
+  as built-in. A failed or cancelled job is inconclusive built-in evidence
+  (it may have died before the install step's position), so it is not enough
+  to flip a workflow to built-in on its own. On or after the cutover date,
+  agentic runs with neither signal default to external (matching the new
+  gh-aw default); on **prior** days, the collector keeps them `unknown`
+  rather than back-labelling residual runs onto the new default. Only runs
+  the evidence still cannot settle are reported as **detector could not be
   determined** — never folded into either bucket.
 - **Job outcomes** — the `detection` job's `conclusion` (`success`, `failure`,
   `cancelled`, `skipped`, `timed_out`, `action_required`) or `in_progress` when
