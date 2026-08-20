@@ -63,7 +63,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write the JSON result (defaults to stdout). Its `reasons` array is always empty; see [Where the reasons go](#where-the-reasons-go)
 - `--full-output` — Path to write the JSON result *including* reasons. Defaults to the `--output` path with `_full` inserted before the extension (`detection_result.json` → `detection_result_full.json`); pass an explicitly empty value to disable it. **Hosts must not upload this file**
-- `--retries` — Retries for malformed detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
+- `--retries` — Retries for malformed or ineligible detection outputs. Default: `3` (env: `THREAT_DETECTION_RETRIES`)
 - `--step-summary` — Deprecated and ignored. Accepted so hosts that still pass it (older `gh-aw` releases) do not fail; the detector no longer writes a GitHub Actions step summary
 - `--version` — Print version and exit
 
@@ -71,9 +71,11 @@ threat-detect [flags] <artifacts-dir>
 verdict in-session by invoking the `threat_detection_result` tool, which writes
 a strict JSON object matching the result contract to an out-of-band result sink;
 the detector cancels the engine subprocess as soon as a valid result is written.
-The verdict is read exclusively from that sink; if no sink result is produced, a
-self-correction prompt is retried (`--retries`, once by default), and retry
-exhaustion is treated as an infrastructure error.
+The verdict is read exclusively from that sink; if no sink result is produced,
+or the reported verdict is rejected on structural eligibility (see [Structural
+eligibility](#structural-eligibility)), a self-correction prompt is retried
+(`--retries`, three times by default), and retry exhaustion is treated as an
+infrastructure error.
 
 #### In-session result reporting (`threat_detection_result`)
 
@@ -117,6 +119,28 @@ exclusively from the sink; it does not scrape the engine transcript.
 - `0` — Safe (no threats detected)
 - `1` — Threat detected
 - `2` — Infrastructure/configuration error
+
+#### Structural eligibility
+
+Each threat category is only structurally raisable against an artifact bundle
+that could plausibly exhibit it. `threat_detection_result` enforces this before
+recording:
+
+- `prompt_injection` requires at least one non-empty untrusted region in the
+  prompt analysis (an interpolated placeholder, an import-tree entry, or the
+  activation-context summary). A workflow whose prompt received no untrusted
+  content cannot exhibit prompt injection, and the report is rejected.
+- `malicious_patch` requires at least one `.patch` or `.bundle` file in the
+  artifact bundle. A report claiming a malicious patch when no patch was
+  produced is rejected. Framework-rejected safe-output validation errors are
+  the guardrails working; they are not patches.
+- `secret_leak` requires either a non-empty agent output or at least one patch
+  or bundle — a channel a secret could have leaked through.
+
+An ineligible report is treated the same as a malformed one: the tool prints
+`THREAT_DETECTION_RESULT_ERROR:` naming the ineligible category and what would
+make it eligible, and the model re-answers within the same session. See spec
+TD-10g.
 
 The detector also emits a single machine-readable status line to stderr at the end
 of every detection run: `THREAT_DETECTION_STATUS: reason=<reason> exit=<code>`.
@@ -165,7 +189,7 @@ log consumers must ignore any `THREAT_DETECTION_*` marker that carries the
 `[engine] ` prefix.
 
 ```text
-[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
+[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=3
 [threat-detect] artifacts loaded: dir=/tmp/gh-aw/threat-detection prompt_bytes=4096 agent_output_bytes=812 patch_files=1 all_primary_inputs_missing=false
 [threat-detect] artifact inventory (3 entries):
 [threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true

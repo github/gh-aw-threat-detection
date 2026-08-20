@@ -177,6 +177,38 @@ rewriting engine output, which conflicts with the real-time forwarding TD-20a
 mandates; it is therefore out of scope for this requirement, which governs only
 the files the detector itself writes.
 
+**TD-10g**: The implementation MUST enforce structural eligibility for each
+threat category against the loaded artifact bundle, rejecting a reported result
+that sets an ineligible category to `true` as a correctable error (TD-10a)
+rather than recording it. The following categories are eligible only under the
+stated preconditions:
+
+- `prompt_injection` is eligible only when at least one non-empty untrusted
+  input region is present in the prompt analysis (a runtime-interpolated
+  placeholder, an import-tree entry, or the activation-context summary). By
+  definition, prompt injection requires untrusted content to have reached the
+  instruction channel; a workflow whose prompt received no untrusted content
+  cannot exhibit it, and instruction non-compliance from the agent under those
+  conditions is a quality signal, not a security verdict.
+- `malicious_patch` is eligible only when the artifact bundle contains at least
+  one `.patch` or `.bundle` file. A framework-rejected safe-output validation
+  error is the guardrail working and MUST NOT be treated as a patch.
+- `secret_leak` is eligible only when the artifact bundle contains at least
+  one channel a secret could have leaked through — a non-empty agent output
+  file or at least one patch or bundle file.
+
+Eligibility MUST be evaluated against the same artifact bundle and prompt
+analysis the engine received, and its enforcement MUST be structural — no prompt
+wording alone MUST be sufficient to ship a structurally impossible verdict such
+as `malicious_patch=true` with zero patch files. When a report is rejected on
+eligibility, the correction message MUST name the ineligible category and
+explain what would make it eligible, so the model can re-answer within the same
+session. The default prompt template MUST additionally document the eligibility
+rules and the taxonomic distinctions they enforce (instruction non-compliance is
+not a security verdict; framework-rejected validation errors are defenses
+working; `prompt_injection` requires an untrusted origin), so eligible verdicts
+are the norm rather than the exception.
+
 
 ---
 

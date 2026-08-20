@@ -95,6 +95,17 @@ func runReport(args []string) int {
 		return reportExitInvalid
 	}
 
+	// Eligibility: reject structurally impossible verdicts (a threat class set
+	// true against an artifact bundle that cannot exhibit it). This makes the
+	// contract deterministic — no amount of prompt wording can produce
+	// `malicious_patch=true` with zero patch files or `prompt_injection=true`
+	// with zero untrusted regions — and feeds the rejection back to the model
+	// as a normal correction so it can re-answer within the same session.
+	if msg := detector.EligibilityFromEnv().Validate(promptInjection, secretLeak, maliciousPatch); msg != "" {
+		reportError(msg)
+		return reportExitInvalid
+	}
+
 	// Idempotent: first valid write wins.
 	if _, err := detector.ReadResultFile(resultFile); err == nil {
 		fmt.Println("THREAT_DETECTION_RESULT_RECORDED: result already recorded; analysis complete; stop now and produce no further output.")

@@ -23,6 +23,11 @@ type AnalyzeOptions struct {
 	// the engine provisions the wrapper on PATH, sets THREAT_DETECTION_RESULT_FILE,
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
+	// Eligibility, when non-nil, is transported to the report-result subprocess
+	// so it can reject structurally impossible verdicts (e.g. malicious_patch
+	// with zero patch files). When nil, the subprocess defaults to permissive
+	// eligibility — callers that predate the field are not tightened.
+	Eligibility *detector.Eligibility
 }
 
 // Engine represents an AI engine capable of analyzing content for threats.
@@ -132,6 +137,7 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	env = append(env, toolEnv...)
 
 	if harnessPath, ok := copilotHarnessPath(); ok {
@@ -157,6 +163,7 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	enableResultTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
@@ -181,6 +188,7 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	provider := codexForcedProvider(codexConfigPath())
 
 	if harnessPath, ok := codexHarnessPath(); ok {
@@ -197,12 +205,23 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
 // sink path is configured, returning the env additions and a cleanup func. When
-// sinkPath is empty it returns no env and a no-op cleanup.
+// sinkPath is empty it returns no env and a no-op cleanup. The eligibility, if
+// non-nil, is appended to the env so the subprocess can reject structurally
+// impossible verdicts.
 func maybeProvisionResultTool(sinkPath string) (env []string, cleanup func(), err error) {
 	if sinkPath == "" {
 		return nil, func() {}, nil
 	}
 	return provisionResultTool(sinkPath)
+}
+
+// appendEligibilityEnv appends eligibility transport variables to env when
+// eligibility is non-nil, returning the extended slice.
+func appendEligibilityEnv(env []string, eligibility *detector.Eligibility) []string {
+	if eligibility == nil {
+		return env
+	}
+	return append(env, eligibility.Env()...)
 }
 
 func copilotCommand(promptPath string) (string, []string) {

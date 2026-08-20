@@ -156,7 +156,7 @@ func run() (code int) {
 	// and dropped instead.
 	flag.StringVar(&stepSummary, "step-summary", "", "Deprecated and ignored; the detector no longer writes a GitHub Actions step summary")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
-	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
+	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 3), "Retries for malformed or ineligible detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		// -h/-help prints usage and exits cleanly with no status line.
 		if errors.Is(err, flag.ErrHelp) {
@@ -404,7 +404,7 @@ func run() (code int) {
 	os.Remove(sinkPath)
 	defer os.Remove(sinkPath)
 
-	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries)
+	result, err := analyzeWithRetries(ctx, eng, prompt, sinkPath, retries, promptAnalysis, arts)
 	if err != nil {
 		// The message can embed captured engine output (engineExitError), which
 		// is untrusted; stderrf renders it inert.
@@ -492,10 +492,13 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 	)
 }
 
-func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int) (*detector.Result, error) {
+func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries int, analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) (*detector.Result, error) {
 	if sinkPath == "" {
 		return nil, fmt.Errorf("result sink path is required for detection")
 	}
+	eligibility := detector.ComputeEligibility(arts, analysis)
+	stderrf("[threat-detect] eligibility: prompt_injection=%t secret_leak=%t malicious_patch=%t",
+		eligibility.PromptInjection, eligibility.SecretLeak, eligibility.MaliciousPatch)
 	attempts := retries + 1
 	if attempts < 1 {
 		attempts = 1
@@ -506,7 +509,10 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		stderrf("[threat-detect] detection attempt %d of %d", i+1, attempts)
 		// Remove any stale sink result before each attempt.
 		os.Remove(sinkPath)
-		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{ResultSinkPath: sinkPath}); err != nil {
+		if _, err := eng.Analyze(ctx, currentPrompt, engine.AnalyzeOptions{
+			ResultSinkPath: sinkPath,
+			Eligibility:    &eligibility,
+		}); err != nil {
 			return nil, fmt.Errorf("%w: %w", errEngineExecution, err)
 		}
 		// The verdict must be reported in-session through the

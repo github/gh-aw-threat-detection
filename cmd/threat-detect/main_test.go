@@ -451,7 +451,7 @@ func TestRunReportsArtifactInventoryOnStderr(t *testing.T) {
 		"aw-prompts/prompt.txt",
 		"agent_output.json",
 		"[threat-detect] prompt built:",
-		"[threat-detect] detection attempt 1 of 2",
+		"[threat-detect] detection attempt 1 of 4",
 		"THREAT_DETECTION_STATUS: reason=result_recorded exit=0",
 	} {
 		if !strings.Contains(stderr, want) {
