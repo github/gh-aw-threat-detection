@@ -158,7 +158,7 @@ func run() (code int) {
 	// and dropped instead.
 	flag.StringVar(&stepSummary, "step-summary", "", "Deprecated and ignored; the detector no longer writes a GitHub Actions step summary")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
-	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 3), "Retries for malformed or ineligible detection outputs (env: THREAT_DETECTION_RETRIES)")
+	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed or ineligible detection outputs (env: THREAT_DETECTION_RETRIES)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		// -h/-help prints usage and exits cleanly with no status line.
 		if errors.Is(err, flag.ErrHelp) {

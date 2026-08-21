@@ -63,7 +63,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write the JSON result (defaults to stdout). Its `reasons` array is always empty; see [Where the reasons go](#where-the-reasons-go)
 - `--full-output` — Path to write the JSON result *including* reasons. Defaults to the `--output` path with `_full` inserted before the extension (`detection_result.json` → `detection_result_full.json`); pass an explicitly empty value to disable it. **Hosts must not upload this file**
-- `--retries` — Retries for malformed or ineligible detection outputs. Default: `3` (env: `THREAT_DETECTION_RETRIES`)
+- `--retries` — Retries for malformed or ineligible detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
 - `--step-summary` — Deprecated and ignored. Accepted so hosts that still pass it (older `gh-aw` releases) do not fail; the detector no longer writes a GitHub Actions step summary
 - `--version` — Print version and exit
 
@@ -74,7 +74,7 @@ the detector cancels the engine subprocess as soon as a valid result is written.
 The verdict is read exclusively from that sink; if no sink result is produced,
 or the reported verdict is rejected on structural eligibility (see [Structural
 eligibility](#structural-eligibility)), a self-correction prompt is retried
-(`--retries`, three times by default), and retry exhaustion is treated as an
+(`--retries`, once by default), and retry exhaustion is treated as an
 infrastructure error.
 
 #### In-session result reporting (`threat_detection_result`)
@@ -211,7 +211,7 @@ log consumers must ignore any `THREAT_DETECTION_*` marker that carries the
 `[engine] ` prefix.
 
 ```text
-[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=3
+[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
 [threat-detect] artifacts loaded: dir=/tmp/gh-aw/threat-detection prompt_bytes=4096 agent_output_bytes=812 patch_files=1 all_primary_inputs_missing=false
 [threat-detect] artifact inventory (3 entries):
 [threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true
