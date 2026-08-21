@@ -45,6 +45,35 @@ This project is designed to help reduce risk when running AI agent workflows by 
 
 Do not treat a "safe" result as a security guarantee. Use the output as one signal in a broader security review process.
 
+### What this layer is for
+
+Threat detection is a **gate on downstream actions**, not a post-hoc audit of
+the agent's session. It runs after the agent finishes and before the
+safe-output job, and it decides whether the effects the agent is asking for —
+issues, comments, pull requests, patches — may be applied. What it analyzes is
+the staged artifact bundle, which is the record of what the agent wants
+published.
+
+So anything the agent already **did** during its session is outside what this
+can gate, because it happened before detection ran:
+
+- **Mid-run injection sources are not staged.** MCP tool results, fetched web
+  pages, and the engine transcript never become artifacts, so an injection that
+  arrived only through one of those leaves no trace in the analyzed inputs.
+- **Mid-run exfiltration never enters the bundle.** A secret sent out over an
+  outbound request or an MCP call is gone by the time detection runs; there is
+  no artifact for it to appear in.
+
+Neither is a gap this component intends to close. Those risks belong to the
+controls that are live *while* the agent runs — network egress restriction (the
+[agentic workflow firewall](https://github.com/github/gh-aw-firewall)) and limits on which
+MCP servers and tools are reachable. Threat detection complements those controls
+and does not substitute for them.
+
+This is also why the [structural eligibility](#structural-eligibility) rules are
+written in terms of artifacts: the bundle is the evidence that exists at the
+moment the gate is applied.
+
 ## Usage
 
 ### CLI

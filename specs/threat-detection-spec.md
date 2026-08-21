@@ -23,6 +23,33 @@ This specification covers:
 - Configuration interface
 - Version compatibility
 
+### 1.3 Position in the Defense Stack
+
+Threat detection is a **gate on downstream actions**, not a post-hoc forensic
+audit of the agent's session. It runs after the agent finishes and before the
+safe-output job executes, and its purpose is to decide whether the effects the
+agent is asking for — issues, comments, pull requests, patches — may be
+applied. A conforming implementation analyzes the staged artifact bundle
+(TD-17), which is the record of what the agent is asking to have published.
+
+It follows that actions the agent completed **during** its session are outside
+what this layer can gate, because they have already happened by the time it
+runs. In particular, content that reaches the agent only mid-run — MCP tool
+results, fetched web pages, and the engine transcript — is not staged as an
+artifact, so an injection delivered exclusively through one of those channels
+leaves no evidence in the analyzed inputs; and a secret transmitted mid-run
+through an outbound request or an MCP call never enters the artifact bundle at
+all. Neither is detectable here, and an implementation MUST NOT be understood to
+claim otherwise.
+
+These in-session risks are the responsibility of controls that are active while
+the agent runs: network egress restriction (see the agentic workflow firewall)
+and constraints on which MCP servers and tools are reachable. Threat detection
+is complementary to those controls and MUST NOT be treated as a substitute for
+them. Conversely, the structural eligibility rules in TD-10g are stated in terms
+of the artifact bundle precisely because that bundle is the evidence available
+at the point the gate is applied.
+
 ---
 
 ## 2. Threat Detection Requirements
