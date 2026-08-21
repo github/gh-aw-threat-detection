@@ -173,7 +173,7 @@ func (e Eligibility) Validate(promptInjection, secretLeak, maliciousPatch bool) 
 	}
 	if secretLeak && !e.SecretLeak {
 		problems = append(problems,
-			"--secret-leak=true is not eligible: the agent output is empty and no patch, bundle, or comment-memory file was produced, so there is no channel a secret could have leaked through.")
+			"--secret-leak=true is not eligible: the agent produced no output at all — agent_output.json (which carries every safe output, including create_issue, add_comment and create_pull_request bodies) is empty, and no patch, bundle, or comment-memory file was staged — so there is no channel a secret could have reached.")
 	}
 	if maliciousPatch && !e.MaliciousPatch {
 		problems = append(problems,

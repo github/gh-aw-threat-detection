@@ -533,7 +533,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 			if msg := eligibility.ValidateResult(result); msg != "" {
 				lastErr = fmt.Errorf("recorded verdict is not structurally eligible: %s", msg)
 				stderrf("[threat-detect] attempt %d recorded an ineligible verdict; discarding: %s", i+1, sanitizeLogValue(msg))
-				currentPrompt = detector.BuildCorrectionPrompt(prompt, eligibilityCorrectionPrefix, msg, eligibilityCorrectionInstruction)
+				currentPrompt = detector.BuildTrustedCorrectionPrompt(prompt, eligibilityCorrectionPrefix, msg, eligibilityCorrectionInstruction)
 				continue
 			}
 			stderrf("[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool", i+1)

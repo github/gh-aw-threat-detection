@@ -206,3 +206,30 @@ func TestEligibilityValidate(t *testing.T) {
 		})
 	}
 }
+
+// When every category is rejected at once the joined explanation is longer than
+// the bound applied to untrusted correction feedback. It must still reach the
+// model whole: a model told only that its verdict was rejected, without the
+// reason for each category, cannot re-answer them.
+func TestValidateMessageSurvivesCorrectionPrompt(t *testing.T) {
+	msg := Eligibility{}.Validate(true, true, true)
+	if msg == "" {
+		t.Fatal("expected all three categories to be reported ineligible")
+	}
+	if len(msg) <= 512 {
+		t.Fatalf("expected the combined message to exceed the untrusted-feedback bound, got %d bytes", len(msg))
+	}
+
+	built := BuildTrustedCorrectionPrompt("PROMPT", "rejected", msg, "instruction")
+	if !strings.Contains(built, msg) {
+		t.Error("trusted correction prompt truncated detector-authored feedback")
+	}
+	for _, flag := range []string{"--prompt-injection=true", "--secret-leak=true", "--malicious-patch=true"} {
+		if !strings.Contains(built, flag) {
+			t.Errorf("correction prompt lost the explanation for %s", flag)
+		}
+	}
+	if strings.Contains(built, "(truncated)") {
+		t.Error("trusted correction prompt should not carry a truncation marker")
+	}
+}
