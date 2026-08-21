@@ -530,16 +530,26 @@ can be killed without relying on the enclosing GitHub Actions job timeout.
 - The per-attempt wall-clock timeout is exposed via the `--engine-timeout` flag
   and the `THREAT_DETECTION_ENGINE_TIMEOUT` environment variable, accepts a Go
   duration string (e.g. `5m`, `300s`), and defaults to `5m`. A value of `0`
-  disables the cap. The timeout applies to each engine invocation
-  independently, so a retry (see the `--retries` flag) gets a fresh budget.
-- When the deadline fires, the detector MUST kill the engine subprocess and
+  disables the cap. Negative values MUST be refused as `config_error` (a
+  negative flag silently bypassing the kill switch would defeat the point of
+  adding it).
+- When the deadline fires, the detector MUST kill the engine subprocess **and
+  every descendant it spawned** (harness paths run the actual engine CLI as a
+  grandchild under `node`; killing only the direct process would leave the
+  runaway model burning credits after the detector has moved on). This is
+  implemented by starting the subprocess as the leader of a new process group
+  and delivering `SIGKILL` to the entire group on cancellation. The detector
   MUST first check the result sink for a verdict written just before the
-  deadline. If the sink holds a valid verdict, the verdict wins over the
-  timeout and the run reports `result_recorded`. Otherwise the attempt is
-  treated as a failure and the retry loop applies; if all attempts time out
-  the run exits `2` with the status reason `engine_timeout`, which is distinct
-  from `engine_error` so daily statistics can separate runaway-model kills
-  from other engine failures.
+  deadline: if the sink holds a valid verdict, the verdict wins over the
+  timeout and the run reports `result_recorded`.
+- A wall-clock timeout MUST be terminal — the retry loop MUST NOT re-invoke
+  the engine after `errEngineTimeout`. A same-prompt, same-model retry of a
+  runaway is overwhelmingly likely to run away again, so the retry would only
+  double the credit spend. The run exits `2` with the status reason
+  `engine_timeout`, which the `conclude` subcommand maps into the gh-aw
+  `agent_failure` category (aggregation) while the detector's own status line
+  and per-attempt outcome logging preserve the distinct `engine_timeout`
+  reason for local debugging.
 - The turn cap is exposed via the `--max-turns` flag and the
   `THREAT_DETECTION_MAX_TURNS` environment variable, and MUST also honor
   `gh-aw`'s universal `GH_AW_MAX_TURNS` as a fallback so a single turn budget
@@ -547,13 +557,23 @@ can be killed without relying on the enclosing GitHub Actions job timeout.
   too. The default is `20`; `0` disables the cap. The value is exported to the
   engine subprocess as `GH_AW_MAX_TURNS` (which the Claude, Codex, and Copilot
   harnesses read) and additionally passed as an explicit `--max-turns` flag to
-  engines whose bare CLI accepts one (Claude). The bare Copilot CLI does not
-  accept a turn-limit flag, so on that path the wall-clock timeout is the
-  only enforceable cap; the detector MUST log a diagnostic when a non-zero
-  `--max-turns` is set for the bare Copilot CLI path so the caller is not
-  misled about which control is active.
+  engines whose bare CLI accepts one (Claude). When the cap is disabled, the
+  detector MUST scrub any inherited `GH_AW_MAX_TURNS` from the engine
+  subprocess's environment so a caller who explicitly disables the cap cannot
+  have it silently reimposed by an ambient parent-process variable. The bare
+  Copilot CLI does not accept a turn-limit flag, so on that path the
+  wall-clock timeout is the only enforceable cap; the detector MUST log a
+  diagnostic when a non-zero `--max-turns` is set for that path.
+- The `--retries` flag defaults to `0`. A from-scratch retry rarely fixes
+  anything the in-session iteration on the `threat_detection_result` tool
+  wrapper does not already handle: the engine CLIs already retry transient
+  provider errors internally, and the tool wrapper's non-zero exit + stderr
+  already lets the agent iterate without a subprocess restart. Callers who
+  want belt-and-suspenders retries for the "engine died before it could think"
+  case (crash, `max-turns` exhaustion, truncated response) MAY set
+  `--retries` explicitly; the timeout-terminal rule above still applies.
 - Both budgets are per-attempt, not aggregate. The compile-time defaults
-  (`5m` × `retries+1` attempts) MUST comfortably fit inside the enclosing
+  (`5m` per attempt, `retries=0`) MUST comfortably fit inside the enclosing
   GitHub Actions job timeout used by the `gh-aw` smoke workflows (currently
   15 minutes), leaving headroom for artifact preparation and result upload.
 

@@ -182,11 +182,12 @@ func run() (code int) {
 	// and dropped instead.
 	flag.StringVar(&stepSummary, "step-summary", "", "Deprecated and ignored; the detector no longer writes a GitHub Actions step summary")
 	flag.BoolVar(&version, "version", false, "Print version and exit")
-	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 1), "Retries for malformed detection outputs (env: THREAT_DETECTION_RETRIES)")
+	flag.IntVar(&retries, "retries", envInt("THREAT_DETECTION_RETRIES", 0),
+		"Retries after a failed detection attempt. Default 0 because a from-scratch retry rarely fixes anything (the engine CLIs already retry transient provider errors internally, and the in-session iteration on the threat_detection_result tool wrapper already handles bad tool calls without restarting). --engine-timeout is always terminal regardless of this value (env: THREAT_DETECTION_RETRIES)")
 	flag.IntVar(&maxTurns, "max-turns", envMaxTurns(defaultMaxTurns),
 		"Maximum agentic tool-use turns per attempt; 0 disables the cap. Exported to the engine subprocess as GH_AW_MAX_TURNS and passed as --max-turns to engines whose CLI accepts it (env: THREAT_DETECTION_MAX_TURNS, GH_AW_MAX_TURNS)")
 	flag.DurationVar(&engineTimeout, "engine-timeout", envDuration("THREAT_DETECTION_ENGINE_TIMEOUT", defaultEngineTimeout),
-		"Wall-clock timeout per detection attempt (e.g. 5m, 300s); 0 disables. On expiry the engine subprocess is killed; if all attempts time out the run exits 2 with reason engine_timeout (env: THREAT_DETECTION_ENGINE_TIMEOUT)")
+		"Wall-clock timeout per detection attempt (e.g. 5m, 300s); 0 disables. On expiry the engine subprocess (and its harness descendants) are killed; the run exits 2 with reason engine_timeout without retrying, because a runaway model is overwhelmingly likely to run away again (env: THREAT_DETECTION_ENGINE_TIMEOUT)")
 	if err := flag.CommandLine.Parse(os.Args[1:]); err != nil {
 		// -h/-help prints usage and exits cleanly with no status line.
 		if errors.Is(err, flag.ErrHelp) {
@@ -199,6 +200,27 @@ func run() (code int) {
 	if version {
 		fmt.Printf("threat-detect %s\n", detector.Version)
 		return exitSafe
+	}
+
+	// Reject negative bounds: the documented contract is that only 0 disables a
+	// cap, and a negative value silently bypassing the kill switch would defeat
+	// the whole point of adding one. Env-variable parsing already rejects
+	// negatives (and falls back to the default); this closes the same gap for
+	// the flags.
+	if retries < 0 {
+		stderrf("Error: --retries must be >= 0 (got %d)", retries)
+		reason = reasonConfigError
+		return exitError
+	}
+	if maxTurns < 0 {
+		stderrf("Error: --max-turns must be >= 0 (got %d); use 0 to disable the cap", maxTurns)
+		reason = reasonConfigError
+		return exitError
+	}
+	if engineTimeout < 0 {
+		stderrf("Error: --engine-timeout must be >= 0 (got %s); use 0 to disable the cap", engineTimeout)
+		reason = reasonConfigError
+		return exitError
 	}
 
 	stepSummaryProvided := false
@@ -559,7 +581,7 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 		result, readErr := detector.ReadResultFile(sinkPath)
 		attemptCancel()
 		if readErr == nil {
-			stderrf("[threat-detect] attempt %d recorded a verdict via the threat_detection_result tool", i+1)
+			stderrf("[threat-detect] attempt %d outcome=recorded", i+1)
 			return result, nil
 		}
 
@@ -569,20 +591,17 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 			// ctx is checked first: if the user cancelled the whole run, that
 			// takes precedence over any per-attempt deadline.
 			if ctx.Err() == nil && attemptCtx.Err() == context.DeadlineExceeded {
-				stderrf("[threat-detect] attempt %d timed out after %s without recording a verdict",
+				stderrf("[threat-detect] attempt %d outcome=timeout duration=%s (no retry; runaway models are overwhelmingly likely to run away again)",
 					i+1, formatTimeout(engineTimeout))
-				if i == attempts-1 {
-					return nil, fmt.Errorf("%w: detection engine did not record a verdict within %s across %d attempt(s)",
-						errEngineTimeout, formatTimeout(engineTimeout), attempts)
-				}
-				lastErr = fmt.Errorf("%w after %s", errEngineTimeout, formatTimeout(engineTimeout))
-			} else {
-				return nil, fmt.Errorf("%w: %w", errEngineExecution, execErr)
+				return nil, fmt.Errorf("%w: detection engine did not record a verdict within %s",
+					errEngineTimeout, formatTimeout(engineTimeout))
 			}
-		} else {
-			lastErr = readErr
-			stderrf("[threat-detect] attempt %d recorded no usable verdict: %v", i+1, readErr)
+			stderrf("[threat-detect] attempt %d outcome=engine_error err=%v", i+1, execErr)
+			return nil, fmt.Errorf("%w: %w", errEngineExecution, execErr)
 		}
+
+		lastErr = readErr
+		stderrf("[threat-detect] attempt %d outcome=no_verdict err=%v", i+1, readErr)
 		currentPrompt = detector.BuildCorrectionPrompt(prompt, detectionCorrectionPrefix, detectionCorrectionMessage, detectionCorrectionInstruction)
 	}
 	return nil, fmt.Errorf("detection model did not record a verdict via the threat_detection_result tool after %d attempt(s): %w", attempts, lastErr)
@@ -675,9 +694,11 @@ func envMaxTurns(fallback int) int {
 	return fallback
 }
 
-// envDuration parses a duration env var (e.g. "5m", "300s"). A negative value
-// or an unparseable string falls back to the default rather than silently
-// disabling the timeout; zero is honored and disables the cap.
+// envDuration parses a duration env var (e.g. "5m", "300s"). An unparseable
+// value or a negative value silently falls back to the default rather than
+// disabling the timeout: a typo in a YAML value must not accidentally remove
+// the runaway kill switch. Explicit disablement requires a parsed zero
+// (env=`0s` or flag=`0`), which is honored.
 func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

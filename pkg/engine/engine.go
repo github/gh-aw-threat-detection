@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
@@ -41,10 +42,47 @@ type AnalyzeOptions struct {
 // limits through a single mechanism.
 const MaxTurnsEnvVar = "GH_AW_MAX_TURNS"
 
+// scrubEngineInheritedEnv lists environment variables that must never be
+// silently inherited from the detector's parent process into an engine
+// subprocess. Currently only GH_AW_MAX_TURNS: the detector always resolves the
+// turn cap from flag/env before invoking an engine (see envMaxTurns), and if
+// the caller disables it (--max-turns=0), inheriting an ambient GH_AW_MAX_TURNS
+// from the parent process would silently defeat the disablement. The resolved
+// value is re-added explicitly via maxTurnsEnv when the cap is non-zero.
+var scrubEngineInheritedEnv = []string{MaxTurnsEnvVar}
+
+// filterEnv returns a copy of env with entries whose key is in drop removed.
+// It is used to scrub inherited variables from the parent process's
+// environment before an engine subprocess is launched (see
+// scrubEngineInheritedEnv).
+func filterEnv(env, drop []string) []string {
+	if len(drop) == 0 {
+		return env
+	}
+	dropSet := make(map[string]struct{}, len(drop))
+	for _, k := range drop {
+		dropSet[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		key := entry
+		if idx := strings.IndexByte(entry, '='); idx >= 0 {
+			key = entry[:idx]
+		}
+		if _, drop := dropSet[key]; drop {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 // maxTurnsEnv returns the env-var assignment used to convey the turn cap to
 // engine subprocesses, or nil when no cap is configured. When MaxTurns is 0
 // the caller must not export the variable so a downstream harness can still
-// fall back to its own default rather than treating "0" as a hard cap.
+// fall back to its own default rather than treating "0" as a hard cap; the
+// parent process's own GH_AW_MAX_TURNS is scrubbed by runCLIEnvWithSink via
+// scrubEngineInheritedEnv, so an inherited value cannot leak past this either.
 func maxTurnsEnv(maxTurns int) []string {
 	if maxTurns <= 0 {
 		return nil
@@ -504,6 +542,15 @@ func runCLIEnv(ctx context.Context, name string, args []string, stdinData string
 // the sink file and cancels the subprocess as soon as a valid result is recorded.
 // A subprocess error is suppressed when a valid sink result exists, because the
 // process was intentionally killed once the verdict was reported.
+//
+// The subprocess (and any descendants it spawns) run in a dedicated process
+// group so that on context cancellation — either the sink watcher's early
+// cancel or the caller's wall-clock timeout — we can SIGKILL the entire group
+// and reliably reap harness grandchildren. Without this, on harness paths the
+// direct process is `node` and the actual Copilot/Claude/Codex CLI is a
+// grandchild; exec.CommandContext's default cancellation only signals the
+// direct process, so a timed-out runaway could keep burning credits after the
+// detector has moved on.
 func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinData string, env []string, sinkPath string) (string, error) {
 	if sinkPath != "" {
 		var cancel context.CancelFunc
@@ -516,8 +563,36 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 	if stdinData != "" {
 		cmd.Stdin = strings.NewReader(stdinData)
 	}
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
+	// Compose the child env from a scrubbed parent env plus caller-supplied
+	// additions. Keys in scrubEngineInheritedEnv are stripped from the parent so
+	// callers can explicitly disable a cap (e.g. --max-turns=0) even when the
+	// enclosing process inherits the corresponding variable; the additions run
+	// last so the caller always wins.
+	if len(env) > 0 || len(scrubEngineInheritedEnv) > 0 {
+		cmd.Env = append(filterEnv(os.Environ(), scrubEngineInheritedEnv), env...)
+	}
+	// Start the subprocess as the leader of a new process group so we can kill
+	// the whole group on cancellation, not just the direct process.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Override exec.CommandContext's default cancellation (SIGKILL to the
+	// direct process only) with a group-wide SIGKILL, so harness grandchildren
+	// die too. cmd.Process is guaranteed non-nil by the time Cancel is invoked
+	// because Go only calls it after Start succeeds.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		// Negative pid means "signal the process group whose id is |pid|"; we
+		// installed the subprocess as its own group leader via Setpgid, so its
+		// pid is also the group id.
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			// Fall back to signaling just the direct process when the group
+			// kill fails (e.g. the group is already gone). Losing this race is
+			// fine — the sink watcher path or normal exit will still reap the
+			// process.
+			return cmd.Process.Kill()
+		}
+		return nil
 	}
 	if sinkPath != "" {
 		// Bound how long Run waits for stdout I/O after the process is killed on

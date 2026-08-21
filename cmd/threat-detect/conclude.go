@@ -84,6 +84,7 @@ var detectionStatusReasonMap = map[string]string{
 	reasonInvalidReportExhausted: detector.ReasonParseError,   // engine ran but never recorded a valid verdict
 	reasonOutputWriteError:       detector.ReasonParseError,   // verdict obtained but writing the result failed
 	reasonEngineError:            detector.ReasonAgentFailure, // engine subprocess itself failed
+	reasonEngineTimeout:          detector.ReasonAgentFailure, // engine subprocess exceeded --engine-timeout
 	reasonCancelled:              detector.ReasonAgentFailure, // run was interrupted before a verdict
 	reasonConfigError:            detector.ReasonAgentFailure, // setup/validation failed before the engine ran
 }
