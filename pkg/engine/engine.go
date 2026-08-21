@@ -23,6 +23,11 @@ type AnalyzeOptions struct {
 	// the engine provisions the wrapper on PATH, sets THREAT_DETECTION_RESULT_FILE,
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
+	// Eligibility, when non-nil, is transported to the report-result subprocess
+	// so it can reject structurally impossible verdicts (e.g. malicious_patch
+	// with zero patch files). When nil, the subprocess defaults to permissive
+	// eligibility — callers that predate the field are not tightened.
+	Eligibility *detector.Eligibility
 }
 
 // Engine represents an AI engine capable of analyzing content for threats.
@@ -132,6 +137,7 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	env = append(env, toolEnv...)
 
 	if harnessPath, ok := copilotHarnessPath(); ok {
@@ -157,6 +163,7 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	enableResultTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
@@ -181,6 +188,7 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	provider := codexForcedProvider(codexConfigPath())
 
 	if harnessPath, ok := codexHarnessPath(); ok {
@@ -203,6 +211,22 @@ func maybeProvisionResultTool(sinkPath string) (env []string, cleanup func(), er
 		return nil, func() {}, nil
 	}
 	return provisionResultTool(sinkPath)
+}
+
+// appendEligibilityEnv appends eligibility transport variables to env when
+// eligibility is non-nil, returning the extended slice.
+//
+// This transport is advisory. It reaches the report-result subprocess through a
+// command line the detection model composes, so the model can override or strip
+// it; the binding check is the detector's own revalidation of the sink result
+// against the eligibility it computed from artifacts. What this buys is a fast
+// in-session correction for a model that is simply mistaken, which is the
+// common case and much cheaper than another engine pass.
+func appendEligibilityEnv(env []string, eligibility *detector.Eligibility) []string {
+	if eligibility == nil {
+		return env
+	}
+	return append(env, eligibility.Env()...)
 }
 
 func copilotCommand(promptPath string) (string, []string) {

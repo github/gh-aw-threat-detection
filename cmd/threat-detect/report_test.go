@@ -138,6 +138,63 @@ func TestRunReportSpaceSeparatedSingleDash(t *testing.T) {
 	}
 }
 
+func TestRunReportEligibilityRejectsIneligibleThreat(t *testing.T) {
+	sink := filepath.Join(t.TempDir(), "result.json")
+	t.Setenv("THREAT_DETECTION_RESULT_FILE", sink)
+	// The detector process sets these; here we simulate an artifact bundle
+	// with no patch and no untrusted input.
+	t.Setenv("THREAT_DETECTION_ELIGIBLE_PROMPT_INJECTION", "false")
+	t.Setenv("THREAT_DETECTION_ELIGIBLE_SECRET_LEAK", "true")
+	t.Setenv("THREAT_DETECTION_ELIGIBLE_MALICIOUS_PATCH", "false")
+
+	t.Run("malicious_patch without a patch", func(t *testing.T) {
+		code := runReport([]string{"--prompt-injection=false", "--secret-leak=false", "--malicious-patch=true", "--reason", "x"})
+		if code != reportExitInvalid {
+			t.Fatalf("runReport() = %d, want %d", code, reportExitInvalid)
+		}
+		if _, err := os.Stat(sink); !os.IsNotExist(err) {
+			t.Fatalf("expected no sink file after ineligible claim, stat err = %v", err)
+		}
+	})
+
+	t.Run("prompt_injection without untrusted input", func(t *testing.T) {
+		code := runReport([]string{"--prompt-injection=true", "--secret-leak=false", "--malicious-patch=false", "--reason", "x"})
+		if code != reportExitInvalid {
+			t.Fatalf("runReport() = %d, want %d", code, reportExitInvalid)
+		}
+		if _, err := os.Stat(sink); !os.IsNotExist(err) {
+			t.Fatalf("expected no sink file after ineligible claim, stat err = %v", err)
+		}
+	})
+
+	t.Run("safe verdict is unaffected", func(t *testing.T) {
+		code := runReport([]string{"--prompt-injection=false", "--secret-leak=false", "--malicious-patch=false"})
+		if code != reportExitOK {
+			t.Fatalf("runReport() = %d, want %d", code, reportExitOK)
+		}
+	})
+}
+
+func TestRunReportEligibilityAllowsEligibleThreat(t *testing.T) {
+	sink := filepath.Join(t.TempDir(), "result.json")
+	t.Setenv("THREAT_DETECTION_RESULT_FILE", sink)
+	t.Setenv("THREAT_DETECTION_ELIGIBLE_PROMPT_INJECTION", "true")
+	t.Setenv("THREAT_DETECTION_ELIGIBLE_SECRET_LEAK", "true")
+	t.Setenv("THREAT_DETECTION_ELIGIBLE_MALICIOUS_PATCH", "true")
+
+	code := runReport([]string{"--prompt-injection=true", "--secret-leak=false", "--malicious-patch=true", "--reason", "found injection", "--reason", "found patch"})
+	if code != reportExitOK {
+		t.Fatalf("runReport() = %d, want %d", code, reportExitOK)
+	}
+	result, err := detector.ReadResultFile(sink)
+	if err != nil {
+		t.Fatalf("ReadResultFile() error = %v", err)
+	}
+	if !result.PromptInjection || !result.MaliciousPatch {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestNormalizeBoolFlagArgs(t *testing.T) {
 	tests := []struct {
 		name string
