@@ -193,7 +193,10 @@ following categories are eligible only under the stated preconditions:
   error is the guardrail working and MUST NOT be treated as a patch.
 - `secret_leak` is eligible only when the artifact bundle contains at least one
   channel a secret could have reached — a non-empty agent output file, at least
-  one patch or bundle file, or at least one comment-memory file.
+  one patch or bundle file, or at least one comment-memory file. The agent
+  output file carries the framework's safe-output items, so textual outputs
+  destined for publication (issue bodies, comment bodies, pull request
+  descriptions) are covered by that channel and are not separately gated.
 
 Where the prompt analysis is degraded — for example when the optional prompt
 template artifact is absent, which TD-18b permits — the absence of untrusted

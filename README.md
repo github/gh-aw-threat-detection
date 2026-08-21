@@ -132,7 +132,10 @@ plausibly exhibit it:
   artifact bundle. Framework-rejected safe-output validation errors are the
   guardrails working; they are not patches.
 - `secret_leak` requires a channel a secret could have reached — a non-empty
-  agent output, a patch or bundle, or a comment-memory file.
+  agent output, a patch or bundle, or a comment-memory file. Note that
+  `agent_output.json` is gh-aw's safe-outputs file, so issue bodies, comment
+  bodies and PR descriptions the agent asked the framework to publish are
+  covered by the agent-output channel rather than being separate ones.
 
 When the prompt analysis is degraded (for example the optional
 `prompt-template.txt` was not staged), the absence of untrusted regions proves

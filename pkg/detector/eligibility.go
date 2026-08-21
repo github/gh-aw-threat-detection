@@ -48,6 +48,11 @@ type Eligibility struct {
 	// SecretLeak is true when there is a channel a secret could have leaked
 	// through: a non-empty agent output, at least one patch or bundle file, or
 	// at least one comment-memory file (a persisted channel the agent writes).
+	//
+	// agent_output.json is the framework's safe-output file, so textual outputs
+	// the agent asked to have published — create_issue, add_comment and
+	// create_pull_request bodies — are covered by the agent-output channel; they
+	// are not staged as separate artifacts and need no separate condition.
 	SecretLeak bool
 	// MaliciousPatch is true when at least one .patch or .bundle file was
 	// produced by the agent. Framework-rejected safe-output validation errors
