@@ -9,8 +9,6 @@ permissions:
 name: gh-aw Threat-Detection Issue Digest
 engine: copilot
 strict: false
-features:
-  gh-aw-detection: true
 network:
   allowed:
     - defaults

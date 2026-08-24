@@ -11,8 +11,6 @@ permissions:
 name: Smoke Codex Standalone
 engine: codex
 strict: false
-features:
-  gh-aw-detection: true
 network:
   allowed:
     - defaults
@@ -50,7 +48,7 @@ timeout-minutes: 15
 Keep outputs concise.
 
 This workflow validates the Codex engine while exercising the **native external
-threat-detect path** (`features: gh-aw-detection: true`). gh-aw downloads the
+threat-detect path**. gh-aw downloads the
 published `threat-detect` binary from the `github/gh-aw-threat-detection` releases
 and runs it under AWF, replacing the script-generated container sibling.
 
