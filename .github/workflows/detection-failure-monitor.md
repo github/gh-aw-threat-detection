@@ -11,8 +11,6 @@ permissions:
 name: Detection Failure Monitor
 engine: copilot
 strict: false
-features:
-  gh-aw-detection: true
 network:
   allowed:
     - defaults

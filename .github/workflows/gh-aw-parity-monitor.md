@@ -10,8 +10,6 @@ permissions:
 name: gh-aw Parity Monitor
 engine: copilot
 strict: false
-features:
-  gh-aw-detection: true
 network:
   allowed:
     - defaults
