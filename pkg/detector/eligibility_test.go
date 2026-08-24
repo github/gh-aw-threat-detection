@@ -182,7 +182,7 @@ func TestEligibilityValidate(t *testing.T) {
 			name:           "malicious_patch ineligible is rejected",
 			e:              Eligibility{},
 			maliciousPatch: true,
-			wantContains:   []string{"--malicious-patch=true is not eligible", "no .patch or .bundle file"},
+			wantContains:   []string{"--malicious-patch=true is not eligible", "requires a patch or bundle file"},
 		},
 		{
 			name:            "multiple ineligible claims are joined",
@@ -300,6 +300,21 @@ func TestComputeEligibilityFailsOpenOnDegradedProvenance(t *testing.T) {
 		}
 	})
 
+	t.Run("a patch the host failed to stage is uninspectable, not absent", func(t *testing.T) {
+		// gh-aw sets HAS_PATCH when the agent job reported a patch; artifact
+		// loading warns when no readable patch backs that claim.
+		arts := &artifacts.Artifacts{
+			Warnings: []artifacts.ArtifactWarning{{Field: "patch", Message: "HAS_PATCH=true but no readable patch"}},
+		}
+		got := ComputeEligibility(arts, &PromptAnalysis{PromptTemplate: "body"})
+		if !got.MaliciousPatch {
+			t.Error("malicious_patch must stay eligible when a reported patch was not staged")
+		}
+		if !got.SecretLeak {
+			t.Error("secret_leak must stay eligible when a reported patch was not staged")
+		}
+	})
+
 	t.Run("a determinate empty analysis still yields no eligibility", func(t *testing.T) {
 		dir := t.TempDir()
 		template := filepath.Join(dir, "prompt-template.txt")
@@ -320,4 +335,52 @@ func TestComputeEligibilityFailsOpenOnDegradedProvenance(t *testing.T) {
 			t.Error("failing open must not extend to a bundle with genuinely no untrusted input")
 		}
 	})
+}
+
+// Adding a channel must not silently leave the rejection message describing the
+// old set: the message is what tells the model what would make the category
+// eligible, so a channel missing from it is guidance the model never receives.
+func TestValidateMessagesEnumerateEveryChannel(t *testing.T) {
+	ineligible := Eligibility{}
+	cases := []struct {
+		category string
+		message  string
+		channels []channel
+	}{
+		{"prompt_injection", ineligible.Validate(true, false, false), inputChannels(nil, nil)},
+		{"secret_leak", ineligible.Validate(false, true, false), outputChannels(nil)},
+		{"malicious_patch", ineligible.Validate(false, false, true), []channel{patchChannel(nil)}},
+	}
+	for _, tc := range cases {
+		if len(tc.channels) == 0 {
+			t.Errorf("%s declares no channels", tc.category)
+		}
+		for _, c := range tc.channels {
+			if !strings.Contains(tc.message, c.name) {
+				t.Errorf("%s rejection message does not mention channel %q; message was: %s",
+					tc.category, c.name, tc.message)
+			}
+		}
+	}
+}
+
+// Every channel must make its category eligible on either signal. A channel
+// wired to only `present` would reintroduce the fail-closed bug in which an
+// artifact that could not be read is mistaken for one that does not exist.
+func TestEveryChannelIsEligibleOnEitherSignal(t *testing.T) {
+	groups := map[string][]channel{
+		"input":  inputChannels(nil, nil),
+		"output": outputChannels(nil),
+		"patch":  {patchChannel(nil)},
+	}
+	for group, channels := range groups {
+		for _, c := range channels {
+			if !(channel{name: c.name, present: true}).eligible() {
+				t.Errorf("%s channel %q is not eligible when present", group, c.name)
+			}
+			if !(channel{name: c.name, uninspectable: true}).eligible() {
+				t.Errorf("%s channel %q is not eligible when uninspectable", group, c.name)
+			}
+		}
+	}
 }

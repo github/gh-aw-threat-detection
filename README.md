@@ -199,6 +199,33 @@ retries left it ends the run at `invalid_report_exhausted` and exit 2, and where
 retries are configured it first feeds the rejection back as a self-correction.
 An attempt that also hit `--engine-timeout` stays terminal and is not retried.
 
+#### Adding a channel
+
+Eligibility is derived from *channels* — declared in `inputChannels`,
+`outputChannels` and `patchChannel` in `pkg/detector/eligibility.go` — rather
+than from conditions written per category. To make a new artifact source count,
+append a channel to the relevant list:
+
+```go
+{
+    name:          "an MCP tool result recorded during the run",
+    present:       len(arts.MCPToolResults) > 0,
+    uninspectable: arts.HasWarningForField("mcp_tool_results"),
+}
+```
+
+Both signals matter. `present` means content was found; `uninspectable` means
+the channel may hold content the detector could not read. Either makes the
+category eligible, because an artifact the detector failed to inspect must never
+be mistaken for one that does not exist — collapsing the two is what caused the
+fail-closed bugs this shape prevents. Tests enforce both halves: every channel
+must be eligible on either signal, and every channel must be named in the
+rejection message, which is generated from the same declarations.
+
+A source also has to be *staged* before it can be a channel. Adding one to the
+detector only matters once the host writes it into the artifacts directory and
+`pkg/artifacts` loads it; until then there is nothing to point at.
+
 Eligibility is scoped to the artifact bundle. MCP tool results, fetched web
 content, and the engine transcript are never staged as artifacts, so an
 injection delivered only through those channels leaves no evidence in the
