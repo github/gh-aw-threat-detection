@@ -1,6 +1,8 @@
 package detector
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -232,4 +234,90 @@ func TestValidateMessageSurvivesCorrectionPrompt(t *testing.T) {
 	if strings.Contains(built, "(truncated)") {
 		t.Error("trusted correction prompt should not carry a truncation marker")
 	}
+}
+
+// Each of these bundles once made a category ineligible because an artifact
+// could not be read or matched, which would let a staging failure suppress a
+// real finding through the binding parent-side check. Eligibility must fail
+// open on every one of them.
+func TestComputeEligibilityFailsOpenOnDegradedProvenance(t *testing.T) {
+	t.Run("rendered prompt unavailable while template is present", func(t *testing.T) {
+		dir := t.TempDir()
+		template := filepath.Join(dir, "prompt-template.txt")
+		if err := os.WriteFile(template, []byte("static {{issue_body}} tail"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// PromptFilePath points nowhere, so extraction cannot run even though
+		// the template is available and declares an untrusted placeholder.
+		arts := &artifacts.Artifacts{
+			PromptTemplatePath: template,
+			PromptFilePath:     filepath.Join(dir, "absent-prompt.txt"),
+		}
+		analysis := BuildPromptAnalysis(arts)
+		if !analysis.UntrustedInputsIndeterminate {
+			t.Error("expected extraction to be recorded as indeterminate")
+		}
+		if got := ComputeEligibility(arts, analysis); !got.PromptInjection {
+			t.Error("prompt_injection must stay eligible when the rendered prompt is unavailable")
+		}
+	})
+
+	t.Run("template placeholders that do not match the rendered prompt", func(t *testing.T) {
+		dir := t.TempDir()
+		template := filepath.Join(dir, "prompt-template.txt")
+		prompt := filepath.Join(dir, "prompt.txt")
+		if err := os.WriteFile(template, []byte("EXPECTED SPINE {{issue_body}} TAIL"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// The rendered prompt shares no static segment with the template, so
+		// every region is skipped and extraction silently yields nothing.
+		if err := os.WriteFile(prompt, []byte("entirely different rendered text"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		arts := &artifacts.Artifacts{PromptTemplatePath: template, PromptFilePath: prompt}
+		analysis := BuildPromptAnalysis(arts)
+		if len(analysis.UntrustedInputs) != 0 {
+			t.Fatalf("expected extraction to yield nothing, got %d region(s)", len(analysis.UntrustedInputs))
+		}
+		if !analysis.UntrustedInputsIndeterminate {
+			t.Error("a placeholder-bearing template that extracted nothing must be indeterminate")
+		}
+		if got := ComputeEligibility(arts, analysis); !got.PromptInjection {
+			t.Error("prompt_injection must stay eligible when extraction failed to match")
+		}
+	})
+
+	t.Run("unreadable comment memory is a channel, not an absence", func(t *testing.T) {
+		arts := &artifacts.Artifacts{
+			Warnings: []artifacts.ArtifactWarning{{Field: "comment_memory", Message: "unreadable"}},
+		}
+		got := ComputeEligibility(arts, &PromptAnalysis{PromptTemplate: "body"})
+		if !got.PromptInjection {
+			t.Error("prompt_injection must stay eligible when comment memory could not be inspected")
+		}
+		if !got.SecretLeak {
+			t.Error("secret_leak must stay eligible when comment memory could not be inspected")
+		}
+	})
+
+	t.Run("a determinate empty analysis still yields no eligibility", func(t *testing.T) {
+		dir := t.TempDir()
+		template := filepath.Join(dir, "prompt-template.txt")
+		prompt := filepath.Join(dir, "prompt.txt")
+		body := "a workflow prompt with no placeholders at all"
+		if err := os.WriteFile(template, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prompt, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		arts := &artifacts.Artifacts{PromptTemplatePath: template, PromptFilePath: prompt}
+		analysis := BuildPromptAnalysis(arts)
+		if analysis.UntrustedInputsIndeterminate {
+			t.Error("a placeholder-free template that matched is determinate, not degraded")
+		}
+		if got := ComputeEligibility(arts, analysis); got.PromptInjection {
+			t.Error("failing open must not extend to a bundle with genuinely no untrusted input")
+		}
+	})
 }

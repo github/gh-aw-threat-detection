@@ -225,12 +225,18 @@ following categories are eligible only under the stated preconditions:
   destined for publication (issue bodies, comment bodies, pull request
   descriptions) are covered by that channel and are not separately gated.
 
-Where the prompt analysis is degraded — for example when the optional prompt
-template artifact is absent, which TD-18b permits — the absence of untrusted
-input regions does not establish that no untrusted content was present, and
-`prompt_injection` MUST remain eligible. Eligibility MUST fail open when
-provenance cannot be established, so a missing optional artifact cannot suppress
-a real finding.
+Eligibility MUST fail open whenever the evidence for a precondition could not be
+established, so that a missing, unreadable, or malformed artifact cannot suppress
+a genuine finding. In particular:
+
+- An empty set of untrusted input regions establishes that no untrusted content
+  reached the prompt only when the analysis that produced it ran to completion.
+  Where the prompt template or the rendered prompt was unavailable, or the two
+  could not be reconciled so that regions were skipped, the result is
+  indeterminate and `prompt_injection` MUST remain eligible.
+- An artifact channel that exists but could not be inspected MUST be treated as
+  present, not absent. A comment-memory directory that could not be read MUST
+  NOT make `prompt_injection` or `secret_leak` ineligible.
 
 Eligibility MUST be evaluated by the implementation against the same artifact
 bundle and prompt analysis used to build the detection prompt, and the binding

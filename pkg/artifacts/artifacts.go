@@ -65,6 +65,22 @@ var requiredInputFields = map[string]bool{
 	"patch":        true,
 }
 
+// HasWarningForField reports whether a warning was recorded for the named
+// artifact field. A warning means the artifact could not be inspected, which is
+// distinct from the artifact being absent: an uninspectable channel must not be
+// mistaken for one that does not exist.
+func (a *Artifacts) HasWarningForField(field string) bool {
+	if a == nil {
+		return false
+	}
+	for _, w := range a.Warnings {
+		if w.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
 // HasRequiredInputWarnings reports whether any recorded warning concerns an
 // artifact the host was expected to stage.
 func (a *Artifacts) HasRequiredInputWarnings() bool {

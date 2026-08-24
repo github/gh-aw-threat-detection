@@ -83,25 +83,37 @@ func ComputeEligibility(arts *artifacts.Artifacts, analysis *PromptAnalysis) Eli
 			break
 		}
 	}
-	// A degraded analysis cannot rule untrusted content out. BuildPromptAnalysis
-	// leaves UntrustedInputs empty when the optional prompt-template artifact is
-	// missing (the degraded mode TD-18b permits), even though the rendered
-	// prompt may well have had untrusted content interpolated into it. Failing
-	// closed there would reject a real finding because of a missing artifact, so
-	// eligibility is granted whenever provenance could not be established.
-	if analysis == nil || analysis.PromptTemplate == "" {
+	// A degraded analysis cannot rule untrusted content out. An empty
+	// UntrustedInputs list means "nothing untrusted was interpolated" only when
+	// extraction actually ran to completion; when the template or the rendered
+	// prompt was unavailable, or the two diverged so that regions were skipped,
+	// the list is empty for reasons that say nothing about untrusted content.
+	// Failing closed there would let a missing or malformed artifact suppress a
+	// real finding, so eligibility is granted whenever provenance could not be
+	// established.
+	//
+	// The absent-template case is also tested directly rather than relying on
+	// the flag alone: the flag's zero value is "determinate", so an analysis
+	// built by any path that does not set it would otherwise fail closed, and
+	// this gate must never become stricter by omission.
+	if analysis == nil || analysis.UntrustedInputsIndeterminate || analysis.PromptTemplate == "" {
 		e.PromptInjection = true
 	}
 	// Comment memory is read back into a later run's prompt, so it is an
-	// untrusted input channel for this run's analysis.
-	if arts != nil && len(arts.CommentMemoryFiles) > 0 {
+	// untrusted input channel for this run's analysis. A directory that exists
+	// but could not be read is an uninspectable channel, not an absent one.
+	if arts != nil && (len(arts.CommentMemoryFiles) > 0 || arts.HasWarningForField("comment_memory")) {
 		e.PromptInjection = true
 	}
 
 	if arts != nil {
 		// Every channel a secret could have reached: the agent's structured
-		// output, committed code, or the persisted comment-memory channel.
-		if arts.AgentOutputFileSize > 0 || len(arts.PatchFiles) > 0 || len(arts.CommentMemoryFiles) > 0 {
+		// output, committed code, or the persisted comment-memory channel. A
+		// comment-memory directory that could not be read is counted as a
+		// channel: it may hold content, and an artifact the detector failed to
+		// inspect must not be treated as one the agent never wrote to.
+		if arts.AgentOutputFileSize > 0 || len(arts.PatchFiles) > 0 ||
+			len(arts.CommentMemoryFiles) > 0 || arts.HasWarningForField("comment_memory") {
 			e.SecretLeak = true
 		}
 		if len(arts.PatchFiles) > 0 {
@@ -169,7 +181,7 @@ func (e Eligibility) Validate(promptInjection, secretLeak, maliciousPatch bool) 
 	var problems []string
 	if promptInjection && !e.PromptInjection {
 		problems = append(problems,
-			"--prompt-injection=true is not eligible: no untrusted input reached this run's inputs — the Prompt Analysis listed no non-empty untrusted region and no comment-memory file was staged — so a prompt-injection finding cannot be raised from these artifacts. Instruction non-compliance without attacker-controlled content causing it is a quality signal, not a security verdict.")
+			"--prompt-injection=true is not eligible: no untrusted input reached this run's inputs — prompt analysis completed against the template and rendered prompt and found no non-empty untrusted region, and no comment-memory file was staged — so a prompt-injection finding cannot be raised from these artifacts. Instruction non-compliance without attacker-controlled content causing it is a quality signal, not a security verdict.")
 	}
 	if secretLeak && !e.SecretLeak {
 		problems = append(problems,

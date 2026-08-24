@@ -166,11 +166,14 @@ plausibly exhibit it:
   bodies and PR descriptions the agent asked the framework to publish are
   covered by the agent-output channel rather than being separate ones.
 
-When the prompt analysis is degraded (for example the optional
-`prompt-template.txt` was not staged), the absence of untrusted regions proves
-nothing, so `prompt_injection` stays eligible. Eligibility fails open when
-provenance cannot be established: a missing optional artifact must not suppress
-a real finding.
+Eligibility fails open whenever the evidence for a precondition could not be
+established — a missing, unreadable, or malformed artifact must never be able to
+suppress a real finding. An empty set of untrusted regions only proves the prompt
+received nothing untrusted if the analysis actually ran: if `prompt-template.txt`
+or the rendered prompt was unavailable, or the two could not be reconciled so
+regions were skipped, `prompt_injection` stays eligible. Likewise a
+comment-memory directory that exists but could not be read counts as a channel
+rather than as an absence.
 
 The check runs in two places, with different standing:
 
