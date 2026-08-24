@@ -17,6 +17,10 @@ agent could reach — cover that ground. Do not infer a threat from their absenc
 and do not speculate about what the agent might have done unobserved. Report only
 what the artifacts below actually show.
 
+## Budget
+
+{BUDGET}
+
 ## Workflow Source Context
 
 The workflow prompt file is available at: {WORKFLOW_PROMPT_FILE}

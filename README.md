@@ -92,7 +92,9 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write the JSON result (defaults to stdout). Its `reasons` array is always empty; see [Where the reasons go](#where-the-reasons-go)
 - `--full-output` — Path to write the JSON result *including* reasons. Defaults to the `--output` path with `_full` inserted before the extension (`detection_result.json` → `detection_result_full.json`); pass an explicitly empty value to disable it. **Hosts must not upload this file**
-- `--retries` — Retries for malformed or ineligible detection outputs. Default: `1` (env: `THREAT_DETECTION_RETRIES`)
+- `--retries` — Retries after a failed detection attempt, including one rejected on structural [eligibility](#structural-eligibility). **Default: `0`** (env: `THREAT_DETECTION_RETRIES`). A from-scratch retry rarely fixes anything: the engine CLIs already retry transient provider errors internally, and the `threat_detection_result` tool wrapper's non-zero exit + stderr already lets the agent iterate in-session on a bad tool call — including an ineligible one — without a subprocess restart. `--engine-timeout` is **always terminal** regardless of this value — retrying a runaway is overwhelmingly likely to run away again
+- `--engine-timeout` — Wall-clock timeout per detection attempt (Go duration, e.g. `5m`, `300s`). On expiry the engine subprocess **and its harness descendants** are killed via a process-group `SIGKILL`, so the actual model CLI running as a grandchild under `node` cannot keep burning credits after the deadline. If the result sink already holds a valid verdict written just before the deadline, that verdict wins over the timeout. Timeouts are terminal — the run exits `2` with the status reason `engine_timeout` immediately, without consuming any `--retries`. `0` disables the cap. Default: `5m` (env: `THREAT_DETECTION_ENGINE_TIMEOUT`)
+- `--max-turns` — Maximum agentic tool-use turns per attempt. Exported to the engine subprocess as `GH_AW_MAX_TURNS` (which the Claude, Codex, and Copilot harnesses read) and additionally passed as `--max-turns` to the bare Claude CLI. The bare Copilot CLI has no equivalent flag, so on that path only `--engine-timeout` enforces the cap; the detector logs a diagnostic when `--max-turns` is set for that path. `0` disables the cap and scrubs any inherited `GH_AW_MAX_TURNS` from the engine subprocess's env. Default: `50` — the turn cap's real job is catching tool-loop pathology (model stuck calling Read in a loop), not being the primary credit bound; the wall-clock is the primary bound, and 50 gives comfortable headroom for legitimate wide exploration (e.g. a patch touching many files). (env: `THREAT_DETECTION_MAX_TURNS`; also honors `GH_AW_MAX_TURNS` as a fallback so a turn budget configured for the harness-driven path applies to the standalone detector too)
 - `--step-summary` — Deprecated and ignored. Accepted so hosts that still pass it (older `gh-aw` releases) do not fail; the detector no longer writes a GitHub Actions step summary
 - `--version` — Print version and exit
 
@@ -188,10 +190,14 @@ The check runs in two places, with different standing:
   it is recorded, so a verdict that bypassed the tool (or overrode its
   environment) is still rejected. This is the binding check.
 
-An ineligible result is treated exactly like a malformed one: discarded, fed
-back as a self-correction, and retried; exhaustion yields
-`invalid_report_exhausted` and exit 2. The detector never rewrites a verdict —
-the sink stays the sole source of any recorded result.
+An ineligible result is treated exactly like a malformed one: it is discarded,
+never rewritten, so the sink stays the sole source of any recorded result. With
+the default `--retries 0` the advisory tier is what recovers the run — the tool
+rejects the call and the model re-answers in-session, without a restart. The
+binding tier is the backstop for a verdict that reached the sink anyway: with no
+retries left it ends the run at `invalid_report_exhausted` and exit 2, and where
+retries are configured it first feeds the rejection back as a self-correction.
+An attempt that also hit `--engine-timeout` stays terminal and is not retried.
 
 Eligibility is scoped to the artifact bundle. MCP tool results, fetched web
 content, and the engine transcript are never staged as artifacts, so an
@@ -246,7 +252,7 @@ log consumers must ignore any `THREAT_DETECTION_*` marker that carries the
 `[engine] ` prefix.
 
 ```text
-[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
+[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=0 max_turns=50 engine_timeout=5m0s
 [threat-detect] artifacts loaded: dir=/tmp/gh-aw/threat-detection prompt_bytes=4096 agent_output_bytes=812 patch_files=1 all_primary_inputs_missing=false
 [threat-detect] artifact inventory (3 entries):
 [threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true
@@ -624,14 +630,9 @@ Because `releases/latest` ignores prereleases, an **unpromoted** prerelease is n
 
 ### Keeping the Compiled Locks Current
 
-The compiled workflow locks fall into two version categories:
+Every compiled workflow lock tracks a single gh-aw version: the newest `github/gh-aw` release **or prerelease**, whichever was published most recently (drafts and non-`v<digit>` tags ignored). There are no per-workflow categories — a bump recompiles all the locks together.
 
-| Category | Lock filename pattern | gh-aw version |
-|----------|-----------------------|---------------|
-| standard | e.g. `detection-failure-monitor.lock.yml` | latest **stable** `github/gh-aw` release |
-| standalone smoke | `*-standalone.lock.yml` | latest `github/gh-aw` release **or prerelease** |
-
-The `.github/workflows/gh-aw-version-check.yml` workflow runs daily (and on demand). It is **read-only** — it builds and compiles nothing. It reads the `compiler_version` already baked into each `.lock.yml`, compares it against the target for that category, and, when any lock is stale, opens (or updates) a single tracking issue listing every workflow that needs regenerating and the target versions. When everything is in sync it closes that issue.
+The `.github/workflows/gh-aw-version-check.yml` workflow runs daily (and on demand). It is **read-only** — it builds and compiles nothing. It reads the `compiler_version` already baked into each `.lock.yml`, compares it against that single target, and, when any lock is stale, opens (or updates) a single tracking issue listing every workflow that needs regenerating and the target version. When everything is in sync it closes that issue.
 
 Regenerating the locks is a **separate, manual, human-reviewed step** because pushing changes under `.github/workflows/` requires a token with the `workflows` permission, which the built-in `GITHUB_TOKEN` lacks. Follow the [`update-workflow-versions`](skills/update-workflow-versions/SKILL.md) skill: recompile the affected sources with the target gh-aw version, then open a PR.
 

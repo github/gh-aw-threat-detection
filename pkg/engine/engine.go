@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
 )
@@ -23,11 +25,75 @@ type AnalyzeOptions struct {
 	// the engine provisions the wrapper on PATH, sets THREAT_DETECTION_RESULT_FILE,
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
+
 	// Eligibility, when non-nil, is transported to the report-result subprocess
 	// so it can reject structurally impossible verdicts (e.g. malicious_patch
 	// with zero patch files). When nil, the subprocess defaults to permissive
 	// eligibility — callers that predate the field are not tightened.
 	Eligibility *detector.Eligibility
+
+	// MaxTurns bounds the number of agentic tool-use turns the engine may take
+	// before the CLI exits on its own. Zero means "no cap". The value is
+	// exported to the engine subprocess as GH_AW_MAX_TURNS (matching gh-aw's
+	// universal turn-limit contract, honored by all supported engine harnesses)
+	// and, for engines whose bare CLI accepts a dedicated flag, also passed as
+	// an explicit flag (e.g. `--max-turns` for Claude). The bare Copilot CLI
+	// has no equivalent flag; only the wall-clock timeout constrains it there.
+	MaxTurns int
+}
+
+// MaxTurnsEnvVar is the environment-variable name used to convey the turn cap
+// to engine harnesses. It matches gh-aw's `GH_AW_MAX_TURNS` contract so the
+// standalone detector and the harness-driven detection path enforce turn
+// limits through a single mechanism.
+const MaxTurnsEnvVar = "GH_AW_MAX_TURNS"
+
+// scrubEngineInheritedEnv lists environment variables that must never be
+// silently inherited from the detector's parent process into an engine
+// subprocess. Currently only GH_AW_MAX_TURNS: the detector always resolves the
+// turn cap from flag/env before invoking an engine (see envMaxTurns), and if
+// the caller disables it (--max-turns=0), inheriting an ambient GH_AW_MAX_TURNS
+// from the parent process would silently defeat the disablement. The resolved
+// value is re-added explicitly via maxTurnsEnv when the cap is non-zero.
+var scrubEngineInheritedEnv = []string{MaxTurnsEnvVar}
+
+// filterEnv returns a copy of env with entries whose key is in drop removed.
+// It is used to scrub inherited variables from the parent process's
+// environment before an engine subprocess is launched (see
+// scrubEngineInheritedEnv).
+func filterEnv(env, drop []string) []string {
+	if len(drop) == 0 {
+		return env
+	}
+	dropSet := make(map[string]struct{}, len(drop))
+	for _, k := range drop {
+		dropSet[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		key := entry
+		if idx := strings.IndexByte(entry, '='); idx >= 0 {
+			key = entry[:idx]
+		}
+		if _, drop := dropSet[key]; drop {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// maxTurnsEnv returns the env-var assignment used to convey the turn cap to
+// engine subprocesses, or nil when no cap is configured. When MaxTurns is 0
+// the caller must not export the variable so a downstream harness can still
+// fall back to its own default rather than treating "0" as a hard cap; the
+// parent process's own GH_AW_MAX_TURNS is scrubbed by runCLIEnvWithSink via
+// scrubEngineInheritedEnv, so an inherited value cannot leak past this either.
+func maxTurnsEnv(maxTurns int) []string {
+	if maxTurns <= 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s=%d", MaxTurnsEnvVar, maxTurns)}
 }
 
 // Engine represents an AI engine capable of analyzing content for threats.
@@ -132,6 +198,7 @@ type copilotEngine struct {
 func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOptions) (string, error) {
 	env := copilotEnv(e.model)
 	env = append(env, copilotHarnessAwfConfigEnv()...)
+	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
 	toolEnv, cleanup, err := maybeProvisionResultTool(opts.ResultSinkPath)
 	if err != nil {
 		return "", err
@@ -145,6 +212,13 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return copilotCommand(promptPath)
 		}, "", env, opts.ResultSinkPath)
+	}
+	if opts.MaxTurns > 0 {
+		// The bare Copilot CLI does not accept a turn-limit flag; the wall-clock
+		// timeout is the only bound for the direct-CLI path. Announce this once
+		// per invocation so a caller who set --max-turns knows the cap will not
+		// be enforced by the CLI itself.
+		fmt.Fprintf(engineInvokeStderr, "[threat-detect] copilot bare CLI does not accept a turn-limit flag; --max-turns=%d is advisory here and the wall-clock timeout remains the only cap\n", opts.MaxTurns)
 	}
 	logEngineInvoke("copilot", "copilot", copilotDirectArgs("<prompt-file>"), e.model)
 	return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
@@ -163,18 +237,20 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 		return "", err
 	}
 	defer cleanup()
-	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
+	env := append([]string(nil), toolEnv...)
+	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
+	env = appendEligibilityEnv(env, opts.Eligibility)
 	enableResultTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
-		logEngineInvoke("claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableResultTool)...), e.model)
+		logEngineInvoke("claude", nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs("<prompt-file>", e.model, enableResultTool, opts.MaxTurns)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
-			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableResultTool)...)
-		}, "", toolEnv, opts.ResultSinkPath)
+			return nodeCommand(), append([]string{harnessPath, "claude"}, claudeHarnessArgs(promptPath, e.model, enableResultTool, opts.MaxTurns)...)
+		}, "", env, opts.ResultSinkPath)
 	}
-	args := claudeArgs(e.model, enableResultTool)
+	args := claudeArgs(e.model, enableResultTool, opts.MaxTurns)
 	logEngineInvoke("claude", "claude", args, e.model)
-	return runCLIEnvWithSink(ctx, "claude", args, prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIEnvWithSink(ctx, "claude", args, prompt, env, opts.ResultSinkPath)
 }
 
 // codexEngine implements Engine using the Codex CLI.
@@ -188,19 +264,21 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 		return "", err
 	}
 	defer cleanup()
-	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
+	env := append([]string(nil), toolEnv...)
+	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
+	env = appendEligibilityEnv(env, opts.Eligibility)
 	provider := codexForcedProvider(codexConfigPath())
 
 	if harnessPath, ok := codexHarnessPath(); ok {
 		logEngineInvoke("codex", nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs("<prompt-file>", e.model, provider)...), e.model)
 		return runCLIWithPromptFile(ctx, prompt, func(promptPath string) (string, []string) {
 			return nodeCommand(), append([]string{harnessPath, "codex"}, codexHarnessArgs(promptPath, e.model, provider)...)
-		}, "", toolEnv, opts.ResultSinkPath)
+		}, "", env, opts.ResultSinkPath)
 	}
 	// Codex embeds the prompt as a positional argument; pass a placeholder here
 	// so the logged args do not expose the detection prompt.
 	logEngineInvoke("codex", "codex", codexArgs(e.model, provider, "<prompt>"), e.model)
-	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, toolEnv, opts.ResultSinkPath)
+	return runCLIEnvWithSink(ctx, "codex", codexArgs(e.model, provider, ""), prompt, env, opts.ResultSinkPath)
 }
 
 // maybeProvisionResultTool provisions the threat_detection_result tool when a
@@ -373,13 +451,16 @@ var resultToolClaudeTools = []string{"Bash", "Write", "Edit", "Read", "Read(/tmp
 // Claude engine invocation (pkg/workflow/claude_engine.go).
 const claudePermissionMode = "acceptEdits"
 
-func claudeArgs(model string, allowResultTool bool) []string {
+func claudeArgs(model string, allowResultTool bool, maxTurns int) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowResultTool {
 		args = append(args, "--permission-mode", claudePermissionMode, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if maxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(maxTurns))
 	}
 	return append(args, "-")
 }
@@ -388,13 +469,16 @@ func claudeArgs(model string, allowResultTool bool) []string {
 // identical to claudeArgs except that it uses --prompt-file <path> instead of
 // the stdin sentinel "-", matching the invocation pattern used by the gh-aw
 // claude_harness.cjs script.
-func claudeHarnessArgs(promptPath, model string, allowResultTool bool) []string {
+func claudeHarnessArgs(promptPath, model string, allowResultTool bool, maxTurns int) []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	if allowResultTool {
 		args = append(args, "--permission-mode", claudePermissionMode, "--allowed-tools", strings.Join(resultToolClaudeTools, ","))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if maxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(maxTurns))
 	}
 	return append(args, "--prompt-file", promptPath)
 }
@@ -483,6 +567,15 @@ func runCLIEnv(ctx context.Context, name string, args []string, stdinData string
 // the sink file and cancels the subprocess as soon as a valid result is recorded.
 // A subprocess error is suppressed when a valid sink result exists, because the
 // process was intentionally killed once the verdict was reported.
+//
+// The subprocess (and any descendants it spawns) run in a dedicated process
+// group so that on context cancellation — either the sink watcher's early
+// cancel or the caller's wall-clock timeout — we can SIGKILL the entire group
+// and reliably reap harness grandchildren. Without this, on harness paths the
+// direct process is `node` and the actual Copilot/Claude/Codex CLI is a
+// grandchild; exec.CommandContext's default cancellation only signals the
+// direct process, so a timed-out runaway could keep burning credits after the
+// detector has moved on.
 func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinData string, env []string, sinkPath string) (string, error) {
 	if sinkPath != "" {
 		var cancel context.CancelFunc
@@ -495,8 +588,36 @@ func runCLIEnvWithSink(ctx context.Context, name string, args []string, stdinDat
 	if stdinData != "" {
 		cmd.Stdin = strings.NewReader(stdinData)
 	}
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
+	// Compose the child env from a scrubbed parent env plus caller-supplied
+	// additions. Keys in scrubEngineInheritedEnv are stripped from the parent so
+	// callers can explicitly disable a cap (e.g. --max-turns=0) even when the
+	// enclosing process inherits the corresponding variable; the additions run
+	// last so the caller always wins.
+	if len(env) > 0 || len(scrubEngineInheritedEnv) > 0 {
+		cmd.Env = append(filterEnv(os.Environ(), scrubEngineInheritedEnv), env...)
+	}
+	// Start the subprocess as the leader of a new process group so we can kill
+	// the whole group on cancellation, not just the direct process.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Override exec.CommandContext's default cancellation (SIGKILL to the
+	// direct process only) with a group-wide SIGKILL, so harness grandchildren
+	// die too. cmd.Process is guaranteed non-nil by the time Cancel is invoked
+	// because Go only calls it after Start succeeds.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		// Negative pid means "signal the process group whose id is |pid|"; we
+		// installed the subprocess as its own group leader via Setpgid, so its
+		// pid is also the group id.
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+			// Fall back to signaling just the direct process when the group
+			// kill fails (e.g. the group is already gone). Losing this race is
+			// fine — the sink watcher path or normal exit will still reap the
+			// process.
+			return cmd.Process.Kill()
+		}
+		return nil
 	}
 	if sinkPath != "" {
 		// Bound how long Run waits for stdout I/O after the process is killed on

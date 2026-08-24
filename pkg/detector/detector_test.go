@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/github/gh-aw-threat-detection/pkg/artifacts"
 )
@@ -84,9 +85,14 @@ func TestBuildPrompt_CustomTemplate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := "Analyze My Workflow for threats."
-	if prompt != expected {
-		t.Errorf("got %q, want %q", prompt, expected)
+	// A custom template that omits {BUDGET} still has the budget guidance
+	// appended (TD-21c) so the model always knows its budget. Check for the
+	// substituted body rather than an exact match.
+	if !strings.Contains(prompt, "Analyze My Workflow for threats.") {
+		t.Errorf("expected substituted workflow name in prompt, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "## Budget") {
+		t.Errorf("expected auto-appended budget block in prompt, got %q", prompt)
 	}
 }
 
@@ -193,5 +199,58 @@ func TestBuildPrompt_IncludesUntrustedActivationContext(t *testing.T) {
 		if !strings.Contains(prompt, expected) {
 			t.Errorf("prompt missing %q:\n%s", expected, prompt)
 		}
+	}
+}
+
+func TestPromptBudget_FormatForPrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		budget    PromptBudget
+		wantTime  string
+		wantTurns string
+	}{
+		{"both set", PromptBudget{EngineTimeout: 5 * time.Minute, MaxTurns: 50}, "5m", "50"},
+		{"seconds", PromptBudget{EngineTimeout: 90 * time.Second, MaxTurns: 20}, "90s", "20"},
+		{"both zero", PromptBudget{}, "unlimited", "unlimited"},
+		{"only time", PromptBudget{EngineTimeout: 2 * time.Minute}, "2m", "unlimited"},
+		{"only turns", PromptBudget{MaxTurns: 30}, "unlimited", "30"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.budget.FormatForPrompt()
+			if !strings.Contains(got, "wall-clock timeout "+tc.wantTime) {
+				t.Errorf("missing wall-clock %q in %q", tc.wantTime, got)
+			}
+			if !strings.Contains(got, "agentic turn cap "+tc.wantTurns) {
+				t.Errorf("missing turn cap %q in %q", tc.wantTurns, got)
+			}
+			if !strings.Contains(got, "SIGKILL") {
+				t.Errorf("missing SIGKILL warning in %q", got)
+			}
+			if !strings.Contains(got, "threat_detection_result") {
+				t.Errorf("missing pace-yourself instruction in %q", got)
+			}
+		})
+	}
+}
+
+func TestBuildPromptWithBudget_SubstitutesPlaceholder(t *testing.T) {
+	arts := &artifacts.Artifacts{
+		Dir:                 "/tmp/test",
+		WorkflowName:        "WF",
+		PromptFilePath:      "p",
+		AgentOutputFilePath: "o",
+		PatchFileInfo:       "none",
+	}
+	template := "Header.\n{BUDGET}\nFooter."
+	prompt, err := BuildPromptWithBudget(arts, PromptBudget{EngineTimeout: 5 * time.Minute, MaxTurns: 50}, template)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(prompt, "wall-clock timeout 5m") || !strings.Contains(prompt, "agentic turn cap 50") {
+		t.Errorf("expected budget substituted at placeholder, got %q", prompt)
+	}
+	// When placeholder is present the block should NOT also be appended.
+	if strings.Count(prompt, "wall-clock timeout") != 1 {
+		t.Errorf("expected exactly one budget block, got %q", prompt)
 	}
 }
