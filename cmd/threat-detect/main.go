@@ -67,17 +67,21 @@ const (
 
 // Default budgets bounding a single detection attempt. Both are conservative
 // enough to catch a runaway model while leaving comfortable headroom under the
-// smoke workflows' 15-minute job timeout with retries=1 (2 attempts).
+// smoke workflows' 15-minute job timeout with retries=0 (1 attempt).
 const (
-	// defaultEngineTimeout bounds a single engine invocation. Two attempts at
-	// 5m each plus artifact prep and upload fits well inside the 15-minute
-	// smoke job budget. Zero (via --engine-timeout=0 or an unparseable env)
-	// disables the wall-clock cap.
+	// defaultEngineTimeout bounds a single engine invocation. A single 5m
+	// attempt plus artifact prep and upload fits comfortably inside the
+	// 15-minute smoke job budget. Zero (via --engine-timeout=0) disables the
+	// wall-clock cap.
 	defaultEngineTimeout = 5 * time.Minute
 	// defaultMaxTurns bounds the number of agentic tool-use turns per attempt.
-	// A verdict-only run typically needs ~5-15 turns; 20 matches the current
-	// gh-aw smoke workflow convention. Zero disables the cap.
-	defaultMaxTurns = 20
+	// The turn cap's real job is catching tool-loop pathology (e.g. the model
+	// gets stuck calling Read in a loop); the wall-clock is the primary
+	// credit kill switch. A verdict-only run typically needs ~5-15 turns, but
+	// legitimate wide exploration (e.g. a patch touching many files) can burn
+	// 20+ just on Reads, so 50 gives comfortable headroom while still
+	// bounding a truly runaway loop. Zero disables the cap.
+	defaultMaxTurns = 50
 )
 
 // errEngineExecution marks a failure of the engine subprocess itself (as
@@ -86,10 +90,10 @@ const (
 var errEngineExecution = errors.New("engine execution failed")
 
 // errEngineTimeout marks a per-attempt wall-clock timeout expiring before the
-// engine recorded a verdict. It is treated as an engine failure within
-// analyzeWithRetries so the retry loop still applies, but propagates a distinct
-// terminal reason (reasonEngineTimeout) so the daily statistics can separate
-// runaway-model kills from other engine failures.
+// engine recorded a verdict. Timeouts are terminal — analyzeWithRetries never
+// retries a runaway — so this propagates straight through to the terminal
+// reason reasonEngineTimeout, which `conclude` maps into the gh-aw
+// `agent_failure` category for daily statistics.
 var errEngineTimeout = errors.New("engine timeout")
 
 // stderrf writes one diagnostic line to standard error.
@@ -414,7 +418,10 @@ func run() (code int) {
 		promptTemplate = string(data)
 	}
 
-	prompt, promptAnalysis, err := detector.BuildPromptWithAnalysis(arts, promptTemplate)
+	prompt, promptAnalysis, err := detector.BuildPromptWithAnalysis(arts, detector.PromptBudget{
+		EngineTimeout: engineTimeout,
+		MaxTurns:      maxTurns,
+	}, promptTemplate)
 	if err != nil {
 		stderrf("Error building prompt: %v", err)
 		reason = reasonConfigError

@@ -554,7 +554,7 @@ can be killed without relying on the enclosing GitHub Actions job timeout.
   `THREAT_DETECTION_MAX_TURNS` environment variable, and MUST also honor
   `gh-aw`'s universal `GH_AW_MAX_TURNS` as a fallback so a single turn budget
   set for the harness-driven detection path applies to the standalone detector
-  too. The default is `20`; `0` disables the cap. The value is exported to the
+  too. The default is `50`; `0` disables the cap. The value is exported to the
   engine subprocess as `GH_AW_MAX_TURNS` (which the Claude, Codex, and Copilot
   harnesses read) and additionally passed as an explicit `--max-turns` flag to
   engines whose bare CLI accepts one (Claude). When the cap is disabled, the
@@ -576,6 +576,18 @@ can be killed without relying on the enclosing GitHub Actions job timeout.
   (`5m` per attempt, `retries=0`) MUST comfortably fit inside the enclosing
   GitHub Actions job timeout used by the `gh-aw` smoke workflows (currently
   15 minutes), leaving headroom for artifact preparation and result upload.
+
+**TD-21c**: The detector MUST tell the model about the budget it is running
+under so the model can pace itself. The prompt MUST include the concrete
+per-attempt wall-clock timeout and turn cap (or "unlimited" when disabled),
+MUST explain that exhaustion triggers a hard process-group `SIGKILL` with no
+retry and no partial verdict, and MUST instruct the model to call
+`threat_detection_result` with its best current assessment rather than let the
+deadline fire silently. The default prompt template exposes this via a
+`{BUDGET}` placeholder; a `--prompt-template` override that omits the
+placeholder MUST still have the budget guidance appended, because a model that
+does not know its budget cannot avoid triggering the kill switch on legitimate
+runs.
 
 ### 8.4 Environment Variables
 
