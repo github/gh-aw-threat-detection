@@ -226,6 +226,17 @@ A source also has to be *staged* before it can be a channel. Adding one to the
 detector only matters once the host writes it into the artifacts directory and
 `pkg/artifacts` loads it; until then there is nothing to point at.
 
+A channel that is `uninspectable` also has to *say so in the prompt*. Eligibility
+decides whether a verdict may be raised from a channel; it does not decide what
+the model is told about it. If the loader describes an unread channel as empty,
+the model reports clean about content nobody looked at and the run exits 0 —
+a fail-open outcome one layer above eligibility. Use
+`artifacts.uninspectableNotice` so the description says the channel was
+unexamined rather than empty, and states that the failure is not itself evidence
+of a threat. That second half is not decoration: without it a staging fault
+becomes a false-positive source, which is the failure mode eligibility exists to
+reduce.
+
 Eligibility is scoped to the artifact bundle. MCP tool results, fetched web
 content, and the engine transcript are never staged as artifacts, so an
 injection delivered only through those channels leaves no evidence in the

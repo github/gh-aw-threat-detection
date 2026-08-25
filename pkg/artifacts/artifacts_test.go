@@ -134,8 +134,29 @@ func TestLoad_CommentMemorySymlinkedDirRejected(t *testing.T) {
 	if len(arts.CommentMemoryFiles) != 0 {
 		t.Errorf("expected symlinked dir to be rejected, got %v", arts.CommentMemoryFiles)
 	}
-	if arts.CommentMemoryFileInfo != "No comment-memory files found" {
-		t.Errorf("expected no comment-memory info, got %q", arts.CommentMemoryFileInfo)
+	// The refusal is deliberate, but the model must not be told the channel is
+	// empty: a symlinked comment-memory directory is agent-reachable, so
+	// "nothing here" would be a fail-open answer to an evasion attempt.
+	if strings.Contains(arts.CommentMemoryFileInfo, "No comment-memory files found") {
+		t.Errorf("refused symlinked dir reported as empty: %q", arts.CommentMemoryFileInfo)
+	}
+	assertUninspectableNotice(t, arts.CommentMemoryFileInfo)
+	if !arts.HasWarningForField("comment_memory") {
+		t.Errorf("expected a comment_memory warning, got %v", arts.Warnings)
+	}
+}
+
+// assertUninspectableNotice checks the two properties every present-but-unread
+// channel notice must carry: that the channel was not examined, and that the
+// failure is not itself a threat signal. The second half is what keeps this
+// change from trading a fail-open bug for a false-positive source.
+func assertUninspectableNotice(t *testing.T, info string) {
+	t.Helper()
+	if !strings.Contains(info, "NOT analyzed") {
+		t.Errorf("notice does not say the channel went unanalyzed: %q", info)
+	}
+	if !strings.Contains(info, "not evidence of a threat") {
+		t.Errorf("notice does not disclaim the failure as a threat signal: %q", info)
 	}
 }
 
@@ -163,6 +184,15 @@ func TestLoad_CommentMemorySymlinkedFileSkipped(t *testing.T) {
 	}
 	if strings.Contains(arts.CommentMemoryFileInfo, "link.md") {
 		t.Errorf("expected symlinked file to be skipped, got %q", arts.CommentMemoryFileInfo)
+	}
+	// Skipping it silently would let a run hide comment memory from the
+	// detector while still reading as fully inspected.
+	if !arts.HasWarningForField("comment_memory") {
+		t.Errorf("expected a comment_memory warning for the refused symlink, got %v", arts.Warnings)
+	}
+	assertUninspectableNotice(t, arts.CommentMemoryFileInfo)
+	if !strings.Contains(arts.CommentMemoryFileInfo, "real.md") {
+		t.Errorf("expected the readable file to still be listed, got %q", arts.CommentMemoryFileInfo)
 	}
 }
 
@@ -315,6 +345,41 @@ func TestLoad_HasPatchEnvButNoPatchFileEmitsWarning(t *testing.T) {
 	}
 	if !strings.Contains(w.Message, "HAS_PATCH=true") {
 		t.Errorf("unexpected patch warning message: %q", w.Message)
+	}
+	// The agent job reported a patch that never reached the artifacts
+	// directory. Telling the model "no patch found" would assert the run made
+	// no changes, which contradicts what HAS_PATCH says and invites a clean
+	// malicious_patch verdict about a diff nobody read.
+	if strings.Contains(arts.PatchFileInfo, "No patch or bundle file found") {
+		t.Errorf("missing-but-declared patch reported as absent: %q", arts.PatchFileInfo)
+	}
+	assertUninspectableNotice(t, arts.PatchFileInfo)
+}
+
+func TestLoad_UnreadablePatchIsReportedAsUnexamined(t *testing.T) {
+	dir := t.TempDir()
+	writeMinimalArtifactsForTest(t, dir)
+	// A patch that is discovered by name but cannot be stat'd is present, not
+	// absent: it must not collapse into the same description as no patch.
+	patch := filepath.Join(dir, "aw-broken.patch")
+	writeTestFile(t, patch, []byte("diff"))
+	if err := os.Remove(patch); err != nil {
+		t.Fatalf("removing patch: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "missing-target.patch"), patch); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	arts, err := Load(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(arts.PatchFileInfo, "No patch or bundle file found") {
+		t.Errorf("unreadable patch reported as absent: %q", arts.PatchFileInfo)
+	}
+	assertUninspectableNotice(t, arts.PatchFileInfo)
+	if !arts.HasWarningForField("patch") {
+		t.Errorf("expected a patch warning, got %v", arts.Warnings)
 	}
 }
 
@@ -607,19 +672,21 @@ func TestLoad_CommentMemoryEmptyDir(t *testing.T) {
 func TestLoad_CommentMemoryNotADirectory(t *testing.T) {
 	dir := t.TempDir()
 	writeMinimalArtifactsForTest(t, dir)
-	// A regular file named comment-memory should not be treated as the dir and
-	// must not warn (parity: only inspection failures warn).
+	// A regular file named comment-memory is refused, but the refusal must be
+	// visible: staging it this way is an agent-reachable shape, so it cannot be
+	// indistinguishable from a run with no comment memory at all.
 	writeTestFile(t, filepath.Join(dir, "comment-memory"), []byte("not a dir"))
 
 	arts, err := Load(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if arts.CommentMemoryFileInfo != "No comment-memory files found" {
-		t.Errorf("expected no comment-memory info, got %q", arts.CommentMemoryFileInfo)
+	if strings.Contains(arts.CommentMemoryFileInfo, "No comment-memory files found") {
+		t.Errorf("refused non-directory reported as empty: %q", arts.CommentMemoryFileInfo)
 	}
-	if len(arts.Warnings) != 0 {
-		t.Errorf("expected no warnings, got %v", arts.Warnings)
+	assertUninspectableNotice(t, arts.CommentMemoryFileInfo)
+	if !arts.HasWarningForField("comment_memory") {
+		t.Errorf("expected a comment_memory warning, got %v", arts.Warnings)
 	}
 }
 func TestLoad_RequiredInputWarningsAreMarked(t *testing.T) {

@@ -375,8 +375,22 @@ consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
 as untrusted, attacker-influenced input to be analyzed for prompt injection and
 secret leakage. When the `comment-memory` directory is absent or contains no
 markdown files, the detector MUST proceed and record that no comment-memory
-files were found. When the directory is present but cannot be inspected, the
-detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+files were found. When the directory is present but cannot be inspected — it
+cannot be read, or it is not a directory, or an entry within it is not a regular
+file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+Refusing to follow a symlink is such an inspection failure and MUST be reported
+as one: the run under analysis can influence how comment memory is staged, so a
+silent refusal would be indistinguishable from an absent channel.
+
+**TD-18d**: Where an artifact channel exists but could not be inspected, the
+detection prompt MUST describe it as unexamined and MUST NOT describe it as
+empty. Reporting an unread channel as empty invites a clean verdict about
+content that was never analyzed, which is a fail-open outcome in a security
+control. The same description MUST state that the inspection failure is not
+itself evidence of a threat, so that a staging or configuration fault does not
+become a source of false positives. This requirement is independent of
+eligibility (TD-10g): eligibility governs whether a verdict may be raised from a
+channel, while this requirement governs what the model is told about it.
 
 **TD-18b**: If `aw-prompts/prompt-template.txt` or
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the

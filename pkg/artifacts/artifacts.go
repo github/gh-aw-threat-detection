@@ -65,6 +65,26 @@ var requiredInputFields = map[string]bool{
 	"patch":        true,
 }
 
+// uninspectableNotice renders the text handed to the detection model when a
+// channel exists but could not be read. It exists because the alternative --
+// telling the model the channel is empty -- is a fail-open bug: the model
+// reports clean about content nobody looked at, and the run exits 0.
+//
+// The closing sentence is load-bearing in the other direction. A notice that
+// only said "this could not be read" invites the model to treat the failure
+// itself as suspicious, which would manufacture exactly the false positives
+// this detector is being tightened to avoid. Staging failures are almost always
+// misconfiguration; the correct response is to abstain on this channel, not to
+// accuse.
+func uninspectableNotice(what, reason string) string {
+	return fmt.Sprintf(
+		"%s was NOT analyzed: %s. Treat this channel as unexamined rather than empty, "+
+			"and do not draw any conclusion about its contents. "+
+			"This is a staging or configuration failure, not evidence of a threat: "+
+			"do NOT report a threat on the basis of this notice alone.",
+		what, reason)
+}
+
 // HasWarningForField reports whether a warning was recorded for the named
 // artifact field. A warning means the artifact could not be inspected, which is
 // distinct from the artifact being absent: an uninspectable channel must not be
@@ -320,10 +340,12 @@ func Load(dir string) (*Artifacts, error) {
 	// for the checks below if it is a readable, non-empty regular file: a
 	// zero-length or unreadable entry provides no actual patch context.
 	var infos []string
+	var unreadable []string
 	hasReadablePatch := false
 	for _, p := range arts.PatchFiles {
 		info, statErr := os.Stat(p)
 		if statErr != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, statErr))
 			continue
 		}
 		if info.Size() > 0 {
@@ -335,9 +357,23 @@ func Load(dir string) (*Artifacts, error) {
 		}
 		infos = append(infos, fmt.Sprintf("%s (%d bytes, %s)", p, info.Size(), pType))
 	}
-	if len(infos) > 0 {
+	if len(unreadable) > 0 {
+		arts.addWarning("patch", fmt.Sprintf(
+			"%s: Unable to inspect %d patch/bundle file(s) in %s: %s. Detection will run without their contents.",
+			errCodeValidation, len(unreadable), dir, strings.Join(unreadable, ", ")))
+	}
+	switch {
+	case len(infos) > 0 && len(unreadable) > 0:
+		arts.PatchFileInfo = strings.Join(infos, "\n") + "\n" + uninspectableNotice(
+			fmt.Sprintf("%d further patch/bundle file(s)", len(unreadable)),
+			fmt.Sprintf("they could not be read (%s)", strings.Join(unreadable, ", ")))
+	case len(infos) > 0:
 		arts.PatchFileInfo = strings.Join(infos, "\n")
-	} else {
+	case len(unreadable) > 0:
+		arts.PatchFileInfo = uninspectableNotice(
+			"Every patch/bundle file staged for this run",
+			fmt.Sprintf("none could be read (%s)", strings.Join(unreadable, ", ")))
+	default:
 		arts.PatchFileInfo = "No patch or bundle file found"
 	}
 
@@ -348,6 +384,14 @@ func Load(dir string) (*Artifacts, error) {
 		arts.addWarning("patch", fmt.Sprintf(
 			"%s: HAS_PATCH=true was set but no readable, non-empty aw-*.patch or aw-*.bundle file was found in %s. Detection will run without patch context.",
 			errCodeValidation, dir))
+		if len(infos) == 0 && len(unreadable) == 0 {
+			// The agent job produced a patch that never reached the artifacts
+			// directory. Saying "no patch found" here would tell the model the
+			// run made no changes, which is the opposite of what HAS_PATCH says.
+			arts.PatchFileInfo = uninspectableNotice(
+				"The patch produced by this run",
+				fmt.Sprintf("the agent job reported a patch (HAS_PATCH=true) but no patch or bundle file reached %s", dir))
+		}
 	}
 
 	// All three primary inputs missing simultaneously means the detector would
@@ -544,14 +588,28 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 		if !os.IsNotExist(err) {
 			arts.addWarning("comment_memory", fmt.Sprintf(
 				"%s: Unable to inspect comment-memory directory at %s: %v", errCodeValidation, commentMemoryDir, err))
+			arts.CommentMemoryFileInfo = uninspectableNotice(
+				"The comment-memory directory",
+				fmt.Sprintf("%s could not be inspected (%v)", commentMemoryDir, err))
+			return
 		}
 		arts.CommentMemoryFileInfo = "No comment-memory files found"
 		return
 	}
 	// Reject anything that is not a real directory (regular files, symlinks,
-	// FIFOs, etc.).
+	// FIFOs, etc.). This guard is deliberate -- following a symlink here would
+	// let the run under analysis point the detector at markdown outside the
+	// artifacts tree -- which makes the rejected path agent-reachable. Warn on
+	// it rather than returning silently, so a bundle shaped this way is not
+	// indistinguishable from one with no comment memory at all.
 	if info.Mode().Type() != os.ModeDir {
-		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		arts.addWarning("comment_memory", fmt.Sprintf(
+			"%s: Expected %s to be a directory, found %s. Comment-memory files were not read. "+
+				"Stage comment memory as a real directory: symlinks are refused because they can resolve outside the artifacts directory.",
+			errCodeValidation, commentMemoryDir, describeFileType(info.Mode())))
+		arts.CommentMemoryFileInfo = uninspectableNotice(
+			"The comment-memory directory",
+			fmt.Sprintf("%s exists but is %s rather than a directory, so it was refused", commentMemoryDir, describeFileType(info.Mode())))
 		return
 	}
 
@@ -559,19 +617,25 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 	if err != nil {
 		arts.addWarning("comment_memory", fmt.Sprintf(
 			"%s: Unable to read comment-memory directory at %s: %v", errCodeValidation, commentMemoryDir, err))
-		arts.CommentMemoryFileInfo = "No comment-memory files found"
+		arts.CommentMemoryFileInfo = uninspectableNotice(
+			"The comment-memory directory",
+			fmt.Sprintf("%s could not be read (%v)", commentMemoryDir, err))
 		return
 	}
 
 	var infos []string
+	var refused []string
 	for _, entry := range entries {
-		// Only accept confirmed regular files: symlinks could point outside the
-		// artifacts tree and FIFOs/other special files could hang a read.
-		if !entry.Type().IsRegular() {
-			continue
-		}
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		// Only accept confirmed regular files: symlinks could point outside the
+		// artifacts tree and FIFOs/other special files could hang a read. Same
+		// agent-reachable shape as the directory guard above, so it is recorded
+		// rather than skipped silently.
+		if !entry.Type().IsRegular() {
+			refused = append(refused, fmt.Sprintf("%s (%s)", name, describeFileType(entry.Type())))
 			continue
 		}
 		p := filepath.Join(commentMemoryDir, name)
@@ -583,11 +647,63 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 		}
 	}
 
-	if len(infos) > 0 {
+	if len(refused) > 0 {
+		arts.addWarning("comment_memory", fmt.Sprintf(
+			"%s: Skipped %d comment-memory entr%s in %s that %s not regular files: %s. "+
+				"Stage comment memory as real files: symlinks and special files are refused because they can resolve outside the artifacts directory.",
+			errCodeValidation, len(refused), pluralY(len(refused)), commentMemoryDir, pluralWere(len(refused)), strings.Join(refused, ", ")))
+	}
+
+	switch {
+	case len(infos) > 0 && len(refused) > 0:
+		arts.CommentMemoryFileInfo = strings.Join(infos, "\n") + "\n" + uninspectableNotice(
+			fmt.Sprintf("%d further comment-memory file(s) in %s", len(refused), commentMemoryDir),
+			"they are symlinks or special files rather than regular files, so they were refused")
+	case len(infos) > 0:
 		arts.CommentMemoryFileInfo = strings.Join(infos, "\n")
-	} else {
+	case len(refused) > 0:
+		arts.CommentMemoryFileInfo = uninspectableNotice(
+			fmt.Sprintf("Every comment-memory file in %s", commentMemoryDir),
+			"they are symlinks or special files rather than regular files, so they were refused")
+	default:
 		arts.CommentMemoryFileInfo = "No comment-memory files found"
 	}
+}
+
+// describeFileType names a filesystem entry type for an operator-facing
+// message, so a refusal says what was actually staged instead of only what was
+// expected.
+func describeFileType(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeSymlink != 0:
+		return "a symlink"
+	case mode&os.ModeDir != 0:
+		return "a directory"
+	case mode&os.ModeNamedPipe != 0:
+		return "a named pipe"
+	case mode&os.ModeSocket != 0:
+		return "a socket"
+	case mode&os.ModeDevice != 0:
+		return "a device file"
+	case mode&os.ModeIrregular != 0:
+		return "an irregular file"
+	default:
+		return "a regular file"
+	}
+}
+
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
+func pluralWere(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 func fileExists(path string) bool {
