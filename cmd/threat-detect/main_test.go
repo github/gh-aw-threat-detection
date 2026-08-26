@@ -80,7 +80,7 @@ func TestRunPassesPromptAnalysisToEngine(t *testing.T) {
 	if code != exitSafe {
 		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
 	}
-	if strings.Contains(stderr, "prompt analysis artifacts") {
+	if strings.Contains(stderr, "prompt analysis artifact") {
 		t.Fatalf("unexpected degraded-analysis warning:\n%s", stderr)
 	}
 
@@ -1442,8 +1442,13 @@ func TestRunFailsOnDegradedPromptAnalysisWhenWarningsGated(t *testing.T) {
 	if _, err := os.Stat(copilotMarker); err == nil {
 		t.Fatal("expected detection not to run when prompt analysis is degraded and gated")
 	}
-	if !strings.Contains(stderr, "::error::"+promptAnalysisValidationCode+": Missing or unusable prompt analysis artifacts") {
-		t.Errorf("expected prompt-analysis error annotation, got:\n%s", stderr)
+	for _, want := range []string{
+		"::error::" + promptAnalysisValidationCode + ": Missing or empty prompt analysis artifact: aw-prompts/prompt-template.txt",
+		"::error::" + promptAnalysisValidationCode + ": Missing or empty prompt analysis artifact: aw-prompts/prompt-import-tree.json",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("expected prompt-analysis error annotation %q, got:\n%s", want, stderr)
+		}
 	}
 	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError) {
 		t.Errorf("expected config_error status line, got:\n%s", stderr)
@@ -1682,5 +1687,241 @@ func TestDetectionDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) {
 	// The path must still be present and readable, just inert.
 	if !strings.Contains(stderr, `##\[stop-commands]artifacts`) {
 		t.Fatalf("escaped artifacts dir not rendered:\n%s", stderr)
+	}
+}
+
+// TestRunReportsUnreadableRenderedPromptOnce checks that an unreadable rendered
+// prompt is reported, and reported exactly once. artifacts.Load probes required
+// inputs for readability, so it owns this case; the analysis pass must recognise
+// the finding as already recorded rather than emitting a second copy into the
+// bounded, published warnings array.
+func TestRunReportsUnreadableRenderedPromptOnce(t *testing.T) {
+	artifactsDir := t.TempDir()
+	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("creating prompts directory: %v", err)
+	}
+	files := map[string]string{
+		"prompt-template.txt":     "Trusted instructions.\nRequest: {{user_input}}\nEnd.",
+		"prompt-import-tree.json": `{"version":1,"children":[]}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	// A directory in place of the rendered prompt passes the loader's size
+	// check but fails the read, for any user including root.
+	if err := os.MkdirAll(filepath.Join(promptsDir, "prompt.txt"), 0o755); err != nil {
+		t.Fatalf("creating unreadable prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("writing agent output: %v", err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "could not be read") {
+		t.Fatalf("stderr missing unreadable-prompt warning:\n%s", stderr)
+	}
+	if got := strings.Count(stderr, "[threat-detect] artifact degraded: field=prompt required_input=true"); got != 1 {
+		t.Fatalf("prompt finding reported %d times, want 1:\n%s", got, stderr)
+	}
+	// The two optional aids were staged and read, so nothing should claim they
+	// are missing.
+	if strings.Contains(stderr, "Missing or empty prompt analysis artifact") {
+		t.Fatalf("unexpected missing-artifacts warning:\n%s", stderr)
+	}
+
+	result := readResultFile(t, outputPath)
+	for _, category := range []string{"prompt_injection", "secret_leak", "malicious_patch"} {
+		if result[category].(bool) {
+			t.Errorf("result %s = true, want false: %#v", category, result)
+		}
+	}
+}
+
+// TestRunWarnsWhenPromptAnalysisAidsMissing keeps the optional analysis aids
+// advisory: a host that never stages them is warned, but the finding must not be
+// classified as concerning a required input or strict mode would start refusing
+// those runs.
+func TestRunWarnsWhenPromptAnalysisAidsMissing(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	for _, want := range []string{
+		"Missing or empty prompt analysis artifact: aw-prompts/prompt-template.txt",
+		"Missing or empty prompt analysis artifact: aw-prompts/prompt-import-tree.json",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	if !strings.Contains(stderr, "[threat-detect] artifact degraded: field=prompt_template required_input=false") {
+		t.Fatalf("stderr missing advisory classification for the analysis aids:\n%s", stderr)
+	}
+}
+
+// TestRunStrictModeRefusesAnalysisTimePromptFailure covers the strict-mode side
+// of a required-input failure that only the prompt analysis can see. The bundle
+// passes every check artifacts.Load makes — the prompt is present, non-empty and
+// readable — and carries no content by the time the analysis reads it, so the
+// load-time strict gate has already been cleared. The finding must be re-gated
+// here and terminate as a configuration error before the engine is invoked.
+func TestRunStrictModeRefusesAnalysisTimePromptFailure(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	blankAfterLoad(t, filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"))
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "THREAT_DETECTION_STATUS: reason=config_error exit=2") {
+		t.Fatalf("stderr missing config_error status line:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "::error::ERR_VALIDATION:") ||
+		!strings.Contains(stderr, "was empty when the prompt analysis read it") {
+		t.Fatalf("stderr missing strict-mode error annotation:\n%s", stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Fatal("engine was invoked despite a strict-mode required-input failure")
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Fatal("result file was written despite refusing to run detection")
+	}
+}
+
+// TestRunWarnsWhenRenderedPromptBlankedAfterLoad covers the prompt that passes
+// the loader's size check and is empty by the time the analysis reads it. Load
+// saw content and warned about nothing, so this is the only place the condition
+// can be reported.
+func TestRunWarnsWhenRenderedPromptBlankedAfterLoad(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	promptPath := filepath.Join(artifactsDir, "aw-prompts", "prompt.txt")
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
+
+	// Stand in for a mid-run truncation: the loader's stat already happened
+	// against the staged content in the equivalent real-world race.
+	blankAfterLoad(t, promptPath)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "was empty when the prompt analysis read it") {
+		t.Fatalf("stderr missing blanked-prompt warning:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "[threat-detect] artifact degraded: field=prompt required_input=true") {
+		t.Fatalf("stderr missing required-input classification for the prompt:\n%s", stderr)
+	}
+	// The loader's own missing/empty-prompt findings must not be duplicated by
+	// this pass when they already covered the same condition.
+	if strings.Count(stderr, "artifact degraded: field=prompt required_input=true") != 1 {
+		t.Fatalf("prompt finding reported more than once:\n%s", stderr)
+	}
+}
+
+// blankAfterLoad truncates path to whitespace only, leaving a non-empty file so
+// artifacts.Load's size check still passes.
+func blankAfterLoad(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("blanking %s: %v", path, err)
+	}
+}
+
+// TestRunWarningGateCoversAnalysisTimePromptFailure pins the TD-18f gate to
+// findings raised by the prompt analysis, not just those artifacts.Load records.
+// A host that declined to certify a partially readable bundle must not have that
+// refusal bypassed by a degradation Load could not have seen.
+func TestRunWarningGateCoversAnalysisTimePromptFailure(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	blankAfterLoad(t, filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"))
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		// Warn mode stays on, so only the warning gate can refuse this run.
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR":   "true",
+		"GH_AW_DETECTION_CONTINUE_ON_WARNING": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError) {
+		t.Fatalf("stderr missing config_error status line:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "::error::"+promptAnalysisValidationCode+": Detection context prompt at") {
+		t.Fatalf("stderr missing escalated analysis-time annotation:\n%s", stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Fatal("engine was invoked despite the warning gate refusing the bundle")
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Fatal("result file was written despite refusing to run detection")
 	}
 }

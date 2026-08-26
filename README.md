@@ -384,8 +384,8 @@ configuration error and the detector refuses to run degraded detection, exiting
 `2` before any analysis happens. That is an infrastructure error, not a threat
 verdict (exit `1`), and no result file is written — writing one would assert a
 clean verdict for analysis that never ran. Warnings about *optional* artifacts,
-such as `prompt_analysis`, are never promoted this way, so reporting them cannot
-start failing a host that does not stage them. In the default warn mode, where
+such as `prompt_template` and `prompt_import_tree`, are never promoted this way,
+so reporting them cannot start failing a host that does not stage them. In the default warn mode, where
 detection does run, every recorded warning appears in both result files.
 
 #### Concluding a run (`conclude`)

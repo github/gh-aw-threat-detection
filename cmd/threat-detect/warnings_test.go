@@ -421,23 +421,35 @@ func TestRun_DegradedPromptAnalysisSurfacesInPublishedResult(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (degraded analysis is not a threat)", code, exitSafe)
 	}
 	// The annotation must survive; the result is additional, not a replacement.
-	if !strings.Contains(stderr, "::warning::") || !strings.Contains(stderr, "prompt analysis artifacts") {
+	if !strings.Contains(stderr, "::warning::") || !strings.Contains(stderr, "prompt analysis artifact") {
 		t.Errorf("expected the prompt-analysis annotation to still be emitted, got:\n%s", stderr)
 	}
 
 	result := readResultFile(t, outputPath)
 	entries, _ := result["warnings"].([]any)
-	found := false
-	for _, e := range entries {
-		if entry, ok := e.(map[string]any); ok && entry["field"] == "prompt_analysis" {
-			found = true
-			if !strings.Contains(fmt.Sprint(entry["message"]), "prompt-template.txt") {
-				t.Errorf("message should name the unusable file, got: %v", entry["message"])
-			}
-		}
+	// Each unavailable analysis input is reported under its own field, so the
+	// finding names the artifact the host has to fix.
+	wantFields := map[string]string{
+		"prompt_template":    "prompt-template.txt",
+		"prompt_import_tree": "prompt-import-tree.json",
 	}
-	if !found {
-		t.Errorf("expected a prompt_analysis warning in the published result, got: %v", result["warnings"])
+	for _, e := range entries {
+		entry, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		field := fmt.Sprint(entry["field"])
+		wantFile, tracked := wantFields[field]
+		if !tracked {
+			continue
+		}
+		if !strings.Contains(fmt.Sprint(entry["message"]), wantFile) {
+			t.Errorf("%s message should name the unusable file, got: %v", field, entry["message"])
+		}
+		delete(wantFields, field)
+	}
+	if len(wantFields) > 0 {
+		t.Errorf("missing prompt-analysis warnings %v in the published result, got: %v", wantFields, result["warnings"])
 	}
 }
 
@@ -445,8 +457,11 @@ func TestRun_DegradedPromptAnalysisSurfacesInPublishedResult(t *testing.T) {
 // absence must stay advisory: if it were classified as a required-input finding,
 // TD-18c would promote it and strict mode would refuse every run of a host that
 // simply does not stage them, turning an additive change into a breaking one.
-func TestWarnDegradedPromptAnalysis_IsAdvisoryNotRequiredInput(t *testing.T) {
-	warnings := warnDegradedPromptAnalysis(nil, false)
+func TestPromptAnalysisWarnings_OptionalAidsAreAdvisory(t *testing.T) {
+	// An analysis over a bundle that staged nothing: every input is absent, so
+	// the two optional aids are reported and the prompt is left to the loader.
+	arts := &artifacts.Artifacts{}
+	warnings := promptAnalysisWarnings(detector.BuildPromptAnalysis(arts), arts)
 	if len(warnings) == 0 {
 		t.Fatal("expected a warning when no prompt analysis is available")
 	}
@@ -456,8 +471,7 @@ func TestWarnDegradedPromptAnalysis_IsAdvisoryNotRequiredInput(t *testing.T) {
 		}
 	}
 
-	arts := &artifacts.Artifacts{Warnings: warnings}
-	if arts.HasRequiredInputWarnings() {
+	if (&artifacts.Artifacts{Warnings: warnings}).HasRequiredInputWarnings() {
 		t.Error("prompt-analysis findings must not trigger strict-mode refusal")
 	}
 }
@@ -498,7 +512,7 @@ func TestRun_ReportingDoesNotMutateLoaderWarnings(t *testing.T) {
 
 	reported := make([]artifacts.ArtifactWarning, 0, len(loaderWarnings)+1)
 	reported = append(reported, loaderWarnings...)
-	reported = append(reported, artifacts.ArtifactWarning{Field: "prompt_analysis", Code: "ERR_VALIDATION", Message: "ERR_VALIDATION: added"})
+	reported = append(reported, artifacts.ArtifactWarning{Field: "prompt_template", Code: "ERR_VALIDATION", Message: "ERR_VALIDATION: added"})
 
 	if len(loaderWarnings) != 1 {
 		t.Errorf("loader warnings length changed: %d", len(loaderWarnings))

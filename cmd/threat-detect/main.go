@@ -310,17 +310,7 @@ func run() (code int) {
 	warnMode := detectionContinueOnError()
 	continueOnWarning := detectionContinueOnWarning()
 	for _, w := range arts.Warnings {
-		command := "warning"
-		if !continueOnWarning || (w.RequiredInput && !warnMode) {
-			command = "error"
-		}
-		stderrf("::%s::%s", command, escapeWorkflowData(w.Message))
-		// The annotation text alone does not say whether the finding concerns an
-		// artifact the host was required to stage — in warn mode both kinds are
-		// emitted as "::warning::". Record that classification alongside it so
-		// TD-18c stays diagnosable from the job log.
-		stderrf("[threat-detect] artifact degraded: field=%s required_input=%t",
-			sanitizeLogValue(w.Field), w.RequiredInput)
+		reportArtifactWarning(w, warnMode, continueOnWarning)
 	}
 
 	// All primary inputs missing simultaneously means detection would silently
@@ -455,8 +445,30 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	analysisWarnings := warnDegradedPromptAnalysis(promptAnalysis, !continueOnWarning)
-	if len(analysisWarnings) > 0 && !continueOnWarning {
+	// Prompt-analysis inputs are read after artifacts.Load has validated them,
+	// so a read can still fail here (a file replaced or truncated mid-run, an
+	// I/O error) on a bundle that loaded cleanly. Those findings go through the
+	// same reporting path as the load-time ones and are merged into the
+	// reported set below, so they reach `warnings` in both result files
+	// (TD-10h) rather than existing only as an annotation.
+	//
+	// They are also re-gated on both host policies. The engine has not been
+	// invoked yet, so strict mode can still refuse to run degraded detection on
+	// a required input Load could not have known about, and a host that
+	// declines to certify a partially readable bundle still gets its refusal —
+	// findings raised here are recorded findings like any other (TD-18f).
+	analysisWarnings := promptAnalysisWarnings(promptAnalysis, arts)
+	requiredDegraded := false
+	for _, w := range analysisWarnings {
+		reportArtifactWarning(w, warnMode, continueOnWarning)
+		requiredDegraded = requiredDegraded || w.RequiredInput
+	}
+	if !warnMode && requiredDegraded {
+		stderrf("Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.", artifactsDir)
+		reason = reasonConfigError
+		return exitError
+	}
+	if !continueOnWarning && len(analysisWarnings) > 0 {
 		stderrf("Error: prompt analysis artifacts in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_WARNING is \"false\"; refusing to certify a partially readable bundle.", artifactsDir)
 		reason = reasonConfigError
 		return exitError
@@ -573,51 +585,95 @@ func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
 	return analysis.Scaffolding.Markers
 }
 
-// warnDegradedPromptAnalysis annotates prompt-analysis artifacts that could not
-// be used and returns those findings so they also reach the result's warnings
-// array. Emitting only an annotation would drop them: the job log is not
-// readable programmatically, which is the gap the warnings array exists to
-// close. The caller also needs the return value to apply the TD-18f gate: this
-// finding is recorded after artifacts loading, so it is not in arts.Warnings
-// and would otherwise leave a host that opted out of partial-bundle verdicts
-// still certifying a bundle whose trusted-vs-untrusted split was degraded.
+// reportArtifactWarning emits one degraded-input finding as a GitHub Actions
+// annotation plus a structured run-log line.
 //
-// The findings stay advisory with respect to RequiredInput.
-// prompt-template.txt and prompt-import-tree.json are optional parts of the
-// artifact contract, so RequiredInput stays false: classifying them as required
-// would make GH_AW_DETECTION_CONTINUE_ON_ERROR strict mode refuse every run of
-// a host that simply does not stage them, turning an additive reporting change
-// into a breaking one. fatal is the separate, opt-in TD-18f gate
-// (GH_AW_DETECTION_CONTINUE_ON_WARNING) and only escalates the annotation.
-func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis, fatal bool) []artifacts.ArtifactWarning {
-	var unavailable []string
-	if analysis == nil || analysis.PromptTemplate == "" {
-		unavailable = append(unavailable, "aw-prompts/prompt-template.txt")
-	}
-	if analysis == nil || analysis.ImportTree == "" {
-		unavailable = append(unavailable, "aw-prompts/prompt-import-tree.json")
-	}
-	if len(unavailable) == 0 {
-		return nil
-	}
-
-	message := fmt.Sprintf(
-		"%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files. This failure is not itself evidence of a threat.",
-		promptAnalysisValidationCode,
-		strings.Join(unavailable, ", "),
-	)
+// Two independent host policies can escalate a finding to an error. A finding
+// about a required detection input follows continue-on-error (TD-18c): in warn
+// mode (the default) it is a warning, in strict mode an error. Any finding at
+// all, required or advisory, becomes an error when the host declines to certify
+// a partially readable bundle via GH_AW_DETECTION_CONTINUE_ON_WARNING=false
+// (TD-18f).
+//
+// The annotation text alone does not say which kind of finding it is — in warn
+// mode both are emitted as "::warning::" — so the classification is logged
+// alongside it and TD-18c stays diagnosable from the job log.
+//
+// Messages can embed caller-controlled paths and OS error text, so they are
+// escaped per the workflow-command rules to prevent a path containing "%" or a
+// newline from forging another workflow command.
+func reportArtifactWarning(w artifacts.ArtifactWarning, warnMode, continueOnWarning bool) {
 	command := "warning"
-	if fatal {
+	if !continueOnWarning || (w.RequiredInput && !warnMode) {
 		command = "error"
 	}
-	stderrf("::%s::%s", command, message)
+	stderrf("::%s::%s", command, escapeWorkflowData(w.Message))
+	stderrf("[threat-detect] artifact degraded: field=%s required_input=%t",
+		sanitizeLogValue(w.Field), w.RequiredInput)
+}
 
-	return []artifacts.ArtifactWarning{{
-		Field:         "prompt_analysis",
-		Code:          promptAnalysisValidationCode,
-		Message:       message,
-		RequiredInput: false,
-	}}
+// promptAnalysisWarnings converts the analysis input outcomes into reportable
+// degraded-inspection findings.
+//
+// Unreadable and absent are reported separately. They degrade the analysis the
+// same way but are different failures: an absent file was never staged, while an
+// unreadable one holds content the detector did not look at. Only the latter
+// means the run inspected less than the bundle contains, and only the rendered
+// prompt is a required input — the template and the import tree are optional
+// analysis aids, so promoting their findings would make strict mode refuse runs
+// of hosts that legitimately never stage them (TD-18c).
+//
+// Findings already recorded by artifacts.Load are not repeated. Load probes each
+// required input for readability, so the common unreadable cases are reported
+// there; what remains here is the narrow window it cannot see — an input that
+// passed the probe and could not be read moments later. Re-reporting the rest
+// would double-count one condition in a bounded, published `warnings` array.
+func promptAnalysisWarnings(analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) []artifacts.ArtifactWarning {
+	var warnings []artifacts.ArtifactWarning
+
+	for _, in := range analysis.UnreadableInputs() {
+		if arts.HasWarningForField(in.Field) {
+			continue
+		}
+		warnings = append(warnings, artifacts.NewWarning(in.Field, fmt.Sprintf(
+			"%s: Prompt analysis input %s (%s) could not be read: %v. That content exists but was not inspected; the trusted-vs-untrusted prompt analysis is degraded. This failure is not itself evidence of a threat.",
+			promptAnalysisValidationCode, promptAnalysisLabels[in.Field], in.Path, in.Err)))
+	}
+
+	// The rendered prompt can also turn up empty here on a bundle that loaded
+	// cleanly — it passed Load's size check and was blanked or truncated before
+	// the analysis read it. Load saw content, so nobody else reports this. A
+	// non-empty Path is what distinguishes that case from a prompt the host
+	// never staged, which Load already reported.
+	if in := analysis.Input(detector.PromptInputFieldPrompt); in.Status == detector.PromptInputAbsent &&
+		in.Path != "" && !arts.HasWarningForField(detector.PromptInputFieldPrompt) {
+		warnings = append(warnings, artifacts.NewWarning(detector.PromptInputFieldPrompt, fmt.Sprintf(
+			"%s: Detection context prompt at %s was empty when the prompt analysis read it, though it was present and non-empty when the artifacts were loaded. The prompt channel was not analyzed. This failure is not itself evidence of a threat.",
+			promptAnalysisValidationCode, promptAnalysisLabels[detector.PromptInputFieldPrompt])))
+	}
+
+	// Absent aids are reported per file so each finding names the artifact it
+	// concerns, matching the field classification the reporting path logs.
+	for _, field := range []string{detector.PromptInputFieldTemplate, detector.PromptInputFieldImportTree} {
+		switch analysis.Input(field).Status {
+		case detector.PromptInputOK, detector.PromptInputUnreadable:
+			// Read, or already reported above as unreadable.
+		default:
+			warnings = append(warnings, artifacts.NewWarning(field, fmt.Sprintf(
+				"%s: Missing or empty prompt analysis artifact: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages it non-empty. This failure is not itself evidence of a threat.",
+				promptAnalysisValidationCode, promptAnalysisLabels[field])))
+		}
+	}
+
+	return warnings
+}
+
+// promptAnalysisLabels maps analysis input fields to the artifact paths hosts
+// stage them at, so a finding names the file the host has to fix.
+var promptAnalysisLabels = map[string]string{
+	detector.PromptInputFieldPrompt:     "aw-prompts/prompt.txt",
+	detector.PromptInputFieldTemplate:   "aw-prompts/prompt-template.txt",
+	detector.PromptInputFieldImportTree: "aw-prompts/prompt-import-tree.json",
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries, maxTurns int, engineTimeout time.Duration, analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) (*detector.Result, error) {
