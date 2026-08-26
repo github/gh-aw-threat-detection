@@ -5,6 +5,7 @@ package artifacts
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,10 +34,14 @@ const (
 	DefaultWorkflowDescription = "No description provided"
 )
 
-// errCodeValidation mirrors the ERR_VALIDATION prefix used by gh-aw's
+// ErrCodeValidation mirrors the ERR_VALIDATION prefix used by gh-aw's
 // error_codes.cjs so degraded-artifact warnings look identical whether they
 // originate from gh-aw's inline detection path or this standalone detector.
-const errCodeValidation = "ERR_VALIDATION"
+const ErrCodeValidation = "ERR_VALIDATION"
+
+// errCodeValidation is retained as an unexported alias for the historical
+// spelling used inside this package.
+const errCodeValidation = ErrCodeValidation
 
 // ArtifactWarning records a single degraded-input finding: a human-readable
 // message (already prefixed with the ERR_VALIDATION error code) plus the
@@ -48,12 +53,30 @@ type ArtifactWarning struct {
 	// Field identifies which artifact the warning concerns (e.g. "prompt",
 	// "agent_output", "patch"), for structured logging.
 	Field string
+	// Code is the stable error-code identifier (e.g. ErrCodeValidation) that
+	// categorizes the warning. It matches the prefix embedded in Message and
+	// is exposed as a separate field so downstream consumers (the result
+	// contract, structured logs) can render code and message independently
+	// without having to parse the prefix.
+	Code string
 	// RequiredInput is true when the warning concerns an artifact the host was
 	// expected to stage (the prompt, the agent output, or a patch declared by
 	// HAS_PATCH). A host running in strict mode
 	// (GH_AW_DETECTION_CONTINUE_ON_ERROR="false") treats these as a setup
 	// failure rather than a warning; other findings stay advisory in both modes.
 	RequiredInput bool
+}
+
+// MessageBody returns Message with the leading "<Code>: " prefix stripped, if
+// present. It is the form to surface in structured outputs that carry Code
+// separately (for example, the result-contract warnings block), so the code
+// is not repeated twice.
+func (w ArtifactWarning) MessageBody() string {
+	if w.Code == "" {
+		return w.Message
+	}
+	prefix := w.Code + ": "
+	return strings.TrimPrefix(w.Message, prefix)
 }
 
 // requiredInputFields are the ArtifactWarning fields that describe an artifact
@@ -255,6 +278,19 @@ func Load(dir string) (*Artifacts, error) {
 	promptSize, promptErr := fileSize(promptPath)
 	promptMissing := promptErr != nil
 	promptEmpty := promptErr == nil && promptSize == 0
+	// A staged, non-empty prompt the detector cannot open yields no content:
+	// the reader in BuildPromptAnalysis discards its error and analyzes an
+	// empty string. Detect that here so it is reported as unexamined rather
+	// than silently analyzed as empty.
+	promptUnreadable := false
+	if !promptMissing && !promptEmpty {
+		if readErr := readableFile(promptPath); readErr != nil {
+			promptUnreadable = true
+			arts.addWarning("prompt", fmt.Sprintf(
+				"%s: Detection context prompt at %s could not be read (%v). Its contents were not examined; detection will continue with fallback workflow context. This failure is not itself evidence of a threat.",
+				errCodeValidation, promptPath, readErr))
+		}
+	}
 	if !promptMissing {
 		arts.PromptFilePath = promptPath
 		arts.PromptFileSize = promptSize
@@ -348,6 +384,14 @@ func Load(dir string) (*Artifacts, error) {
 			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, statErr))
 			continue
 		}
+		// Stat succeeding does not mean the contents can be read. Route an
+		// unopenable patch through the same path as a failed stat so it is
+		// described to the model as unexamined, counts as uninspectable for
+		// eligibility, and never sets hasReadablePatch.
+		if readErr := readableFile(p); readErr != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, readErr))
+			continue
+		}
 		if info.Size() > 0 {
 			hasReadablePatch = true
 		}
@@ -397,7 +441,7 @@ func Load(dir string) (*Artifacts, error) {
 	// All three primary inputs missing simultaneously means the detector would
 	// otherwise analyze nothing and return a clean verdict: a fail-open failure
 	// mode in a security control. Flag it so the caller can hard-fail instead.
-	arts.AllPrimaryInputsMissing = (promptMissing || promptEmpty) &&
+	arts.AllPrimaryInputsMissing = (promptMissing || promptEmpty || promptUnreadable) &&
 		(agentOutputMissing || agentOutputEmpty || agentOutputInvalid) &&
 		!hasReadablePatch
 
@@ -721,14 +765,41 @@ func fileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
+// readableFile reports whether the detector can actually read path's contents.
+//
+// Stat is not sufficient. It succeeds on a file the process has no permission
+// to open, and on one whose contents are unreadable for I/O reasons, so a
+// stat-only check reports a non-empty size for a channel nothing can read. The
+// callers then describe that channel to the model as present and inspected,
+// which is the fail-open shape UninspectableNotice exists to prevent: the model
+// reports clean about content nobody looked at.
+//
+// The probe opens the file and reads a byte, because permission is enforced at
+// open and media errors only surface on read. io.EOF means an empty but
+// perfectly readable file, so it is not a failure.
+func readableFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 1)
+	if _, err := f.Read(buf); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
 // NewWarning builds an ERR_VALIDATION finding for the named artifact field,
 // classifying it as concerning a required input from the same table Load uses.
 // It exists so findings raised outside Load — the prompt analysis reads its
-// inputs after loading — carry an identical classification rather than a
-// caller-chosen one.
+// inputs after loading — carry an identical classification and code rather than
+// caller-chosen ones.
 func NewWarning(field, message string) ArtifactWarning {
 	return ArtifactWarning{
 		Field:         field,
+		Code:          errCodeValidation,
 		Message:       message,
 		RequiredInput: requiredInputFields[field],
 	}

@@ -80,7 +80,7 @@ func TestRunPassesPromptAnalysisToEngine(t *testing.T) {
 	if code != exitSafe {
 		t.Fatalf("run() exit code = %d, want %d", code, exitSafe)
 	}
-	if strings.Contains(stderr, "prompt analysis artifacts") {
+	if strings.Contains(stderr, "prompt analysis artifact") {
 		t.Fatalf("unexpected degraded-analysis warning:\n%s", stderr)
 	}
 
@@ -1438,12 +1438,12 @@ func TestDetectionDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) {
 	}
 }
 
-// TestRunWarnsWhenRenderedPromptUnreadable covers the reporting gap where the
-// prompt analysis could not read the rendered prompt even though the artifact
-// bundle loaded cleanly. The read failure was previously discarded, so the run
-// published a verdict without any signal that the prompt channel went
-// unexamined. The verdict itself is unaffected and the run still exits 0.
-func TestRunWarnsWhenRenderedPromptUnreadable(t *testing.T) {
+// TestRunReportsUnreadableRenderedPromptOnce checks that an unreadable rendered
+// prompt is reported, and reported exactly once. artifacts.Load probes required
+// inputs for readability, so it owns this case; the analysis pass must recognise
+// the finding as already recorded rather than emitting a second copy into the
+// bounded, published warnings array.
+func TestRunReportsUnreadableRenderedPromptOnce(t *testing.T) {
 	artifactsDir := t.TempDir()
 	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
 	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
@@ -1459,7 +1459,7 @@ func TestRunWarnsWhenRenderedPromptUnreadable(t *testing.T) {
 		}
 	}
 	// A directory in place of the rendered prompt passes the loader's size
-	// check but fails os.ReadFile, for any user including root.
+	// check but fails the read, for any user including root.
 	if err := os.MkdirAll(filepath.Join(promptsDir, "prompt.txt"), 0o755); err != nil {
 		t.Fatalf("creating unreadable prompt: %v", err)
 	}
@@ -1482,12 +1482,11 @@ func TestRunWarnsWhenRenderedPromptUnreadable(t *testing.T) {
 	if code != exitSafe {
 		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
 	}
-	if !strings.Contains(stderr, "aw-prompts/prompt.txt") ||
-		!strings.Contains(stderr, "could not be read") {
+	if !strings.Contains(stderr, "could not be read") {
 		t.Fatalf("stderr missing unreadable-prompt warning:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "[threat-detect] artifact degraded: field=prompt required_input=true") {
-		t.Fatalf("stderr missing required-input classification for the prompt:\n%s", stderr)
+	if got := strings.Count(stderr, "[threat-detect] artifact degraded: field=prompt required_input=true"); got != 1 {
+		t.Fatalf("prompt finding reported %d times, want 1:\n%s", got, stderr)
 	}
 	// The two optional aids were staged and read, so nothing should claim they
 	// are missing.
@@ -1540,22 +1539,16 @@ func TestRunWarnsWhenPromptAnalysisAidsMissing(t *testing.T) {
 	}
 }
 
-// TestRunStrictModeRefusesUnreadableRenderedPrompt covers the strict-mode side
-// of an analysis-time required-input failure: the finding is raised after
-// artifacts.Load has already passed its gate, so it must be re-gated here and
-// terminate as a configuration error before the engine is invoked.
-func TestRunStrictModeRefusesUnreadableRenderedPrompt(t *testing.T) {
+// TestRunStrictModeRefusesAnalysisTimePromptFailure covers the strict-mode side
+// of a required-input failure that only the prompt analysis can see. The bundle
+// passes every check artifacts.Load makes — the prompt is present, non-empty and
+// readable — and carries no content by the time the analysis reads it, so the
+// load-time strict gate has already been cleared. The finding must be re-gated
+// here and terminate as a configuration error before the engine is invoked.
+func TestRunStrictModeRefusesAnalysisTimePromptFailure(t *testing.T) {
 	artifactsDir := t.TempDir()
-	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
-	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
-		t.Fatalf("creating prompts directory: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(promptsDir, "prompt.txt"), 0o755); err != nil {
-		t.Fatalf("creating unreadable prompt: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
-		t.Fatalf("writing agent output: %v", err)
-	}
+	writeMinimalArtifacts(t, artifactsDir)
+	blankAfterLoad(t, filepath.Join(artifactsDir, "aw-prompts", "prompt.txt"))
 
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
@@ -1577,7 +1570,8 @@ func TestRunStrictModeRefusesUnreadableRenderedPrompt(t *testing.T) {
 	if !strings.Contains(stderr, "THREAT_DETECTION_STATUS: reason=config_error exit=2") {
 		t.Fatalf("stderr missing config_error status line:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "::error::ERR_VALIDATION:") || !strings.Contains(stderr, "could not be read") {
+	if !strings.Contains(stderr, "::error::ERR_VALIDATION:") ||
+		!strings.Contains(stderr, "was empty when the prompt analysis read it") {
 		t.Fatalf("stderr missing strict-mode error annotation:\n%s", stderr)
 	}
 	if _, err := os.Stat(copilotMarker); err == nil {

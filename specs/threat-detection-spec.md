@@ -109,9 +109,12 @@ threat-detection:
   "prompt_injection": false,
   "secret_leak": false,
   "malicious_patch": false,
-  "reasons": []
+  "reasons": [],
+  "warnings": []
 }
 ```
+
+The `warnings` field is optional for backward compatibility; see TD-10h.
 
 **TD-09**: If any threat is detected (`true`), the workflow MUST fail and safe outputs MUST NOT execute.
 
@@ -268,6 +271,81 @@ security verdict; framework-rejected validation errors are defenses working;
 `prompt_injection` requires an untrusted origin), so eligible verdicts are the
 norm rather than the exception.
 
+**TD-10h**: The result MAY carry a `warnings` array of detector-authored
+findings about artifact channels the detector could not fully inspect (for
+example, an unreadable `comment-memory` directory, a `HAS_PATCH=true` bundle
+that could not be read, or prompt-analysis inputs that were absent or unusable).
+Each entry MUST be a JSON object with the required
+string fields `field` (identifying the artifact channel), `code` (a stable
+identifier such as `ERR_VALIDATION`), and `message` (a human-readable
+diagnostic). The `warnings` field is OPTIONAL for backward compatibility; a
+result without it MUST parse successfully.
+
+Every degraded-inspection condition the implementation reports as an annotation
+MUST also be recorded in `warnings` when a result is written. An annotation
+alone is not a report: it is not readable programmatically, which is the gap
+this requirement exists to close, so a condition surfaced only that way leaves a
+partially inspected bundle indistinguishable from a clean one.
+
+Recording a condition in `warnings` MUST NOT change whether it is treated as a
+required input. Findings about *optional* artifacts (such as the pre-expansion
+prompt template and the import tree) MUST remain advisory, so that reporting
+them does not cause TD-18c to refuse runs of hosts that never staged them.
+
+Warnings are detector-authored — they are composed by the implementation from
+the loader's own findings and MUST NOT be sourced from or influenced by the
+detection engine. Because they carry no model-authored text, warnings MUST be
+persisted in **both** the result and the full result, unlike `reasons`. A host
+that reads only the uploaded result therefore still sees when the detector
+could not fully inspect the artifact bundle.
+
+Warnings MUST NOT contribute to the verdict. No warning may cause a threat
+category to be reported `true`, and no warning may by itself cause the detector
+to exit with the threat-detected status. A warning says "the detector could not
+inspect everything", not "a threat was found"; conflating the two would
+reintroduce false positives that a partially degraded staging step would produce
+indistinguishably from a genuine finding. Gating a run on the presence of
+advisory warnings is a host-level policy decision and MUST NOT be performed by
+the detector.
+
+This is scoped to findings that remain advisory. It does not override TD-18c:
+when `GH_AW_DETECTION_CONTINUE_ON_ERROR` is `false`, a warning concerning a
+*required* input is promoted to a configuration error and the implementation
+refuses to run degraded detection, exiting with the infrastructure-error status.
+That promotion is deliberate and is not a threat signal — the two exit statuses
+are distinct, and the run is refused rather than concluded. A consequence is
+that required-input findings do not reach the result files in that mode: the
+implementation MUST NOT write a result for a run it refused to perform, because
+a result asserting a clean verdict when no analysis occurred is precisely the
+fail-open outcome TD-18c exists to prevent. Such findings remain observable as
+annotations and as the process's exit status. In the default warn mode, where
+detection does run, every recorded warning MUST appear in both result files.
+
+This requirement is the reporting counterpart to TD-10g's fail-open treatment
+of an uninspectable channel. Where TD-10g requires such a channel to be treated
+as **present** so it cannot suppress a genuine finding, this requirement makes
+the same condition **visible**: without it, a bundle the detector could only
+partially inspect is indistinguishable, to a host reading the result, from one
+that was fully inspected and found clean.
+
+Determining that a channel is uninspectable MUST NOT rely on file metadata
+alone. Interrogating only a directory entry's existence or size reports a
+non-empty, readable-looking channel for a file the detector cannot actually
+open, which would leave the very condition this requirement reports invisible to
+it. The implementation MUST verify that a staged, non-empty required input can
+actually be read before describing it as inspected.
+
+The implementation MUST bound `warnings` on both write and read: no more than
+20 entries; each entry's `field` and `code` MUST be non-empty and at most 64
+characters, and each entry's `message` MUST be non-empty and at most 2000
+characters. These bounds MUST be enforced identically on write and read, so no
+result the implementation accepts on write can be rejected on read.
+
+Warning `message` values embed host-controlled paths, so the implementation
+MUST sanitize each field before echoing it into diagnostics — the same
+protection applied to model-authored reasons — so a path containing a control
+character cannot forge a workflow command or break out of its rendered line.
+
 
 ---
 
@@ -409,7 +487,9 @@ concerns a required input and follows TD-18c. These findings MUST NOT
 additionally influence eligibility (TD-10g), which already derives
 prompt-injection inspectability from the analysis itself. An analysis input that
 exists but could not be read MUST additionally be described to the detection
-engine as unexamined, per TD-18d.
+engine as unexamined, per TD-18d. A condition already recorded while loading the
+artifact bundle MUST NOT be recorded a second time by the analysis pass, so that
+one degraded input consumes one entry of the bounded `warnings` array.
 
 **TD-18d**: The detector MUST identify the `gh-aw` framework scaffolding
 preamble in the rendered workflow prompt — the `<system>...</system>` block that
@@ -604,6 +684,17 @@ only ever contribute reasons, and `conclude` MUST therefore:
 Recovered reasons MUST be rendered into the job-log diagnostics under the
 escaping and bounding rules of TD-20d. `conclude` MUST NOT copy them into any
 file, and hosts MUST NOT upload the full result.
+
+**TD-20j**: When the result carries a non-empty `warnings` array (TD-10g),
+`conclude` MUST render the warnings into the job log as a block distinct from
+both the verdict block and the reasons block, so a partially-inspected bundle
+is visible to a job-log reader without their having to consult GitHub Actions
+annotations. The rendered block MUST make clear that warnings do not affect
+the verdict, and each warning's fields MUST be sanitized under the same rules
+as any other host-controlled value echoed into the diagnostics (TD-20d). A
+result with no warnings MUST NOT produce a warnings block. `conclude` MUST NOT
+fail the run or change the exit-status decision based on the presence or
+content of warnings.
 
 **TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
 actual security finding, so reviewers do not treat a detection outage as a
