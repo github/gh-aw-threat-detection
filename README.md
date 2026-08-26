@@ -578,6 +578,17 @@ reports each finding as an error and exits `2` (`config_error`) before the
 engine runs. Findings about other artifacts stay advisory warnings in both
 modes.
 
+A host that will not accept a clean verdict from a bundle the detector could
+not fully read can additionally set `GH_AW_DETECTION_CONTINUE_ON_WARNING=false`.
+That makes *any* recorded `ERR_VALIDATION` finding — an uninspectable optional
+channel such as a `comment-memory` directory, or missing/unusable
+prompt-analysis artifacts — an error and exits `2` (`config_error`) before the
+engine runs, writing no result file. It is deliberately a
+separate switch: `GH_AW_DETECTION_CONTINUE_ON_ERROR` is about whether the host
+staged the primary inputs correctly, while this one is about the strength of the
+assurance you are willing to accept. Both default to continuing, and a refusal
+here is never a threat verdict.
+
 Every file below the artifacts directory is recorded with its size and consumed
 status in the artifact inventory printed to stderr. Only an allowlisted, size-bounded subset of
 `aw_info.json` is added to the detection prompt, and all of its values are
@@ -682,6 +693,7 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 | `WORKFLOW_DESCRIPTION` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-description`. |
 | `CUSTOM_PROMPT` | Optional local runs | Appended to the default detection prompt. Overridable with `--custom-prompt` / `--custom-prompt-file`. |
 | `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Optional, host-integrated runs | Anything other than `"false"` is warn mode; the value is compared case-insensitively, so `"False"` also selects strict mode. Strict mode makes a degraded required input a `config_error` (exit `2`), and is also honored by `conclude`. |
+| `GH_AW_DETECTION_CONTINUE_ON_WARNING` | Optional, host-integrated runs | Anything other than `"false"` (compared case-insensitively) continues, which is the default. `"false"` makes *any* `ERR_VALIDATION` finding — an uninspectable artifact channel such as `comment-memory`, or degraded prompt analysis — a `config_error` (exit `2`) before the engine runs. Separate from `GH_AW_DETECTION_CONTINUE_ON_ERROR`; not consumed by `conclude`. |
 | `HAS_PATCH` | Optional, host-integrated runs | `"true"` declares that the agent job produced a patch, so a missing `aw-*.patch` / `aw-*.bundle` is reported as a degraded required input. |
 
 ## Development

@@ -159,6 +159,17 @@ mode (per TD-18c). A host that already validates these artifacts in its own
 setup step SHOULD pass the same `GH_AW_DETECTION_CONTINUE_ON_ERROR` value to the
 detector so both stages agree.
 
+**U-06c**: A host that will not accept a clean verdict from a bundle the
+detector could not fully read MAY additionally set
+`GH_AW_DETECTION_CONTINUE_ON_WARNING=false`. The detector then terminates with
+`config_error` (exit `2`) before invoking the engine when any artifact channel
+was recorded as uninspectable or prompt analysis was degraded, including
+optional channels such as
+`comment-memory` that `GH_AW_DETECTION_CONTINUE_ON_ERROR=false` leaves advisory
+(per TD-18f). The host MUST treat that outcome as a configuration failure, not
+as a threat verdict. The default is to continue, so a host that sets neither
+variable sees no change.
+
 **U-07**: The host MUST ensure the AI engine CLI selected via `--engine` (per
 TD-13) and its authentication (per TD-23) are available on `PATH` on the runner
 where the detector executes. The detector MUST NOT be expected to bundle the

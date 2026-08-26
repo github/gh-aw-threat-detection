@@ -289,8 +289,10 @@ partially inspected bundle indistinguishable from a clean one.
 
 Recording a condition in `warnings` MUST NOT change whether it is treated as a
 required input. Findings about *optional* artifacts (such as the pre-expansion
-prompt template and the import tree) MUST remain advisory, so that reporting
-them does not cause TD-18c to refuse runs of hosts that never staged them.
+prompt template and the import tree) MUST remain advisory by default, so that
+reporting them does not cause TD-18c to refuse runs of hosts that never staged
+them. Only the separate opt-in gate of TD-18f may make them fatal, and it does
+so without reclassifying them as required inputs.
 
 Warnings are detector-authored — they are composed by the implementation from
 the loader's own findings and MUST NOT be sourced from or influenced by the
@@ -304,17 +306,19 @@ category to be reported `true`, and no warning may by itself cause the detector
 to exit with the threat-detected status. A warning says "the detector could not
 inspect everything", not "a threat was found"; conflating the two would
 reintroduce false positives that a partially degraded staging step would produce
-indistinguishably from a genuine finding. Gating a run on the presence of
-advisory warnings is a host-level policy decision and MUST NOT be performed by
-the detector.
+indistinguishably from a genuine finding. The detector MUST NOT gate a run on
+advisory warnings of its own accord; it does so only where a host explicitly
+selects that policy through the opt-in gate of TD-18f.
 
-This is scoped to findings that remain advisory. It does not override TD-18c:
-when `GH_AW_DETECTION_CONTINUE_ON_ERROR` is `false`, a warning concerning a
+This is scoped to findings that remain advisory. It does not override TD-18c or
+TD-18f: when `GH_AW_DETECTION_CONTINUE_ON_ERROR` is `false`, a warning concerning a
 *required* input is promoted to a configuration error and the implementation
-refuses to run degraded detection, exiting with the infrastructure-error status.
+refuses to run degraded detection, exiting with the infrastructure-error status;
+when `GH_AW_DETECTION_CONTINUE_ON_WARNING` is `false`, every warning is promoted
+the same way.
 That promotion is deliberate and is not a threat signal — the two exit statuses
 are distinct, and the run is refused rather than concluded. A consequence is
-that required-input findings do not reach the result files in that mode: the
+that promoted findings do not reach the result files in those modes: the
 implementation MUST NOT write a result for a run it refused to perform, because
 a result asserting a clean verdict when no analysis occurred is precisely the
 fail-open outcome TD-18c exists to prevent. Such findings remain observable as
@@ -444,9 +448,36 @@ detection with the inputs that were staged. In strict mode
 MUST emit each finding as an error and terminate as a configuration error
 (`config_error`, exit `2`) before invoking the engine. Findings about other
 artifacts (for example an unreadable `comment-memory` directory, per TD-18a)
-remain advisory warnings in both modes. Each finding MUST identify the artifact
+remain advisory warnings in both modes, subject to TD-18f. Each finding MUST identify the artifact
 it concerns and whether it is a required input. The detector MUST apply this same mode selection everywhere it
 consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
+
+**TD-18f**: The detector MUST support a separate opt-in gate,
+`GH_AW_DETECTION_CONTINUE_ON_WARNING`, resolved with the same case-insensitive
+`"false"` comparison as `GH_AW_DETECTION_CONTINUE_ON_ERROR` and defaulting to
+continuing when unset. When it is case-insensitively equal to `"false"` and any
+`ERR_VALIDATION` finding was recorded — including a finding about an optional
+channel such as `comment-memory` that is not a required input, and the degraded
+prompt-analysis finding of TD-18b, which is recorded after artifacts loading —
+the detector MUST emit each finding as an error and terminate
+as a configuration error (`config_error`, exit `2`) before invoking the engine.
+The detector MUST NOT set any threat flag because a channel could not be
+inspected: the refusal is the detector declining to certify a bundle it could
+not fully read, not a verdict about its content. Consistent with TD-10h, the
+detector MUST NOT write a result for a run it refused in this way; the findings
+remain observable as annotations and as the exit status. Promotion under this
+gate MUST NOT reclassify a finding as a required input, so it does not alter
+TD-18c behavior for a host that sets only `GH_AW_DETECTION_CONTINUE_ON_ERROR`.
+
+This gate MUST remain distinct from `GH_AW_DETECTION_CONTINUE_ON_ERROR`.
+The two express different host policies: `GH_AW_DETECTION_CONTINUE_ON_ERROR`
+governs whether the host's own staging contract for the primary inputs was
+honored, while `GH_AW_DETECTION_CONTINUE_ON_WARNING` governs the strength of the
+assurance the host is willing to accept, and a host may reasonably select either
+without the other. Widening `GH_AW_DETECTION_CONTINUE_ON_ERROR` to cover
+optional channels would also retroactively tighten every host already running
+strict mode. The unconditional `AllPrimaryInputsMissing` hard-fail (TD-18) is
+unaffected by either variable.
 
 **TD-18a**: The detector MUST discover comment-memory markdown files
 (`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
@@ -455,7 +486,8 @@ secret leakage. When the `comment-memory` directory is absent or contains no
 markdown files, the detector MUST proceed and record that no comment-memory
 files were found. When the directory is present but cannot be inspected — it
 cannot be read, or it is not a directory, or an entry within it is not a regular
-file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue
+(subject to TD-18f).
 Refusing to follow a symlink is such an inspection failure and MUST be reported
 as one: the run under analysis can influence how comment memory is staged, so a
 silent refusal would be indistinguishable from an absent channel.
@@ -474,16 +506,17 @@ channel, while this requirement governs what the model is told about it.
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
 detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
 MUST emit an `ERR_VALIDATION` warning to the job log identifying the
-unavailable artifacts. The detector MUST NOT discard the outcome of reading an
-analysis input: a file that is staged but cannot be read at analysis time —
-including `aw-prompts/prompt.txt`, whose read happens after the artifact bundle
-has been validated — MUST be reported as a distinct `ERR_VALIDATION` finding
-from a file that is absent or empty. An unreadable input means the run inspected
-less than the bundle contains, which a host reading the published result would
-otherwise be unable to distinguish from a clean, complete inspection. Findings
-about `prompt-template.txt` and `prompt-import-tree.json` are advisory in both
-modes because those files are optional; a finding about `aw-prompts/prompt.txt`
-concerns a required input and follows TD-18c. These findings MUST NOT
+unavailable artifacts (subject to TD-18f). The detector MUST NOT discard the
+outcome of reading an analysis input: a file that is staged but cannot be read at
+analysis time — including `aw-prompts/prompt.txt`, whose read happens after the
+artifact bundle has been validated — MUST be reported as a distinct
+`ERR_VALIDATION` finding from a file that is absent or empty. An unreadable input
+means the run inspected less than the bundle contains, which a host reading the
+published result would otherwise be unable to distinguish from a clean, complete
+inspection. Findings about `prompt-template.txt` and `prompt-import-tree.json`
+are advisory with respect to TD-18c because those files are optional; a finding
+about `aw-prompts/prompt.txt` concerns a required input and follows TD-18c. All
+of them are recorded findings for the purposes of TD-18f. These findings MUST NOT
 additionally influence eligibility (TD-10g), which already derives
 prompt-injection inspectability from the analysis itself. An analysis input that
 exists but could not be read MUST additionally be described to the detection

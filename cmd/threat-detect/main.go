@@ -128,6 +128,19 @@ func detectionContinueOnError() bool {
 	return !strings.EqualFold(os.Getenv("GH_AW_DETECTION_CONTINUE_ON_ERROR"), "false")
 }
 
+// detectionContinueOnWarning reports whether an artifact channel that exists but
+// could not be inspected may stay advisory. It is deliberately a separate switch
+// from detectionContinueOnError: that one expresses "I require gh-aw's primary
+// inputs to be staged correctly", while this one expresses "I will not accept a
+// clean verdict from a bundle the detector could not fully read". A host may want
+// either without the other, and folding this into the existing flag would
+// silently tighten every host already running strict mode. Parsing matches
+// detectionContinueOnError exactly — anything other than a case-insensitive
+// "false" continues — so an unset variable preserves today's behavior.
+func detectionContinueOnWarning() bool {
+	return !strings.EqualFold(os.Getenv("GH_AW_DETECTION_CONTINUE_ON_WARNING"), "false")
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "report-result" {
 		os.Exit(runReport(os.Args[2:]))
@@ -291,10 +304,13 @@ func run() (code int) {
 	// (the default) they are warnings and detection proceeds with whatever was
 	// staged; in strict mode they are errors and the run stops as a
 	// configuration error before the engine is invoked. Findings about other
-	// artifacts stay advisory warnings in both modes.
+	// artifacts stay advisory warnings unless the host additionally opts into
+	// GH_AW_DETECTION_CONTINUE_ON_WARNING=false, which makes any uninspectable
+	// channel a configuration error.
 	warnMode := detectionContinueOnError()
+	continueOnWarning := detectionContinueOnWarning()
 	for _, w := range arts.Warnings {
-		reportArtifactWarning(w, warnMode)
+		reportArtifactWarning(w, warnMode, continueOnWarning)
 	}
 
 	// All primary inputs missing simultaneously means detection would silently
@@ -308,6 +324,16 @@ func run() (code int) {
 
 	if !warnMode && arts.HasRequiredInputWarnings() {
 		stderrf("Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.", artifactsDir)
+		reason = reasonConfigError
+		return exitError
+	}
+
+	// A channel that exists but could not be inspected leaves the model
+	// certifying content it never saw. That is advisory by default, but a host
+	// that opted out of accepting such a verdict gets a refusal to certify —
+	// a configuration error, never a threat flag.
+	if !continueOnWarning && len(arts.Warnings) > 0 {
+		stderrf("Error: one or more artifact channels in %s could not be inspected and GH_AW_DETECTION_CONTINUE_ON_WARNING is \"false\"; refusing to certify a partially readable bundle.", artifactsDir)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -426,17 +452,24 @@ func run() (code int) {
 	// reported set below, so they reach `warnings` in both result files
 	// (TD-10h) rather than existing only as an annotation.
 	//
-	// They are also re-gated on the host's continue-on-error policy: the engine
-	// has not been invoked yet, so strict mode can still refuse to run degraded
-	// detection on a required input that Load could not have known about.
+	// They are also re-gated on both host policies. The engine has not been
+	// invoked yet, so strict mode can still refuse to run degraded detection on
+	// a required input Load could not have known about, and a host that
+	// declines to certify a partially readable bundle still gets its refusal —
+	// findings raised here are recorded findings like any other (TD-18f).
 	analysisWarnings := promptAnalysisWarnings(promptAnalysis, arts)
 	requiredDegraded := false
 	for _, w := range analysisWarnings {
-		reportArtifactWarning(w, warnMode)
+		reportArtifactWarning(w, warnMode, continueOnWarning)
 		requiredDegraded = requiredDegraded || w.RequiredInput
 	}
 	if !warnMode && requiredDegraded {
 		stderrf("Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.", artifactsDir)
+		reason = reasonConfigError
+		return exitError
+	}
+	if !continueOnWarning && len(analysisWarnings) > 0 {
+		stderrf("Error: prompt analysis artifacts in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_WARNING is \"false\"; refusing to certify a partially readable bundle.", artifactsDir)
 		reason = reasonConfigError
 		return exitError
 	}
@@ -555,19 +588,23 @@ func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
 // reportArtifactWarning emits one degraded-input finding as a GitHub Actions
 // annotation plus a structured run-log line.
 //
-// Findings about a required detection input follow the host's continue-on-error
-// policy: in warn mode (the default) they are warnings, in strict mode they are
-// errors. Findings about other artifacts stay advisory in both modes. The
-// annotation text alone does not say which kind it is — in warn mode both are
-// emitted as "::warning::" — so the classification is logged alongside it and
-// TD-18c stays diagnosable from the job log.
+// Two independent host policies can escalate a finding to an error. A finding
+// about a required detection input follows continue-on-error (TD-18c): in warn
+// mode (the default) it is a warning, in strict mode an error. Any finding at
+// all, required or advisory, becomes an error when the host declines to certify
+// a partially readable bundle via GH_AW_DETECTION_CONTINUE_ON_WARNING=false
+// (TD-18f).
+//
+// The annotation text alone does not say which kind of finding it is — in warn
+// mode both are emitted as "::warning::" — so the classification is logged
+// alongside it and TD-18c stays diagnosable from the job log.
 //
 // Messages can embed caller-controlled paths and OS error text, so they are
 // escaped per the workflow-command rules to prevent a path containing "%" or a
 // newline from forging another workflow command.
-func reportArtifactWarning(w artifacts.ArtifactWarning, warnMode bool) {
+func reportArtifactWarning(w artifacts.ArtifactWarning, warnMode, continueOnWarning bool) {
 	command := "warning"
-	if w.RequiredInput && !warnMode {
+	if !continueOnWarning || (w.RequiredInput && !warnMode) {
 		command = "error"
 	}
 	stderrf("::%s::%s", command, escapeWorkflowData(w.Message))
