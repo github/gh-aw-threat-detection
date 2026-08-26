@@ -227,3 +227,122 @@ func TestMergeResults(t *testing.T) {
 		t.Fatalf("unexpected merged reasons: %#v", result.Reasons)
 	}
 }
+
+// TestBuildPromptAnalysis_RecordsUnreadableInputs covers the case where a file
+// passes validation at load time but cannot be read when the analysis runs (a
+// file replaced or truncated mid-run, an I/O error). The read failure used to
+// be discarded, leaving the run unable to report that the prompt channel went
+// unexamined.
+func TestBuildPromptAnalysis_RecordsUnreadableInputs(t *testing.T) {
+	dir := t.TempDir()
+	promptsDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	template := "Trusted instructions.\nRequest: {{user_input}}\nEnd."
+	if err := os.WriteFile(filepath.Join(promptsDir, "prompt-template.txt"), []byte(template), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	importTree := `{"version":1,"children":[]}`
+	if err := os.WriteFile(filepath.Join(promptsDir, "prompt-import-tree.json"), []byte(importTree), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A directory in place of the rendered prompt makes os.ReadFile fail for
+	// any user, including root, without depending on permission bits.
+	promptPath := filepath.Join(promptsDir, "prompt.txt")
+	if err := os.MkdirAll(promptPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	analysis := BuildPromptAnalysis(&artifacts.Artifacts{
+		PromptTemplatePath:   filepath.Join(promptsDir, "prompt-template.txt"),
+		PromptImportTreePath: filepath.Join(promptsDir, "prompt-import-tree.json"),
+		PromptFilePath:       promptPath,
+	})
+
+	if got := analysis.Input(PromptInputFieldPrompt); got.Status != PromptInputUnreadable || got.Err == nil {
+		t.Fatalf("prompt input = %+v, want status %q with a non-nil error", got, PromptInputUnreadable)
+	}
+	if got := analysis.Input(PromptInputFieldTemplate).Status; got != PromptInputOK {
+		t.Errorf("template status = %q, want %q", got, PromptInputOK)
+	}
+	if got := analysis.Input(PromptInputFieldImportTree).Status; got != PromptInputOK {
+		t.Errorf("import tree status = %q, want %q", got, PromptInputOK)
+	}
+
+	unreadable := analysis.UnreadableInputs()
+	if len(unreadable) != 1 || unreadable[0].Field != PromptInputFieldPrompt {
+		t.Fatalf("UnreadableInputs() = %+v, want only the prompt", unreadable)
+	}
+
+	// The verdict side is unchanged: an unread prompt still leaves
+	// untrusted-input extraction indeterminate rather than "nothing untrusted".
+	if !analysis.UntrustedInputsIndeterminate {
+		t.Error("UntrustedInputsIndeterminate = false, want true when the rendered prompt was never read")
+	}
+}
+
+// TestBuildPromptAnalysis_DistinguishesAbsentFromUnreadable checks that a file
+// the host never staged is classified differently from one that exists but
+// could not be read, so the two can be reported with distinct diagnostics.
+func TestBuildPromptAnalysis_DistinguishesAbsentFromUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	promptsDir := filepath.Join(dir, "aw-prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsDir, "prompt.txt"), []byte("rendered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	templatePath := filepath.Join(promptsDir, "prompt-template.txt")
+	if err := os.MkdirAll(templatePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A staged but blank file carries nothing to analyze, so it is absent too.
+	if err := os.WriteFile(filepath.Join(promptsDir, "prompt-import-tree.json"), []byte("   \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	analysis := BuildPromptAnalysis(&artifacts.Artifacts{
+		PromptTemplatePath:   templatePath,
+		PromptImportTreePath: filepath.Join(promptsDir, "prompt-import-tree.json"),
+		PromptFilePath:       filepath.Join(promptsDir, "prompt.txt"),
+	})
+
+	if got := analysis.Input(PromptInputFieldTemplate).Status; got != PromptInputUnreadable {
+		t.Errorf("template status = %q, want %q", got, PromptInputUnreadable)
+	}
+	if got := analysis.Input(PromptInputFieldImportTree).Status; got != PromptInputAbsent {
+		t.Errorf("import tree status = %q, want %q", got, PromptInputAbsent)
+	}
+	if got := analysis.Input(PromptInputFieldPrompt).Status; got != PromptInputOK {
+		t.Errorf("prompt status = %q, want %q", got, PromptInputOK)
+	}
+}
+
+// TestBuildPromptAnalysis_AbsentPromptFileSentinel verifies the loader's
+// "No prompt file found" sentinel is treated as an absent input rather than a
+// path to read, so it is not reported as an unreadable file.
+func TestBuildPromptAnalysis_AbsentPromptFileSentinel(t *testing.T) {
+	analysis := BuildPromptAnalysis(&artifacts.Artifacts{PromptFilePath: "No prompt file found"})
+
+	if got := analysis.Input(PromptInputFieldPrompt).Status; got != PromptInputAbsent {
+		t.Errorf("prompt status = %q, want %q", got, PromptInputAbsent)
+	}
+	if len(analysis.UnreadableInputs()) != 0 {
+		t.Errorf("UnreadableInputs() = %+v, want none", analysis.UnreadableInputs())
+	}
+}
+
+// TestPromptAnalysis_InputNil keeps the reporting path safe when no analysis was
+// produced at all.
+func TestPromptAnalysis_InputNil(t *testing.T) {
+	var analysis *PromptAnalysis
+	if got := analysis.Input(PromptInputFieldPrompt).Status; got != "" {
+		t.Errorf("Input on nil analysis status = %q, want empty", got)
+	}
+	if analysis.UnreadableInputs() != nil {
+		t.Error("UnreadableInputs on nil analysis, want nil")
+	}
+}

@@ -1437,3 +1437,105 @@ func TestDetectionDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) {
 		t.Fatalf("escaped artifacts dir not rendered:\n%s", stderr)
 	}
 }
+
+// TestRunWarnsWhenRenderedPromptUnreadable covers the reporting gap where the
+// prompt analysis could not read the rendered prompt even though the artifact
+// bundle loaded cleanly. The read failure was previously discarded, so the run
+// published a verdict without any signal that the prompt channel went
+// unexamined. The verdict itself is unaffected and the run still exits 0.
+func TestRunWarnsWhenRenderedPromptUnreadable(t *testing.T) {
+	artifactsDir := t.TempDir()
+	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
+	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
+		t.Fatalf("creating prompts directory: %v", err)
+	}
+	files := map[string]string{
+		"prompt-template.txt":     "Trusted instructions.\nRequest: {{user_input}}\nEnd.",
+		"prompt-import-tree.json": `{"version":1,"children":[]}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	// A directory in place of the rendered prompt passes the loader's size
+	// check but fails os.ReadFile, for any user including root.
+	if err := os.MkdirAll(filepath.Join(promptsDir, "prompt.txt"), 0o755); err != nil {
+		t.Fatalf("creating unreadable prompt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "agent_output.json"), []byte(`{"items":[]}`), 0o600); err != nil {
+		t.Fatalf("writing agent output: %v", err)
+	}
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "aw-prompts/prompt.txt") ||
+		!strings.Contains(stderr, "could not be read") {
+		t.Fatalf("stderr missing unreadable-prompt warning:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "[threat-detect] artifact degraded: field=prompt required_input=true") {
+		t.Fatalf("stderr missing required-input classification for the prompt:\n%s", stderr)
+	}
+	// The two optional aids were staged and read, so nothing should claim they
+	// are missing.
+	if strings.Contains(stderr, "Missing or empty prompt analysis artifact") {
+		t.Fatalf("unexpected missing-artifacts warning:\n%s", stderr)
+	}
+
+	result := readResultFile(t, outputPath)
+	for _, category := range []string{"prompt_injection", "secret_leak", "malicious_patch"} {
+		if result[category].(bool) {
+			t.Errorf("result %s = true, want false: %#v", category, result)
+		}
+	}
+}
+
+// TestRunWarnsWhenPromptAnalysisAidsMissing keeps the optional analysis aids
+// advisory: a host that never stages them is warned, but the finding must not be
+// classified as concerning a required input or strict mode would start refusing
+// those runs.
+func TestRunWarnsWhenPromptAnalysisAidsMissing(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	for _, want := range []string{
+		"Missing or empty prompt analysis artifact: aw-prompts/prompt-template.txt",
+		"Missing or empty prompt analysis artifact: aw-prompts/prompt-import-tree.json",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	if !strings.Contains(stderr, "[threat-detect] artifact degraded: field=prompt_template required_input=false") {
+		t.Fatalf("stderr missing advisory classification for the analysis aids:\n%s", stderr)
+	}
+}

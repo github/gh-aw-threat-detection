@@ -396,7 +396,18 @@ channel, while this requirement governs what the model is told about it.
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
 detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
 MUST emit an `ERR_VALIDATION` warning to the job log identifying the
-unavailable artifacts.
+unavailable artifacts. The detector MUST NOT discard the outcome of reading an
+analysis input: a file that is staged but cannot be read at analysis time —
+including `aw-prompts/prompt.txt`, whose read happens after the artifact bundle
+has been validated — MUST be reported as a distinct `ERR_VALIDATION` finding
+from a file that is absent or empty. An unreadable input means the run inspected
+less than the bundle contains, which a host reading the published result would
+otherwise be unable to distinguish from a clean, complete inspection. Findings
+about `prompt-template.txt` and `prompt-import-tree.json` are advisory in both
+modes because those files are optional; a finding about `aw-prompts/prompt.txt`
+concerns a required input and follows TD-18c. These findings MUST NOT
+additionally influence eligibility (TD-10g), which already derives
+prompt-injection inspectability from the analysis itself.
 
 **TD-18d**: The detector MUST identify the `gh-aw` framework scaffolding
 preamble in the rendered workflow prompt — the `<system>...</system>` block that

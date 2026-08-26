@@ -721,13 +721,22 @@ func fileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
-// addWarning records an ERR_VALIDATION finding on the Artifacts value.
-func (a *Artifacts) addWarning(field, message string) {
-	a.Warnings = append(a.Warnings, ArtifactWarning{
+// NewWarning builds an ERR_VALIDATION finding for the named artifact field,
+// classifying it as concerning a required input from the same table Load uses.
+// It exists so findings raised outside Load — the prompt analysis reads its
+// inputs after loading — carry an identical classification rather than a
+// caller-chosen one.
+func NewWarning(field, message string) ArtifactWarning {
+	return ArtifactWarning{
 		Field:         field,
 		Message:       message,
 		RequiredInput: requiredInputFields[field],
-	})
+	}
+}
+
+// addWarning records an ERR_VALIDATION finding on the Artifacts value.
+func (a *Artifacts) addWarning(field, message string) {
+	a.Warnings = append(a.Warnings, NewWarning(field, message))
 }
 
 func envOrDefault(key, defaultVal string) string {

@@ -27,6 +27,14 @@ type PromptAnalysis struct {
 	// the rendered prompt. It is reported to the model as trusted content so
 	// framework directives are not mistaken for prompt injection.
 	Scaffolding *FrameworkScaffolding
+	// Inputs records, for each file the analysis reads, whether it was
+	// obtained, absent, or present but unreadable. A read that fails after
+	// artifacts.Load has already probed the file (a file replaced or truncated
+	// mid-run, an I/O error) leaves the corresponding analysis field empty and
+	// is otherwise indistinguishable from the file never having been staged.
+	// Recording the outcome keeps that degradation reportable instead of
+	// silently narrowing what was inspected (TD-10h).
+	Inputs []PromptInputRead
 	// UntrustedInputsIndeterminate is true when an empty UntrustedInputs list
 	// does not establish that no untrusted content reached the prompt, because
 	// extraction could not be performed or could not be completed.
@@ -41,12 +49,106 @@ type PromptAnalysis struct {
 	UntrustedInputsIndeterminate bool
 }
 
+// PromptInputStatus classifies the outcome of reading one prompt-analysis input.
+type PromptInputStatus string
+
+const (
+	// PromptInputOK means the file was read and carried content.
+	PromptInputOK PromptInputStatus = "ok"
+	// PromptInputAbsent means the host did not stage the file, or staged it
+	// empty. Nothing was lost that the host provided.
+	PromptInputAbsent PromptInputStatus = "absent"
+	// PromptInputUnreadable means the file was staged but could not be read, so
+	// content that exists went uninspected.
+	PromptInputUnreadable PromptInputStatus = "unreadable"
+)
+
+// Prompt-analysis input field names. They match the artifact-field vocabulary
+// used by pkg/artifacts so a finding about the rendered prompt is classified as
+// concerning a required input, while the two optional analysis aids are not.
+const (
+	PromptInputFieldPrompt     = "prompt"
+	PromptInputFieldTemplate   = "prompt_template"
+	PromptInputFieldImportTree = "prompt_import_tree"
+)
+
+// PromptInputRead records how one input to the prompt analysis was obtained.
+type PromptInputRead struct {
+	// Field is the artifact field the input belongs to.
+	Field string
+	// Path is the file the analysis attempted to read. It is empty when the
+	// host staged no such file.
+	Path string
+	// Status is the outcome of the read.
+	Status PromptInputStatus
+	// Err is the read error when Status is PromptInputUnreadable.
+	Err error
+}
+
+// Input returns the recorded read outcome for the named field. The zero value is
+// returned when the field was not recorded, so callers of a nil or partially
+// built analysis do not need a separate presence check.
+func (a *PromptAnalysis) Input(field string) PromptInputRead {
+	if a == nil {
+		return PromptInputRead{}
+	}
+	for _, in := range a.Inputs {
+		if in.Field == field {
+			return in
+		}
+	}
+	return PromptInputRead{}
+}
+
+// UnreadableInputs returns the analysis inputs that were staged but could not be
+// read, in the order they were attempted.
+func (a *PromptAnalysis) UnreadableInputs() []PromptInputRead {
+	if a == nil {
+		return nil
+	}
+	var out []PromptInputRead
+	for _, in := range a.Inputs {
+		if in.Status == PromptInputUnreadable {
+			out = append(out, in)
+		}
+	}
+	return out
+}
+
 // UntrustedInput represents a single untrusted region extracted from the rendered prompt.
 type UntrustedInput struct {
 	// Placeholder is the template placeholder name (e.g. "{{user_input}}").
 	Placeholder string `json:"placeholder"`
 	// Content is the interpolated value that replaced the placeholder.
 	Content string `json:"content"`
+}
+
+// readInput reads one analysis input, records the outcome on the analysis, and
+// returns the raw content. Content is returned even when the read is classified
+// absent (a staged but blank file), so callers that care about the raw bytes can
+// use them; callers that need meaningful content check the status instead.
+//
+// Read errors are recorded rather than discarded: an input that exists but
+// cannot be read means the analysis inspected less than the bundle contains,
+// which the run must be able to report (TD-10h).
+func (a *PromptAnalysis) readInput(field, path string) (string, PromptInputRead) {
+	in := PromptInputRead{Field: field, Path: path, Status: PromptInputAbsent}
+	if path == "" {
+		a.Inputs = append(a.Inputs, in)
+		return "", in
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		in.Status = PromptInputUnreadable
+		in.Err = err
+		a.Inputs = append(a.Inputs, in)
+		return "", in
+	}
+	if strings.TrimSpace(string(data)) != "" {
+		in.Status = PromptInputOK
+	}
+	a.Inputs = append(a.Inputs, in)
+	return string(data), in
 }
 
 // BuildPromptAnalysis reads the prompt template, rendered prompt, and import tree
@@ -58,32 +160,27 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 		return analysis
 	}
 
-	// Load prompt template if available.
-	if arts.PromptTemplatePath != "" {
-		data, err := os.ReadFile(arts.PromptTemplatePath)
-		if err == nil && strings.TrimSpace(string(data)) != "" {
-			analysis.PromptTemplate = string(data)
-		}
+	// Load prompt template if available. Whitespace-only content is treated as
+	// absent: it carries no placeholders to analyze.
+	if content, in := analysis.readInput(PromptInputFieldTemplate, arts.PromptTemplatePath); in.Status == PromptInputOK {
+		analysis.PromptTemplate = content
 	}
 
 	// Load import tree if available.
-	if arts.PromptImportTreePath != "" {
-		data, err := os.ReadFile(arts.PromptImportTreePath)
-		if err == nil && strings.TrimSpace(string(data)) != "" {
-			analysis.ImportTree = string(data)
-		}
+	if content, in := analysis.readInput(PromptInputFieldImportTree, arts.PromptImportTreePath); in.Status == PromptInputOK {
+		analysis.ImportTree = content
 	}
 
 	// Load the rendered prompt once: it is used both for framework-scaffolding
 	// detection (which does not require the template) and for untrusted-input
 	// extraction (which does).
-	var rendered string
-	if arts.PromptFilePath != "" && arts.PromptFilePath != "No prompt file found" {
-		data, err := os.ReadFile(arts.PromptFilePath)
-		if err == nil {
-			rendered = string(data)
-		}
+	promptPath := arts.PromptFilePath
+	if promptPath == "No prompt file found" {
+		promptPath = ""
 	}
+	// The rendered prompt is kept verbatim even when blank: unlike the two
+	// analysis aids, it is the prompt that was actually sent.
+	rendered, _ := analysis.readInput(PromptInputFieldPrompt, promptPath)
 
 	analysis.Scaffolding = AnalyzeFrameworkScaffolding(rendered, analysis.PromptTemplate)
 
