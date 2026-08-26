@@ -20,6 +20,24 @@ func TruncateCorrectionBytes(message []byte) []byte {
 }
 
 // BuildCorrectionPrompt appends bounded parser feedback to an original prompt.
+// The message is truncated because it may embed model-authored or parser text
+// of unbounded length; use BuildTrustedCorrectionPrompt for feedback the
+// detector composed itself.
 func BuildCorrectionPrompt(prompt, prefix, message, instruction string) string {
-	return prompt + "\n\n" + prefix + ": " + TruncateCorrectionMessage(message) + "\n" + instruction
+	return BuildTrustedCorrectionPrompt(prompt, prefix, TruncateCorrectionMessage(message), instruction)
+}
+
+// BuildTrustedCorrectionPrompt appends detector-authored feedback to an original
+// prompt without truncating it.
+//
+// The truncation applied by BuildCorrectionPrompt exists to bound text that
+// originates outside the detector. Applying it to feedback the detector composed
+// from its own fixed strings is a category error with a real cost: when more
+// than one threat category is rejected at once, the joined explanation exceeds
+// the bound and the trailing categories are cut mid-sentence, so the model is
+// told its verdict was rejected without being told why for every category it
+// must re-answer. Detector-authored feedback is bounded by construction, so it
+// is passed through whole.
+func BuildTrustedCorrectionPrompt(prompt, prefix, message, instruction string) string {
+	return prompt + "\n\n" + prefix + ": " + message + "\n" + instruction
 }
