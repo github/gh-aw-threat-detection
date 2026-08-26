@@ -5,6 +5,7 @@ package artifacts
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -277,6 +278,19 @@ func Load(dir string) (*Artifacts, error) {
 	promptSize, promptErr := fileSize(promptPath)
 	promptMissing := promptErr != nil
 	promptEmpty := promptErr == nil && promptSize == 0
+	// A staged, non-empty prompt the detector cannot open yields no content:
+	// the reader in BuildPromptAnalysis discards its error and analyzes an
+	// empty string. Detect that here so it is reported as unexamined rather
+	// than silently analyzed as empty.
+	promptUnreadable := false
+	if !promptMissing && !promptEmpty {
+		if readErr := readableFile(promptPath); readErr != nil {
+			promptUnreadable = true
+			arts.addWarning("prompt", fmt.Sprintf(
+				"%s: Detection context prompt at %s could not be read (%v). Its contents were not examined; detection will continue with fallback workflow context. This failure is not itself evidence of a threat.",
+				errCodeValidation, promptPath, readErr))
+		}
+	}
 	if !promptMissing {
 		arts.PromptFilePath = promptPath
 		arts.PromptFileSize = promptSize
@@ -370,6 +384,14 @@ func Load(dir string) (*Artifacts, error) {
 			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, statErr))
 			continue
 		}
+		// Stat succeeding does not mean the contents can be read. Route an
+		// unopenable patch through the same path as a failed stat so it is
+		// described to the model as unexamined, counts as uninspectable for
+		// eligibility, and never sets hasReadablePatch.
+		if readErr := readableFile(p); readErr != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", p, readErr))
+			continue
+		}
 		if info.Size() > 0 {
 			hasReadablePatch = true
 		}
@@ -419,7 +441,7 @@ func Load(dir string) (*Artifacts, error) {
 	// All three primary inputs missing simultaneously means the detector would
 	// otherwise analyze nothing and return a clean verdict: a fail-open failure
 	// mode in a security control. Flag it so the caller can hard-fail instead.
-	arts.AllPrimaryInputsMissing = (promptMissing || promptEmpty) &&
+	arts.AllPrimaryInputsMissing = (promptMissing || promptEmpty || promptUnreadable) &&
 		(agentOutputMissing || agentOutputEmpty || agentOutputInvalid) &&
 		!hasReadablePatch
 
@@ -741,6 +763,32 @@ func fileSize(path string) (int64, error) {
 		return 0, err
 	}
 	return info.Size(), nil
+}
+
+// readableFile reports whether the detector can actually read path's contents.
+//
+// Stat is not sufficient. It succeeds on a file the process has no permission
+// to open, and on one whose contents are unreadable for I/O reasons, so a
+// stat-only check reports a non-empty size for a channel nothing can read. The
+// callers then describe that channel to the model as present and inspected,
+// which is the fail-open shape uninspectableNotice exists to prevent: the model
+// reports clean about content nobody looked at.
+//
+// The probe opens the file and reads a byte, because permission is enforced at
+// open and media errors only surface on read. io.EOF means an empty but
+// perfectly readable file, so it is not a failure.
+func readableFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 1)
+	if _, err := f.Read(buf); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // addWarning records an ERR_VALIDATION finding on the Artifacts value.

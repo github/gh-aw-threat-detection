@@ -344,18 +344,22 @@ The result also carries a `warnings` array, which is **not** the same as
 | Content | Free-form explanations quoting untrusted artifact content | Fixed strings composed by the detector, embedding host-controlled paths |
 | Where written | Full result only (`detection_result_full.json`) | **Both** files (`detection_result.json` and `_full.json`) |
 | Uploaded? | No | Yes — safe to publish |
-| Affects verdict? | Yes (present iff at least one threat is true) | **No.** Warnings never change the verdict or the exit code |
+| Affects verdict? | Yes (present iff at least one threat is true) | **No.** A warning never sets a threat category or triggers a threat exit |
 | Signal | "here is a threat and why" | "the detector could not inspect part of the input" |
 
-A warning is recorded when an artifact channel is present but cannot be
+A warning is recorded when an artifact channel is present but cannot be fully
 inspected — for example, `HAS_PATCH=true` was set but no readable patch bundle
-was found, or the `comment-memory` directory could not be listed. Without the
-`warnings` array, a partially-inspectable bundle would be indistinguishable
-from a fully-inspected clean one on the uploaded result: the detector analyzed
-less than the full artifact set, reported clean, and exited 0. Gating a run on
-warnings is a **host-level policy** decision; the detector deliberately does
-not do it, so a staging failure cannot suppress a real finding by turning
-"could not inspect" into "must fail". Each entry has three fields:
+was found, a staged prompt or patch exists but cannot be opened, or the
+`comment-memory` directory could not be listed. Readability is probed by
+actually opening the file: a stat-only check succeeds on a file the detector has
+no permission to read, which would report a non-empty, inspected-looking channel
+for content nobody examined. Without the `warnings` array, a partially
+inspectable bundle would be indistinguishable from a fully inspected clean one
+on the uploaded result: the detector analyzed less than the full artifact set,
+reported clean, and exited 0. Gating a run on advisory warnings is a
+**host-level policy** decision; the detector deliberately does not do it, so a
+staging failure cannot suppress a real finding by turning "could not inspect"
+into "must fail". Each entry has three fields:
 
 ```json
 "warnings": [
@@ -370,6 +374,15 @@ not do it, so a staging failure cannot suppress a real finding by turning
 `conclude` renders any warnings under a `⚠️` block distinct from both the
 verdict and the reasons, so a misconfigured job is visible in the job log
 without a reader having to consult GitHub Actions annotations.
+
+One exception is worth knowing about. Warnings are advisory *within a run that
+executes*. When `GH_AW_DETECTION_CONTINUE_ON_ERROR` is `false`, a warning about
+a **required** input (`prompt`, `agent_output`, `patch`) is promoted to a
+configuration error and the detector refuses to run degraded detection, exiting
+`2` before any analysis happens. That is an infrastructure error, not a threat
+verdict (exit `1`), and no result file is written — writing one would assert a
+clean verdict for analysis that never ran. In the default warn mode, where
+detection does run, every recorded warning appears in both result files.
 
 #### Concluding a run (`conclude`)
 
@@ -594,8 +607,9 @@ backward-compatible: a pre-existing consumer sees the field absent on results
 from an older detector, and one indexing into it always finds an array on
 results from a newer detector. Each entry is a `{ "field", "code", "message" }`
 object; the array is bounded at 20 entries with each `field` and `code` at most
-64 characters and each `message` at most 2000 characters. Warnings never affect
-the verdict or the exit code.
+64 characters and each `message` at most 2000 characters. A warning never sets a
+threat category or causes a threat exit; see the note above on strict mode,
+where a required-input warning is instead promoted to a configuration error.
 
 ### Replay workflow
 

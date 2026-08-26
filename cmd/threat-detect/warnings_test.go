@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,7 +229,14 @@ func TestWriteResult_WarningsAppearInBothFiles(t *testing.T) {
 // invariant called out in #954: "A warning says 'the detector could not
 // inspect everything', not 'a threat was found'. Conflating the two would
 // reintroduce false positives, which is the failure mode #916 exists to
-// reduce." Warnings must never influence the exit code.
+// reduce."
+//
+// The invariant is scoped to the write path, which is where a verdict is
+// concluded. It does not contradict TD-18c: in strict mode a warning about a
+// *required* input is promoted to a configuration error earlier in run(), and
+// detection is refused before any verdict exists to write. What must never
+// happen is a warning turning a concluded verdict into a threat, which is what
+// this test pins.
 func TestWriteResult_WarningsDoNotChangeExitCode(t *testing.T) {
 	dir := t.TempDir()
 	outputPath := filepath.Join(dir, "detection_result.json")
@@ -275,5 +283,114 @@ func TestWriteResult_UploadedResultEmitsWarningsField(t *testing.T) {
 	}
 	if string(w) != "[]" {
 		t.Fatalf("empty warnings must serialize as []; got %s", string(w))
+	}
+}
+
+// makePromptUnreadable strips all permission bits from a staged prompt. It
+// skips when the process can read it regardless, which is the case for root.
+func makePromptUnreadable(t *testing.T, artifactsDir string) string {
+	t.Helper()
+	promptPath := filepath.Join(artifactsDir, "aw-prompts", "prompt.txt")
+	if err := os.Chmod(promptPath, 0o000); err != nil {
+		t.Fatalf("chmod prompt: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(promptPath, 0o644) })
+	if _, err := os.ReadFile(promptPath); err == nil {
+		t.Skip("process can read a 0000-mode file (likely running as root)")
+	}
+	return promptPath
+}
+
+// An unreadable prompt is only discoverable by trying to open it: stat reports
+// a healthy non-empty file. In warn mode detection still runs, and the whole
+// point of #954 is that the resulting *uploaded* file records that the channel
+// went unexamined instead of looking like a clean full inspection.
+func TestRun_UnreadablePromptSurfacesInPublishedResult(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	makePromptUnreadable(t, artifactsDir)
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, _ := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "true",
+	})
+
+	// An unreadable channel is not a threat, so the run still concludes safe.
+	if code != exitSafe {
+		t.Fatalf("exit code = %d, want %d (an unreadable input is not a threat)", code, exitSafe)
+	}
+
+	result := readResultFile(t, outputPath)
+	raw, ok := result["warnings"]
+	if !ok {
+		t.Fatalf("published result has no warnings field: %v", result)
+	}
+	entries, ok := raw.([]any)
+	if !ok || len(entries) == 0 {
+		t.Fatalf("published result must record the unreadable prompt, got warnings=%v", raw)
+	}
+
+	found := false
+	for _, e := range entries {
+		entry, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		if entry["field"] == "prompt" && strings.Contains(fmt.Sprint(entry["message"]), "could not be read") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a prompt warning saying the file could not be read, got: %v", entries)
+	}
+}
+
+// The counterpart in strict mode. TD-18c promotes a required-input warning to a
+// configuration error, so detection is refused. The exit status must be the
+// infrastructure error, never the threat status, and no result may be written:
+// a file asserting a clean verdict for analysis that never happened is exactly
+// the fail-open outcome the refusal exists to prevent.
+func TestRun_UnreadablePromptInStrictModeRefusesWithoutWritingResult(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	makePromptUnreadable(t, artifactsDir)
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("exit code = %d, want %d (strict mode refuses a degraded run)", code, exitError)
+	}
+	if code == exitThreat {
+		t.Fatal("a staging failure must never be reported as a threat")
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Error("detection must not run when a required input is unreadable in strict mode")
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Error("no result file may be written for a run that was refused")
+	}
+	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError) {
+		t.Errorf("expected config_error status line, got:\n%s", stderr)
 	}
 }

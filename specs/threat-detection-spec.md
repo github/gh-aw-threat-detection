@@ -287,12 +287,27 @@ persisted in **both** the result and the full result, unlike `reasons`. A host
 that reads only the uploaded result therefore still sees when the detector
 could not fully inspect the artifact bundle.
 
-Warnings MUST NOT affect the verdict or the exit code. A warning says "the
-detector could not inspect everything", not "a threat was found"; conflating
-the two would reintroduce false positives that a partially degraded staging
-step would produce indistinguishably from a genuine finding. Gating a run on
-the presence of warnings is a host-level policy decision and MUST NOT be
-performed by the detector.
+Warnings MUST NOT contribute to the verdict. No warning may cause a threat
+category to be reported `true`, and no warning may by itself cause the detector
+to exit with the threat-detected status. A warning says "the detector could not
+inspect everything", not "a threat was found"; conflating the two would
+reintroduce false positives that a partially degraded staging step would produce
+indistinguishably from a genuine finding. Gating a run on the presence of
+advisory warnings is a host-level policy decision and MUST NOT be performed by
+the detector.
+
+This is scoped to findings that remain advisory. It does not override TD-18c:
+when `GH_AW_DETECTION_CONTINUE_ON_ERROR` is `false`, a warning concerning a
+*required* input is promoted to a configuration error and the implementation
+refuses to run degraded detection, exiting with the infrastructure-error status.
+That promotion is deliberate and is not a threat signal — the two exit statuses
+are distinct, and the run is refused rather than concluded. A consequence is
+that required-input findings do not reach the result files in that mode: the
+implementation MUST NOT write a result for a run it refused to perform, because
+a result asserting a clean verdict when no analysis occurred is precisely the
+fail-open outcome TD-18c exists to prevent. Such findings remain observable as
+annotations and as the process's exit status. In the default warn mode, where
+detection does run, every recorded warning MUST appear in both result files.
 
 This requirement is the reporting counterpart to TD-10g's fail-open treatment
 of an uninspectable channel. Where TD-10g requires such a channel to be treated
@@ -300,6 +315,13 @@ as **present** so it cannot suppress a genuine finding, this requirement makes
 the same condition **visible**: without it, a bundle the detector could only
 partially inspect is indistinguishable, to a host reading the result, from one
 that was fully inspected and found clean.
+
+Determining that a channel is uninspectable MUST NOT rely on file metadata
+alone. Interrogating only a directory entry's existence or size reports a
+non-empty, readable-looking channel for a file the detector cannot actually
+open, which would leave the very condition this requirement reports invisible to
+it. The implementation MUST verify that a staged, non-empty required input can
+actually be read before describing it as inspected.
 
 The implementation MUST bound `warnings` on both write and read: no more than
 20 entries; each entry's `field` and `code` MUST be non-empty and at most 64
