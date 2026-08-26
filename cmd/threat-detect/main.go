@@ -128,6 +128,19 @@ func detectionContinueOnError() bool {
 	return !strings.EqualFold(os.Getenv("GH_AW_DETECTION_CONTINUE_ON_ERROR"), "false")
 }
 
+// detectionContinueOnWarning reports whether an artifact channel that exists but
+// could not be inspected may stay advisory. It is deliberately a separate switch
+// from detectionContinueOnError: that one expresses "I require gh-aw's primary
+// inputs to be staged correctly", while this one expresses "I will not accept a
+// clean verdict from a bundle the detector could not fully read". A host may want
+// either without the other, and folding this into the existing flag would
+// silently tighten every host already running strict mode. Parsing matches
+// detectionContinueOnError exactly — anything other than a case-insensitive
+// "false" continues — so an unset variable preserves today's behavior.
+func detectionContinueOnWarning() bool {
+	return !strings.EqualFold(os.Getenv("GH_AW_DETECTION_CONTINUE_ON_WARNING"), "false")
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "report-result" {
 		os.Exit(runReport(os.Args[2:]))
@@ -291,11 +304,14 @@ func run() (code int) {
 	// (the default) they are warnings and detection proceeds with whatever was
 	// staged; in strict mode they are errors and the run stops as a
 	// configuration error before the engine is invoked. Findings about other
-	// artifacts stay advisory warnings in both modes.
+	// artifacts stay advisory warnings unless the host additionally opts into
+	// GH_AW_DETECTION_CONTINUE_ON_WARNING=false, which makes any uninspectable
+	// channel a configuration error.
 	warnMode := detectionContinueOnError()
+	continueOnWarning := detectionContinueOnWarning()
 	for _, w := range arts.Warnings {
 		command := "warning"
-		if w.RequiredInput && !warnMode {
+		if !continueOnWarning || (w.RequiredInput && !warnMode) {
 			command = "error"
 		}
 		stderrf("::%s::%s", command, escapeWorkflowData(w.Message))
@@ -318,6 +334,16 @@ func run() (code int) {
 
 	if !warnMode && arts.HasRequiredInputWarnings() {
 		stderrf("Error: one or more required detection inputs in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_ERROR is \"false\"; refusing to run degraded detection.", artifactsDir)
+		reason = reasonConfigError
+		return exitError
+	}
+
+	// A channel that exists but could not be inspected leaves the model
+	// certifying content it never saw. That is advisory by default, but a host
+	// that opted out of accepting such a verdict gets a refusal to certify —
+	// a configuration error, never a threat flag.
+	if !continueOnWarning && len(arts.Warnings) > 0 {
+		stderrf("Error: one or more artifact channels in %s could not be inspected and GH_AW_DETECTION_CONTINUE_ON_WARNING is \"false\"; refusing to certify a partially readable bundle.", artifactsDir)
 		reason = reasonConfigError
 		return exitError
 	}

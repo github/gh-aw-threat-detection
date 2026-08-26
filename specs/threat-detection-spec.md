@@ -366,9 +366,31 @@ detection with the inputs that were staged. In strict mode
 MUST emit each finding as an error and terminate as a configuration error
 (`config_error`, exit `2`) before invoking the engine. Findings about other
 artifacts (for example an unreadable `comment-memory` directory, per TD-18a)
-remain advisory warnings in both modes. Each finding MUST identify the artifact
+remain advisory warnings in both modes, subject to TD-18e. Each finding MUST identify the artifact
 it concerns and whether it is a required input. The detector MUST apply this same mode selection everywhere it
 consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
+
+**TD-18e**: The detector MUST support a separate opt-in gate,
+`GH_AW_DETECTION_CONTINUE_ON_WARNING`, resolved with the same case-insensitive
+`"false"` comparison as `GH_AW_DETECTION_CONTINUE_ON_ERROR` and defaulting to
+continuing when unset. When it is case-insensitively equal to `"false"` and any
+`ERR_VALIDATION` finding was recorded while loading artifacts — including a
+finding about an optional channel such as `comment-memory` that is not a
+required input — the detector MUST emit each finding as an error and terminate
+as a configuration error (`config_error`, exit `2`) before invoking the engine.
+The detector MUST NOT set any threat flag because a channel could not be
+inspected: the refusal is the detector declining to certify a bundle it could
+not fully read, not a verdict about its content.
+
+This gate MUST remain distinct from `GH_AW_DETECTION_CONTINUE_ON_ERROR`.
+The two express different host policies: `GH_AW_DETECTION_CONTINUE_ON_ERROR`
+governs whether the host's own staging contract for the primary inputs was
+honored, while `GH_AW_DETECTION_CONTINUE_ON_WARNING` governs the strength of the
+assurance the host is willing to accept, and a host may reasonably select either
+without the other. Widening `GH_AW_DETECTION_CONTINUE_ON_ERROR` to cover
+optional channels would also retroactively tighten every host already running
+strict mode. The unconditional `AllPrimaryInputsMissing` hard-fail (TD-18) is
+unaffected by either variable.
 
 **TD-18a**: The detector MUST discover comment-memory markdown files
 (`<artifacts-dir>/comment-memory/*.md`) and include them in the detection prompt
@@ -377,7 +399,8 @@ secret leakage. When the `comment-memory` directory is absent or contains no
 markdown files, the detector MUST proceed and record that no comment-memory
 files were found. When the directory is present but cannot be inspected — it
 cannot be read, or it is not a directory, or an entry within it is not a regular
-file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue
+(subject to TD-18e).
 Refusing to follow a symlink is such an inspection failure and MUST be reported
 as one: the run under analysis can influence how comment memory is staged, so a
 silent refusal would be indistinguishable from an absent channel.
