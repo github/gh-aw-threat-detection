@@ -346,3 +346,58 @@ func TestPromptAnalysis_InputNil(t *testing.T) {
 		t.Error("UnreadableInputs on nil analysis, want nil")
 	}
 }
+
+// TestPromptAnalysis_FormatForPrompt_UninspectableInput verifies TD-18d for the
+// analysis inputs: a file that exists but could not be read must be described to
+// the model as unexamined — not silently omitted, which would leave the prompt
+// telling the engine to read a file the detector never analyzed.
+func TestPromptAnalysis_FormatForPrompt_UninspectableInput(t *testing.T) {
+	analysis := &PromptAnalysis{
+		PromptTemplate:               "Trusted instructions. {{user_input}}",
+		ImportTree:                   `{"version":1}`,
+		UntrustedInputsIndeterminate: true,
+		Inputs: []PromptInputRead{
+			{Field: PromptInputFieldPrompt, Path: "/artifacts/aw-prompts/prompt.txt", Status: PromptInputUnreadable, Err: os.ErrPermission},
+			{Field: PromptInputFieldTemplate, Status: PromptInputOK},
+			{Field: PromptInputFieldImportTree, Status: PromptInputOK},
+		},
+	}
+
+	out := analysis.FormatForPrompt()
+	for _, want := range []string{
+		"### Uninspectable Prompt Analysis Inputs",
+		"The rendered workflow prompt (aw-prompts/prompt.txt) was NOT analyzed",
+		"Treat this channel as unexamined rather than empty",
+		"do NOT report a threat on the basis of this notice alone",
+		"does NOT establish that no untrusted content reached this run's prompt",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("FormatForPrompt() missing %q:\n%s", want, out)
+		}
+	}
+	// The notice must precede the analysis sections it qualifies.
+	if idx := strings.Index(out, "### Uninspectable Prompt Analysis Inputs"); idx != 0 {
+		t.Errorf("uninspectable notice at offset %d, want first section:\n%s", idx, out)
+	}
+	// The local diagnostic detail belongs in the job log, not the model prompt.
+	if strings.Contains(out, os.ErrPermission.Error()) {
+		t.Errorf("FormatForPrompt() leaked the OS error into the prompt:\n%s", out)
+	}
+}
+
+// TestPromptAnalysis_FormatForPrompt_NoUninspectableNoticeWhenReadable keeps the
+// notice off runs where every input was read, so it stays a signal.
+func TestPromptAnalysis_FormatForPrompt_NoUninspectableNoticeWhenReadable(t *testing.T) {
+	analysis := &PromptAnalysis{
+		PromptTemplate: "Trusted instructions.",
+		Inputs: []PromptInputRead{
+			{Field: PromptInputFieldPrompt, Status: PromptInputOK},
+			{Field: PromptInputFieldTemplate, Status: PromptInputOK},
+			{Field: PromptInputFieldImportTree, Status: PromptInputAbsent},
+		},
+	}
+
+	if out := analysis.FormatForPrompt(); strings.Contains(out, "Uninspectable") {
+		t.Errorf("unexpected uninspectable notice:\n%s", out)
+	}
+}

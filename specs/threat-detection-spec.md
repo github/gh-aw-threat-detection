@@ -407,7 +407,9 @@ about `prompt-template.txt` and `prompt-import-tree.json` are advisory in both
 modes because those files are optional; a finding about `aw-prompts/prompt.txt`
 concerns a required input and follows TD-18c. These findings MUST NOT
 additionally influence eligibility (TD-10g), which already derives
-prompt-injection inspectability from the analysis itself.
+prompt-injection inspectability from the analysis itself. An analysis input that
+exists but could not be read MUST additionally be described to the detection
+engine as unexamined, per TD-18d.
 
 **TD-18d**: The detector MUST identify the `gh-aw` framework scaffolding
 preamble in the rendered workflow prompt — the `<system>...</system>` block that

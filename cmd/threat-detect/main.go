@@ -426,7 +426,7 @@ func run() (code int) {
 	// degraded-inspection condition reaches the same reporting path (TD-10h),
 	// and re-gated on the host's continue-on-error policy — the engine has not
 	// been invoked yet, so strict mode can still refuse degraded detection.
-	analysisWarnings := promptAnalysisWarnings(promptAnalysis)
+	analysisWarnings := promptAnalysisWarnings(promptAnalysis, arts)
 	arts.Warnings = append(arts.Warnings, analysisWarnings...)
 	requiredDegraded := false
 	for _, w := range analysisWarnings {
@@ -577,13 +577,27 @@ func reportArtifactWarning(w artifacts.ArtifactWarning, warnMode bool) {
 // prompt is a required input — the template and the import tree are optional
 // analysis aids, so promoting their findings would make strict mode refuse runs
 // of hosts that legitimately never stage them (TD-18c).
-func promptAnalysisWarnings(analysis *detector.PromptAnalysis) []artifacts.ArtifactWarning {
+//
+// Findings already recorded by artifacts.Load are not repeated: a prompt that
+// was missing or zero-length at load time is reported there, and re-reporting it
+// here would double-count the same condition.
+func promptAnalysisWarnings(analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) []artifacts.ArtifactWarning {
 	var warnings []artifacts.ArtifactWarning
 
 	for _, in := range analysis.UnreadableInputs() {
 		warnings = append(warnings, artifacts.NewWarning(in.Field, fmt.Sprintf(
 			"%s: Prompt analysis input %s (%s) could not be read: %v. That content exists but was not inspected; the trusted-vs-untrusted prompt analysis is degraded.",
 			promptAnalysisValidationCode, promptAnalysisLabels[in.Field], in.Path, in.Err)))
+	}
+
+	// The rendered prompt can also turn up empty here on a bundle that loaded
+	// cleanly — it passed Load's size check and was blanked or truncated before
+	// the analysis read it. Load saw content, so nobody else reports this.
+	if analysis.Input(detector.PromptInputFieldPrompt).Status == detector.PromptInputAbsent &&
+		!arts.HasWarningForField(detector.PromptInputFieldPrompt) {
+		warnings = append(warnings, artifacts.NewWarning(detector.PromptInputFieldPrompt, fmt.Sprintf(
+			"%s: Detection context prompt at %s was empty when the prompt analysis read it, though it was present and non-empty when the artifacts were loaded. The prompt channel was not analyzed.",
+			promptAnalysisValidationCode, promptAnalysisLabels[detector.PromptInputFieldPrompt])))
 	}
 
 	// Absent aids are reported per file so each finding names the artifact it

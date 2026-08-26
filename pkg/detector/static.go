@@ -224,6 +224,37 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 	return analysis
 }
 
+// uninspectableNotices renders one TD-18d notice per analysis input that exists
+// but could not be read. The OS error is deliberately omitted: it is a local
+// diagnostic for the job log, and putting it in the prompt would give the model
+// failure text to reason about instead of a plain statement that the channel
+// went unexamined.
+func (a *PromptAnalysis) uninspectableNotices() []string {
+	var notices []string
+	for _, in := range a.UnreadableInputs() {
+		what, ok := uninspectableInputDescriptions[in.Field]
+		if !ok {
+			continue
+		}
+		notices = append(notices, artifacts.UninspectableNotice(what, "it is present but could not be read"))
+	}
+	if len(notices) > 0 && a.UntrustedInputsIndeterminate {
+		notices = append(notices,
+			"Because of the above, the trusted-vs-untrusted breakdown below is incomplete: "+
+				"an empty or missing list of extracted untrusted inputs does NOT establish that no "+
+				"untrusted content reached this run's prompt.")
+	}
+	return notices
+}
+
+// uninspectableInputDescriptions names each analysis input as the model should
+// see it, completing the sentence "... was NOT analyzed".
+var uninspectableInputDescriptions = map[string]string{
+	PromptInputFieldPrompt:     "The rendered workflow prompt (aw-prompts/prompt.txt)",
+	PromptInputFieldTemplate:   "The workflow prompt template (aw-prompts/prompt-template.txt)",
+	PromptInputFieldImportTree: "The prompt import tree (aw-prompts/prompt-import-tree.json)",
+}
+
 // FormatForPrompt renders the analysis as a string suitable for inclusion in the
 // detection prompt sent to the model.
 func (a *PromptAnalysis) FormatForPrompt() string {
@@ -232,6 +263,15 @@ func (a *PromptAnalysis) FormatForPrompt() string {
 	}
 
 	var sections []string
+
+	// An input that exists but could not be read must be described to the model
+	// as unexamined, never as empty or absent (TD-18d). This is stated first:
+	// the detection prompt directs the engine to read the workflow prompt file
+	// itself, so a notice that arrived after the analysis sections would be
+	// competing with instructions the engine has already acted on.
+	if notices := a.uninspectableNotices(); len(notices) > 0 {
+		sections = append(sections, "### Uninspectable Prompt Analysis Inputs\n\n"+strings.Join(notices, "\n\n"))
+	}
 
 	if s := a.Scaffolding.FormatForPrompt(); s != "" {
 		sections = append(sections, s)

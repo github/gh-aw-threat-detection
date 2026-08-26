@@ -65,7 +65,7 @@ var requiredInputFields = map[string]bool{
 	"patch":        true,
 }
 
-// uninspectableNotice renders the text handed to the detection model when a
+// UninspectableNotice renders the text handed to the detection model when a
 // channel exists but could not be read. It exists because the alternative --
 // telling the model the channel is empty -- is a fail-open bug: the model
 // reports clean about content nobody looked at, and the run exits 0.
@@ -76,7 +76,7 @@ var requiredInputFields = map[string]bool{
 // this detector is being tightened to avoid. Staging failures are almost always
 // misconfiguration; the correct response is to abstain on this channel, not to
 // accuse.
-func uninspectableNotice(what, reason string) string {
+func UninspectableNotice(what, reason string) string {
 	return fmt.Sprintf(
 		"%s was NOT analyzed: %s. Treat this channel as unexamined rather than empty, "+
 			"and do not draw any conclusion about its contents. "+
@@ -364,13 +364,13 @@ func Load(dir string) (*Artifacts, error) {
 	}
 	switch {
 	case len(infos) > 0 && len(unreadable) > 0:
-		arts.PatchFileInfo = strings.Join(infos, "\n") + "\n" + uninspectableNotice(
+		arts.PatchFileInfo = strings.Join(infos, "\n") + "\n" + UninspectableNotice(
 			fmt.Sprintf("%d further patch/bundle file(s)", len(unreadable)),
 			fmt.Sprintf("they could not be read (%s)", strings.Join(unreadable, ", ")))
 	case len(infos) > 0:
 		arts.PatchFileInfo = strings.Join(infos, "\n")
 	case len(unreadable) > 0:
-		arts.PatchFileInfo = uninspectableNotice(
+		arts.PatchFileInfo = UninspectableNotice(
 			"Every patch/bundle file staged for this run",
 			fmt.Sprintf("none could be read (%s)", strings.Join(unreadable, ", ")))
 	default:
@@ -388,7 +388,7 @@ func Load(dir string) (*Artifacts, error) {
 			// The agent job produced a patch that never reached the artifacts
 			// directory. Saying "no patch found" here would tell the model the
 			// run made no changes, which is the opposite of what HAS_PATCH says.
-			arts.PatchFileInfo = uninspectableNotice(
+			arts.PatchFileInfo = UninspectableNotice(
 				"The patch produced by this run",
 				fmt.Sprintf("the agent job reported a patch (HAS_PATCH=true) but no patch or bundle file reached %s", dir))
 		}
@@ -588,7 +588,7 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 		if !os.IsNotExist(err) {
 			arts.addWarning("comment_memory", fmt.Sprintf(
 				"%s: Unable to inspect comment-memory directory at %s: %v", errCodeValidation, commentMemoryDir, err))
-			arts.CommentMemoryFileInfo = uninspectableNotice(
+			arts.CommentMemoryFileInfo = UninspectableNotice(
 				"The comment-memory directory",
 				fmt.Sprintf("%s could not be inspected (%v)", commentMemoryDir, err))
 			return
@@ -607,7 +607,7 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 			"%s: Expected %s to be a directory, found %s. Comment-memory files were not read. "+
 				"Stage comment memory as a real directory: symlinks are refused because they can resolve outside the artifacts directory.",
 			errCodeValidation, commentMemoryDir, describeFileType(info.Mode())))
-		arts.CommentMemoryFileInfo = uninspectableNotice(
+		arts.CommentMemoryFileInfo = UninspectableNotice(
 			"The comment-memory directory",
 			fmt.Sprintf("%s exists but is %s rather than a directory, so it was refused", commentMemoryDir, describeFileType(info.Mode())))
 		return
@@ -617,7 +617,7 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 	if err != nil {
 		arts.addWarning("comment_memory", fmt.Sprintf(
 			"%s: Unable to read comment-memory directory at %s: %v", errCodeValidation, commentMemoryDir, err))
-		arts.CommentMemoryFileInfo = uninspectableNotice(
+		arts.CommentMemoryFileInfo = UninspectableNotice(
 			"The comment-memory directory",
 			fmt.Sprintf("%s could not be read (%v)", commentMemoryDir, err))
 		return
@@ -656,13 +656,13 @@ func (arts *Artifacts) loadCommentMemory(dir string) {
 
 	switch {
 	case len(infos) > 0 && len(refused) > 0:
-		arts.CommentMemoryFileInfo = strings.Join(infos, "\n") + "\n" + uninspectableNotice(
+		arts.CommentMemoryFileInfo = strings.Join(infos, "\n") + "\n" + UninspectableNotice(
 			fmt.Sprintf("%d further comment-memory file(s) in %s", len(refused), commentMemoryDir),
 			"they are symlinks or special files rather than regular files, so they were refused")
 	case len(infos) > 0:
 		arts.CommentMemoryFileInfo = strings.Join(infos, "\n")
 	case len(refused) > 0:
-		arts.CommentMemoryFileInfo = uninspectableNotice(
+		arts.CommentMemoryFileInfo = UninspectableNotice(
 			fmt.Sprintf("Every comment-memory file in %s", commentMemoryDir),
 			"they are symlinks or special files rather than regular files, so they were refused")
 	default:
