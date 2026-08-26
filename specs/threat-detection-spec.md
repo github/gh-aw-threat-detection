@@ -23,6 +23,33 @@ This specification covers:
 - Configuration interface
 - Version compatibility
 
+### 1.3 Position in the Defense Stack
+
+Threat detection is a **gate on downstream actions**, not a post-hoc forensic
+audit of the agent's session. It runs after the agent finishes and before the
+safe-output job executes, and its purpose is to decide whether the effects the
+agent is asking for — issues, comments, pull requests, patches — may be
+applied. A conforming implementation analyzes the staged artifact bundle
+(TD-17), which is the record of what the agent is asking to have published.
+
+It follows that actions the agent completed **during** its session are outside
+what this layer can gate, because they have already happened by the time it
+runs. In particular, content that reaches the agent only mid-run — MCP tool
+results, fetched web pages, and the engine transcript — is not staged as an
+artifact, so an injection delivered exclusively through one of those channels
+leaves no evidence in the analyzed inputs; and a secret transmitted mid-run
+through an outbound request or an MCP call never enters the artifact bundle at
+all. Neither is detectable here, and an implementation MUST NOT be understood to
+claim otherwise.
+
+These in-session risks are the responsibility of controls that are active while
+the agent runs: network egress restriction (see the agentic workflow firewall)
+and constraints on which MCP servers and tools are reachable. Threat detection
+is complementary to those controls and MUST NOT be treated as a substitute for
+them. Conversely, the structural eligibility rules in TD-10g are stated in terms
+of the artifact bundle precisely because that bundle is the evidence available
+at the point the gate is applied.
+
 ---
 
 ## 2. Threat Detection Requirements
@@ -177,6 +204,70 @@ rewriting engine output, which conflicts with the real-time forwarding TD-20a
 mandates; it is therefore out of scope for this requirement, which governs only
 the files the detector itself writes.
 
+**TD-10g**: The implementation MUST enforce structural eligibility for each
+threat category against the loaded artifact bundle, rejecting a reported result
+that sets an ineligible category to `true` rather than recording it. The
+following categories are eligible only under the stated preconditions:
+
+- `prompt_injection` is eligible only when untrusted content could have reached
+  the run's own inputs: at least one non-empty untrusted input region in the
+  prompt analysis, or at least one comment-memory file (which the agent reads
+  back into its prompt). Instruction non-compliance by the agent, absent
+  untrusted content that could have caused it, is a quality signal and not a
+  security verdict.
+- `malicious_patch` is eligible only when the artifact bundle contains at least
+  one `.patch` or `.bundle` file. A framework-rejected safe-output validation
+  error is the guardrail working and MUST NOT be treated as a patch.
+- `secret_leak` is eligible only when the artifact bundle contains at least one
+  channel a secret could have reached — a non-empty agent output file, at least
+  one patch or bundle file, or at least one comment-memory file. The agent
+  output file carries the framework's safe-output items, so textual outputs
+  destined for publication (issue bodies, comment bodies, pull request
+  descriptions) are covered by that channel and are not separately gated.
+
+Eligibility MUST fail open whenever the evidence for a precondition could not be
+established, so that a missing, unreadable, or malformed artifact cannot suppress
+a genuine finding. In particular:
+
+- An empty set of untrusted input regions establishes that no untrusted content
+  reached the prompt only when the analysis that produced it ran to completion.
+  Where the prompt template or the rendered prompt was unavailable, or the two
+  could not be reconciled so that regions were skipped, the result is
+  indeterminate and `prompt_injection` MUST remain eligible.
+- An artifact channel that exists but could not be inspected MUST be treated as
+  present, not absent. A comment-memory directory that could not be read MUST
+  NOT make `prompt_injection` or `secret_leak` ineligible.
+
+Eligibility MUST be evaluated by the implementation against the same artifact
+bundle and prompt analysis used to build the detection prompt, and the binding
+evaluation MUST be performed in a context the detection model cannot influence.
+An implementation MAY additionally expose the eligibility to the in-session
+reporting tool so an ineligible report can be corrected without a further engine
+pass, but because the reporting tool is invoked over a command line the model
+composes, any such check MUST be treated as advisory: the implementation MUST
+re-evaluate eligibility against every result it reads from the sink before
+recording it, and MUST NOT rely on the reporting tool's check alone.
+
+A result rejected on eligibility MUST be treated as an unusable report: the
+implementation MUST discard it, MAY retry with a bounded self-correction prompt
+naming the ineligible category and what would make it eligible, and MUST treat
+retry exhaustion as an infrastructure error (TD-06a). The implementation MUST
+NOT record a verdict it synthesized in place of the rejected one; the sink
+remains the sole source of any recorded result (TD-06a).
+
+The scope of this requirement is the artifact bundle. Channels that reach the
+agent only during execution — MCP tool results, fetched web content, and the
+engine transcript — are not staged as artifacts, so an injection delivered
+exclusively through one of them leaves no evidence in the analyzed inputs. Such
+an injection is outside the evidentiary reach of the detection pass, and
+eligibility neither detects nor claims to detect it.
+
+The default prompt template MUST additionally document the eligibility rules and
+the taxonomic distinctions they enforce (instruction non-compliance is not a
+security verdict; framework-rejected validation errors are defenses working;
+`prompt_injection` requires an untrusted origin), so eligible verdicts are the
+norm rather than the exception.
+
 
 ---
 
@@ -284,8 +375,22 @@ consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
 as untrusted, attacker-influenced input to be analyzed for prompt injection and
 secret leakage. When the `comment-memory` directory is absent or contains no
 markdown files, the detector MUST proceed and record that no comment-memory
-files were found. When the directory is present but cannot be inspected, the
-detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+files were found. When the directory is present but cannot be inspected — it
+cannot be read, or it is not a directory, or an entry within it is not a regular
+file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue.
+Refusing to follow a symlink is such an inspection failure and MUST be reported
+as one: the run under analysis can influence how comment memory is staged, so a
+silent refusal would be indistinguishable from an absent channel.
+
+**TD-18d**: Where an artifact channel exists but could not be inspected, the
+detection prompt MUST describe it as unexamined and MUST NOT describe it as
+empty. Reporting an unread channel as empty invites a clean verdict about
+content that was never analyzed, which is a fail-open outcome in a security
+control. The same description MUST state that the inspection failure is not
+itself evidence of a threat, so that a staging or configuration fault does not
+become a source of false positives. This requirement is independent of
+eligibility (TD-10g): eligibility governs whether a verdict may be raised from a
+channel, while this requirement governs what the model is told about it.
 
 **TD-18b**: If `aw-prompts/prompt-template.txt` or
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the

@@ -27,6 +27,18 @@ type PromptAnalysis struct {
 	// the rendered prompt. It is reported to the model as trusted content so
 	// framework directives are not mistaken for prompt injection.
 	Scaffolding *FrameworkScaffolding
+	// UntrustedInputsIndeterminate is true when an empty UntrustedInputs list
+	// does not establish that no untrusted content reached the prompt, because
+	// extraction could not be performed or could not be completed.
+	//
+	// Extraction needs both the template and the rendered prompt, and locates
+	// each interpolated region by matching the template's static segments
+	// against the rendered text. Either half can be unavailable, and the two
+	// can diverge, in which case regions are silently skipped. An empty result
+	// therefore has two indistinguishable causes: nothing untrusted was
+	// interpolated, or the analysis failed. Consumers that would otherwise read
+	// an empty list as proof of trusted content MUST consult this flag first.
+	UntrustedInputsIndeterminate bool
 }
 
 // UntrustedInput represents a single untrusted region extracted from the rendered prompt.
@@ -89,6 +101,20 @@ func BuildPromptAnalysis(arts *artifacts.Artifacts) *PromptAnalysis {
 	// Extract untrusted inputs if both template and rendered prompt are available.
 	if analysis.PromptTemplate != "" && rendered != "" {
 		analysis.UntrustedInputs = ExtractUntrustedInputs(analysis.PromptTemplate, rendered)
+		// A template carrying placeholders was written to receive untrusted
+		// content, so extracting nothing from it is more likely an extraction
+		// failure (segments that did not match the rendered prompt) than a run
+		// in which every interpolation happened to be empty. The two cases are
+		// indistinguishable from the result, so the weaker claim is recorded.
+		if len(analysis.UntrustedInputs) == 0 &&
+			len(templatePlaceholderRE.FindAllStringIndex(analysis.PromptTemplate, -1)) > 0 {
+			analysis.UntrustedInputsIndeterminate = true
+		}
+	} else {
+		// Extraction did not run at all: with no template there is nothing to
+		// locate regions with, and with no rendered prompt there is nothing to
+		// locate them in.
+		analysis.UntrustedInputsIndeterminate = true
 	}
 
 	if arts.ActivationContext != nil {

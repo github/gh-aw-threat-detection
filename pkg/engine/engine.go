@@ -26,6 +26,12 @@ type AnalyzeOptions struct {
 	// and cancels the subprocess as soon as a valid result is written to this path.
 	ResultSinkPath string
 
+	// Eligibility, when non-nil, is transported to the report-result subprocess
+	// so it can reject structurally impossible verdicts (e.g. malicious_patch
+	// with zero patch files). When nil, the subprocess defaults to permissive
+	// eligibility — callers that predate the field are not tightened.
+	Eligibility *detector.Eligibility
+
 	// MaxTurns bounds the number of agentic tool-use turns the engine may take
 	// before the CLI exits on its own. Zero means "no cap". The value is
 	// exported to the engine subprocess as GH_AW_MAX_TURNS (matching gh-aw's
@@ -198,6 +204,7 @@ func (e *copilotEngine) Analyze(ctx context.Context, prompt string, opts Analyze
 		return "", err
 	}
 	defer cleanup()
+	toolEnv = appendEligibilityEnv(toolEnv, opts.Eligibility)
 	env = append(env, toolEnv...)
 
 	if harnessPath, ok := copilotHarnessPath(); ok {
@@ -232,6 +239,7 @@ func (e *claudeEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeO
 	defer cleanup()
 	env := append([]string(nil), toolEnv...)
 	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
+	env = appendEligibilityEnv(env, opts.Eligibility)
 	enableResultTool := opts.ResultSinkPath != ""
 
 	if harnessPath, ok := claudeHarnessPath(); ok {
@@ -258,6 +266,7 @@ func (e *codexEngine) Analyze(ctx context.Context, prompt string, opts AnalyzeOp
 	defer cleanup()
 	env := append([]string(nil), toolEnv...)
 	env = append(env, maxTurnsEnv(opts.MaxTurns)...)
+	env = appendEligibilityEnv(env, opts.Eligibility)
 	provider := codexForcedProvider(codexConfigPath())
 
 	if harnessPath, ok := codexHarnessPath(); ok {
@@ -280,6 +289,22 @@ func maybeProvisionResultTool(sinkPath string) (env []string, cleanup func(), er
 		return nil, func() {}, nil
 	}
 	return provisionResultTool(sinkPath)
+}
+
+// appendEligibilityEnv appends eligibility transport variables to env when
+// eligibility is non-nil, returning the extended slice.
+//
+// This transport is advisory. It reaches the report-result subprocess through a
+// command line the detection model composes, so the model can override or strip
+// it; the binding check is the detector's own revalidation of the sink result
+// against the eligibility it computed from artifacts. What this buys is a fast
+// in-session correction for a model that is simply mistaken, which is the
+// common case and much cheaper than another engine pass.
+func appendEligibilityEnv(env []string, eligibility *detector.Eligibility) []string {
+	if eligibility == nil {
+		return env
+	}
+	return append(env, eligibility.Env()...)
 }
 
 func copilotCommand(promptPath string) (string, []string) {

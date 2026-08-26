@@ -45,6 +45,35 @@ This project is designed to help reduce risk when running AI agent workflows by 
 
 Do not treat a "safe" result as a security guarantee. Use the output as one signal in a broader security review process.
 
+### What this layer is for
+
+Threat detection is a **gate on downstream actions**, not a post-hoc audit of
+the agent's session. It runs after the agent finishes and before the
+safe-output job, and it decides whether the effects the agent is asking for —
+issues, comments, pull requests, patches — may be applied. What it analyzes is
+the staged artifact bundle, which is the record of what the agent wants
+published.
+
+So anything the agent already **did** during its session is outside what this
+can gate, because it happened before detection ran:
+
+- **Mid-run injection sources are not staged.** MCP tool results, fetched web
+  pages, and the engine transcript never become artifacts, so an injection that
+  arrived only through one of those leaves no trace in the analyzed inputs.
+- **Mid-run exfiltration never enters the bundle.** A secret sent out over an
+  outbound request or an MCP call is gone by the time detection runs; there is
+  no artifact for it to appear in.
+
+Neither is a gap this component intends to close. Those risks belong to the
+controls that are live *while* the agent runs — network egress restriction (the
+[agentic workflow firewall](https://github.com/github/gh-aw-firewall)) and limits on which
+MCP servers and tools are reachable. Threat detection complements those controls
+and does not substitute for them.
+
+This is also why the [structural eligibility](#structural-eligibility) rules are
+written in terms of artifacts: the bundle is the evidence that exists at the
+moment the gate is applied.
+
 ## Usage
 
 ### CLI
@@ -63,7 +92,7 @@ threat-detect [flags] <artifacts-dir>
 - `--custom-prompt-file` — Path to a file with additional detection instructions. Takes precedence over `--custom-prompt` and `CUSTOM_PROMPT`
 - `--output` — Path to write the JSON result (defaults to stdout). Its `reasons` array is always empty; see [Where the reasons go](#where-the-reasons-go)
 - `--full-output` — Path to write the JSON result *including* reasons. Defaults to the `--output` path with `_full` inserted before the extension (`detection_result.json` → `detection_result_full.json`); pass an explicitly empty value to disable it. **Hosts must not upload this file**
-- `--retries` — Retries after a failed detection attempt. **Default: `0`** (env: `THREAT_DETECTION_RETRIES`). A from-scratch retry rarely fixes anything: the engine CLIs already retry transient provider errors internally, and the `threat_detection_result` tool wrapper's non-zero exit + stderr already lets the agent iterate in-session on a bad tool call without a subprocess restart. `--engine-timeout` is **always terminal** regardless of this value — retrying a runaway is overwhelmingly likely to run away again
+- `--retries` — Retries after a failed detection attempt, including one rejected on structural [eligibility](#structural-eligibility). **Default: `0`** (env: `THREAT_DETECTION_RETRIES`). A from-scratch retry rarely fixes anything: the engine CLIs already retry transient provider errors internally, and the `threat_detection_result` tool wrapper's non-zero exit + stderr already lets the agent iterate in-session on a bad tool call — including an ineligible one — without a subprocess restart. `--engine-timeout` is **always terminal** regardless of this value — retrying a runaway is overwhelmingly likely to run away again
 - `--engine-timeout` — Wall-clock timeout per detection attempt (Go duration, e.g. `5m`, `300s`). On expiry the engine subprocess **and its harness descendants** are killed via a process-group `SIGKILL`, so the actual model CLI running as a grandchild under `node` cannot keep burning credits after the deadline. If the result sink already holds a valid verdict written just before the deadline, that verdict wins over the timeout. Timeouts are terminal — the run exits `2` with the status reason `engine_timeout` immediately, without consuming any `--retries`. `0` disables the cap. Default: `5m` (env: `THREAT_DETECTION_ENGINE_TIMEOUT`)
 - `--max-turns` — Maximum agentic tool-use turns per attempt. Exported to the engine subprocess as `GH_AW_MAX_TURNS` (which the Claude, Codex, and Copilot harnesses read) and additionally passed as `--max-turns` to the bare Claude CLI. The bare Copilot CLI has no equivalent flag, so on that path only `--engine-timeout` enforces the cap; the detector logs a diagnostic when `--max-turns` is set for that path. `0` disables the cap and scrubs any inherited `GH_AW_MAX_TURNS` from the engine subprocess's env. Default: `50` — the turn cap's real job is catching tool-loop pathology (model stuck calling Read in a loop), not being the primary credit bound; the wall-clock is the primary bound, and 50 gives comfortable headroom for legitimate wide exploration (e.g. a patch touching many files). (env: `THREAT_DETECTION_MAX_TURNS`; also honors `GH_AW_MAX_TURNS` as a fallback so a turn budget configured for the harness-driven path applies to the standalone detector too)
 - `--step-summary` — Deprecated and ignored. Accepted so hosts that still pass it (older `gh-aw` releases) do not fail; the detector no longer writes a GitHub Actions step summary
@@ -73,9 +102,11 @@ threat-detect [flags] <artifacts-dir>
 verdict in-session by invoking the `threat_detection_result` tool, which writes
 a strict JSON object matching the result contract to an out-of-band result sink;
 the detector cancels the engine subprocess as soon as a valid result is written.
-The verdict is read exclusively from that sink; if no sink result is produced, a
-self-correction prompt is retried (`--retries`, once by default), and retry
-exhaustion is treated as an infrastructure error.
+The verdict is read exclusively from that sink; if no sink result is produced,
+or the reported verdict is rejected on structural eligibility (see [Structural
+eligibility](#structural-eligibility)), a self-correction prompt is retried
+(`--retries`, once by default), and retry exhaustion is treated as an
+infrastructure error.
 
 #### In-session result reporting (`threat_detection_result`)
 
@@ -119,6 +150,98 @@ exclusively from the sink; it does not scrape the engine transcript.
 - `0` — Safe (no threats detected)
 - `1` — Threat detected
 - `2` — Infrastructure/configuration error
+
+#### Structural eligibility
+
+Each threat category is only raisable against an artifact bundle that could
+plausibly exhibit it:
+
+- `prompt_injection` requires untrusted content that could have reached this
+  run's inputs — a non-empty untrusted region in the prompt analysis, or a
+  comment-memory file (which the agent reads back into its prompt).
+- `malicious_patch` requires at least one `.patch` or `.bundle` file in the
+  artifact bundle. Framework-rejected safe-output validation errors are the
+  guardrails working; they are not patches.
+- `secret_leak` requires a channel a secret could have reached — a non-empty
+  agent output, a patch or bundle, or a comment-memory file. Note that
+  `agent_output.json` is gh-aw's safe-outputs file, so issue bodies, comment
+  bodies and PR descriptions the agent asked the framework to publish are
+  covered by the agent-output channel rather than being separate ones.
+
+Eligibility fails open whenever the evidence for a precondition could not be
+established — a missing, unreadable, or malformed artifact must never be able to
+suppress a real finding. An empty set of untrusted regions only proves the prompt
+received nothing untrusted if the analysis actually ran: if `prompt-template.txt`
+or the rendered prompt was unavailable, or the two could not be reconciled so
+regions were skipped, `prompt_injection` stays eligible. Likewise a
+comment-memory directory that exists but could not be read counts as a channel
+rather than as an absence.
+
+The check runs in two places, with different standing:
+
+- **In the reporting tool**, from `THREAT_DETECTION_ELIGIBLE_*` environment
+  variables, so an ineligible report is corrected in-session without another
+  engine pass. The tool prints `THREAT_DETECTION_RESULT_ERROR:` naming the
+  category and what would make it eligible. This check is **advisory** — the
+  model composes the command line that carries those variables, so it can
+  override or omit them.
+- **In the detector process**, against the eligibility it computed from the
+  artifacts itself. Every result read from the sink is re-checked here before
+  it is recorded, so a verdict that bypassed the tool (or overrode its
+  environment) is still rejected. This is the binding check.
+
+An ineligible result is treated exactly like a malformed one: it is discarded,
+never rewritten, so the sink stays the sole source of any recorded result. With
+the default `--retries 0` the advisory tier is what recovers the run — the tool
+rejects the call and the model re-answers in-session, without a restart. The
+binding tier is the backstop for a verdict that reached the sink anyway: with no
+retries left it ends the run at `invalid_report_exhausted` and exit 2, and where
+retries are configured it first feeds the rejection back as a self-correction.
+An attempt that also hit `--engine-timeout` stays terminal and is not retried.
+
+#### Adding a channel
+
+Eligibility is derived from *channels* — declared in `inputChannels`,
+`outputChannels` and `patchChannel` in `pkg/detector/eligibility.go` — rather
+than from conditions written per category. To make a new artifact source count,
+append a channel to the relevant list:
+
+```go
+{
+    name:          "an MCP tool result recorded during the run",
+    present:       len(arts.MCPToolResults) > 0,
+    uninspectable: arts.HasWarningForField("mcp_tool_results"),
+}
+```
+
+Both signals matter. `present` means content was found; `uninspectable` means
+the channel may hold content the detector could not read. Either makes the
+category eligible, because an artifact the detector failed to inspect must never
+be mistaken for one that does not exist — collapsing the two is what caused the
+fail-closed bugs this shape prevents. Tests enforce both halves: every channel
+must be eligible on either signal, and every channel must be named in the
+rejection message, which is generated from the same declarations.
+
+A source also has to be *staged* before it can be a channel. Adding one to the
+detector only matters once the host writes it into the artifacts directory and
+`pkg/artifacts` loads it; until then there is nothing to point at.
+
+A channel that is `uninspectable` also has to *say so in the prompt*. Eligibility
+decides whether a verdict may be raised from a channel; it does not decide what
+the model is told about it. If the loader describes an unread channel as empty,
+the model reports clean about content nobody looked at and the run exits 0 —
+a fail-open outcome one layer above eligibility. Use
+`artifacts.uninspectableNotice` so the description says the channel was
+unexamined rather than empty, and states that the failure is not itself evidence
+of a threat. That second half is not decoration: without it a staging fault
+becomes a false-positive source, which is the failure mode eligibility exists to
+reduce.
+
+Eligibility is scoped to the artifact bundle. MCP tool results, fetched web
+content, and the engine transcript are never staged as artifacts, so an
+injection delivered only through those channels leaves no evidence in the
+analyzed inputs and is outside what this detection pass can see. See spec
+TD-10g.
 
 The detector also emits a single machine-readable status line to stderr at the end
 of every detection run: `THREAT_DETECTION_STATUS: reason=<reason> exit=<code>`.
@@ -167,7 +290,7 @@ log consumers must ignore any `THREAT_DETECTION_*` marker that carries the
 `[engine] ` prefix.
 
 ```text
-[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=1
+[threat-detect] run start: version=1.2.3 engine=copilot model=(none; using engine default) retries=0 max_turns=50 engine_timeout=5m0s
 [threat-detect] artifacts loaded: dir=/tmp/gh-aw/threat-detection prompt_bytes=4096 agent_output_bytes=812 patch_files=1 all_primary_inputs_missing=false
 [threat-detect] artifact inventory (3 entries):
 [threat-detect]   aw-prompts/prompt.txt bytes=4096 kind=file consumed=true
