@@ -82,9 +82,12 @@ threat-detection:
   "prompt_injection": false,
   "secret_leak": false,
   "malicious_patch": false,
-  "reasons": []
+  "reasons": [],
+  "warnings": []
 }
 ```
+
+The `warnings` field is optional for backward compatibility; see TD-10g.
 
 **TD-09**: If any threat is detected (`true`), the workflow MUST fail and safe outputs MUST NOT execute.
 
@@ -176,6 +179,40 @@ publish it (see U-09). Suppressing the text entirely would require withholding o
 rewriting engine output, which conflicts with the real-time forwarding TD-20a
 mandates; it is therefore out of scope for this requirement, which governs only
 the files the detector itself writes.
+
+**TD-10g**: The result MAY carry a `warnings` array of detector-authored
+findings about artifact channels the detector could not fully inspect (for
+example, an unreadable `comment-memory` directory, or a `HAS_PATCH=true` bundle
+that could not be read). Each entry MUST be a JSON object with the required
+string fields `field` (identifying the artifact channel), `code` (a stable
+identifier such as `ERR_VALIDATION`), and `message` (a human-readable
+diagnostic). The `warnings` field is OPTIONAL for backward compatibility; a
+result without it MUST parse successfully.
+
+Warnings are detector-authored — they are composed by the implementation from
+the loader's own findings and MUST NOT be sourced from or influenced by the
+detection engine. Because they carry no model-authored text, warnings MUST be
+persisted in **both** the result and the full result, unlike `reasons`. A host
+that reads only the uploaded result therefore still sees when the detector
+could not fully inspect the artifact bundle.
+
+Warnings MUST NOT affect the verdict or the exit code. A warning says "the
+detector could not inspect everything", not "a threat was found"; conflating
+the two would reintroduce false positives that a partially degraded staging
+step would produce indistinguishably from a genuine finding. Gating a run on
+the presence of warnings is a host-level policy decision and MUST NOT be
+performed by the detector.
+
+The implementation MUST bound `warnings` on both write and read: no more than
+20 entries; each entry's `field` and `code` MUST be non-empty and at most 64
+characters, and each entry's `message` MUST be non-empty and at most 2000
+characters. These bounds MUST be enforced identically on write and read, so no
+result the implementation accepts on write can be rejected on read.
+
+Warning `message` values embed host-controlled paths, so the implementation
+MUST sanitize each field before echoing it into diagnostics — the same
+protection applied to model-authored reasons — so a path containing a control
+character cannot forge a workflow command or break out of its rendered line.
 
 
 ---
@@ -486,6 +523,17 @@ only ever contribute reasons, and `conclude` MUST therefore:
 Recovered reasons MUST be rendered into the job-log diagnostics under the
 escaping and bounding rules of TD-20d. `conclude` MUST NOT copy them into any
 file, and hosts MUST NOT upload the full result.
+
+**TD-20j**: When the result carries a non-empty `warnings` array (TD-10g),
+`conclude` MUST render the warnings into the job log as a block distinct from
+both the verdict block and the reasons block, so a partially-inspected bundle
+is visible to a job-log reader without their having to consult GitHub Actions
+annotations. The rendered block MUST make clear that warnings do not affect
+the verdict, and each warning's fields MUST be sanitized under the same rules
+as any other host-controlled value echoed into the diagnostics (TD-20d). A
+result with no warnings MUST NOT produce a warnings block. `conclude` MUST NOT
+fail the run or change the exit-status decision based on the presence or
+content of warnings.
 
 **TD-20i**: Rendered conclusion output MUST distinguish a tooling failure from an
 actual security finding, so reviewers do not treat a detection outage as a

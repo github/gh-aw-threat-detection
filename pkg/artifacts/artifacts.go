@@ -33,10 +33,14 @@ const (
 	DefaultWorkflowDescription = "No description provided"
 )
 
-// errCodeValidation mirrors the ERR_VALIDATION prefix used by gh-aw's
+// ErrCodeValidation mirrors the ERR_VALIDATION prefix used by gh-aw's
 // error_codes.cjs so degraded-artifact warnings look identical whether they
 // originate from gh-aw's inline detection path or this standalone detector.
-const errCodeValidation = "ERR_VALIDATION"
+const ErrCodeValidation = "ERR_VALIDATION"
+
+// errCodeValidation is retained as an unexported alias for the historical
+// spelling used inside this package.
+const errCodeValidation = ErrCodeValidation
 
 // ArtifactWarning records a single degraded-input finding: a human-readable
 // message (already prefixed with the ERR_VALIDATION error code) plus the
@@ -48,12 +52,30 @@ type ArtifactWarning struct {
 	// Field identifies which artifact the warning concerns (e.g. "prompt",
 	// "agent_output", "patch"), for structured logging.
 	Field string
+	// Code is the stable error-code identifier (e.g. ErrCodeValidation) that
+	// categorizes the warning. It matches the prefix embedded in Message and
+	// is exposed as a separate field so downstream consumers (the result
+	// contract, structured logs) can render code and message independently
+	// without having to parse the prefix.
+	Code string
 	// RequiredInput is true when the warning concerns an artifact the host was
 	// expected to stage (the prompt, the agent output, or a patch declared by
 	// HAS_PATCH). A host running in strict mode
 	// (GH_AW_DETECTION_CONTINUE_ON_ERROR="false") treats these as a setup
 	// failure rather than a warning; other findings stay advisory in both modes.
 	RequiredInput bool
+}
+
+// MessageBody returns Message with the leading "<Code>: " prefix stripped, if
+// present. It is the form to surface in structured outputs that carry Code
+// separately (for example, the result-contract warnings block), so the code
+// is not repeated twice.
+func (w ArtifactWarning) MessageBody() string {
+	if w.Code == "" {
+		return w.Message
+	}
+	prefix := w.Code + ": "
+	return strings.TrimPrefix(w.Message, prefix)
 }
 
 // requiredInputFields are the ArtifactWarning fields that describe an artifact
@@ -593,6 +615,7 @@ func fileSize(path string) (int64, error) {
 func (a *Artifacts) addWarning(field, message string) {
 	a.Warnings = append(a.Warnings, ArtifactWarning{
 		Field:         field,
+		Code:          errCodeValidation,
 		Message:       message,
 		RequiredInput: requiredInputFields[field],
 	})

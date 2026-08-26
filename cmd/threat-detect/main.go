@@ -482,7 +482,7 @@ func run() (code int) {
 	}
 
 	var resultReason string
-	code, resultReason = writeResult(result, outputJSON, fullOutputJSON)
+	code, resultReason = writeResult(result, arts.Warnings, outputJSON, fullOutputJSON)
 	reason = resultReason
 	return code
 }
@@ -621,6 +621,13 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 // always redacted: it carries the three booleans with an empty `reasons` array.
 // The model-authored reasons go only to fullOutput, which stays on the runner.
 //
+// Detector-authored warnings (from artifactWarnings) are attached to both
+// destinations. Unlike reasons, warnings are fixed strings composed by the
+// detector — the model never authors or influences them — so they are safe to
+// publish in the uploaded result and give hosts a programmatic signal that the
+// detector could not fully inspect the artifact bundle. Warnings MUST NOT
+// affect the verdict or the exit code.
+//
 // No diagnostic composed here echoes the reasons, because hosts tee stdout and
 // stderr into files they publish. That guarantee covers detector-authored output
 // only: forwarded engine output (TD-20a) reproduces the reason text wherever the
@@ -633,14 +640,20 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 // read-only or missing detection directory must not turn a completed detection
 // into an infrastructure error. A failure to write the authoritative redacted
 // result is fatal, and yields no JSON at all.
-func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (int, string) {
+func writeResult(result *detector.Result, artifactWarnings []artifacts.ArtifactWarning, outputJSON, fullOutputJSON string) (int, string) {
+	// Attach detector-authored warnings before writing. The sink Result from
+	// the model carries none by construction; assembling them here keeps the
+	// model out of the warnings channel and ensures both files carry the same
+	// warnings block.
+	result.Warnings = buildResultWarnings(artifactWarnings)
+
 	if fullOutputJSON != "" {
 		if err := detector.WriteResultFile(fullOutputJSON, result); err != nil {
 			stderrf("::warning::Could not write the full detection result to %s: %v. The verdict is unaffected; reasons will not be available to the conclusion step.",
 				escapeWorkflowData(fullOutputJSON), escapeWorkflowData(err.Error()))
 		} else {
-			stderrf("[threat-detect] full result written: path=%s reasons=%d",
-				sanitizeLogValue(fullOutputJSON), len(result.Reasons))
+			stderrf("[threat-detect] full result written: path=%s reasons=%d warnings=%d",
+				sanitizeLogValue(fullOutputJSON), len(result.Reasons), len(result.Warnings))
 		}
 	}
 
@@ -660,11 +673,61 @@ func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (in
 		fmt.Println(string(jsonBytes))
 	}
 
-	// Exit code based on threat detection
+	// Exit code based on threat detection. Warnings are advisory and MUST NOT
+	// influence the verdict or the exit code.
 	if result.HasThreats() {
 		return exitThreat, reasonResultRecorded
 	}
 	return exitSafe, reasonResultRecorded
+}
+
+// buildResultWarnings converts loader-time ArtifactWarnings to the result
+// contract's ResultWarning shape, bounded and truncated to fit the schema.
+// Excess entries are dropped rather than causing a write failure — the schema
+// bounds exist to keep the result file readable, not to gate its emission —
+// and the truncation is surfaced on stderr so it is diagnosable from the log.
+func buildResultWarnings(warnings []artifacts.ArtifactWarning) []detector.ResultWarning {
+	if len(warnings) == 0 {
+		return []detector.ResultWarning{}
+	}
+	out := make([]detector.ResultWarning, 0, len(warnings))
+	for _, w := range warnings {
+		if len(out) >= detector.MaxWarnings {
+			stderrf("[threat-detect] result warnings truncated: kept=%d dropped=%d (schema cap is %d)",
+				len(out), len(warnings)-len(out), detector.MaxWarnings)
+			break
+		}
+		field := truncateRunesForResult(w.Field, detector.MaxWarningFieldRunes)
+		code := truncateRunesForResult(w.Code, detector.MaxWarningCodeRunes)
+		if code == "" {
+			code = artifacts.ErrCodeValidation
+		}
+		message := truncateRunesForResult(w.MessageBody(), detector.MaxWarningMessageRunes)
+		if strings.TrimSpace(field) == "" || strings.TrimSpace(message) == "" {
+			// A warning missing structural fields would be rejected on read;
+			// skip it rather than producing an unreadable result.
+			continue
+		}
+		out = append(out, detector.ResultWarning{
+			Field:   field,
+			Code:    code,
+			Message: message,
+		})
+	}
+	return out
+}
+
+// truncateRunesForResult clips s to at most n runes. It returns s unchanged
+// when it already fits, so the common case allocates nothing.
+func truncateRunesForResult(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
 }
 
 func envInt(key string, fallback int) int {
