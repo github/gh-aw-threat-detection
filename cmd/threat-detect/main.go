@@ -429,7 +429,7 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	warnDegradedPromptAnalysis(promptAnalysis)
+	analysisWarnings := warnDegradedPromptAnalysis(promptAnalysis)
 
 	// The rendered prompt itself is never echoed; only its metadata, so a
 	// truncated or scaffolding-free prompt is diagnosable from the job log.
@@ -484,7 +484,13 @@ func run() (code int) {
 	}
 
 	var resultReason string
-	code, resultReason = writeResult(result, outputJSON, fullOutputJSON)
+	// Build a fresh slice rather than appending onto arts.Warnings, whose
+	// backing array belongs to the loader.
+	reported := make([]artifacts.ArtifactWarning, 0, len(arts.Warnings)+len(analysisWarnings))
+	reported = append(reported, arts.Warnings...)
+	reported = append(reported, analysisWarnings...)
+
+	code, resultReason = writeResult(result, reported, outputJSON, fullOutputJSON)
 	reason = resultReason
 	return code
 }
@@ -536,7 +542,18 @@ func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
 	return analysis.Scaffolding.Markers
 }
 
-func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
+// warnDegradedPromptAnalysis annotates prompt-analysis artifacts that could not
+// be used and returns those findings so they also reach the result's warnings
+// array. Emitting only an annotation would drop them: the job log is not
+// readable programmatically, which is the gap the warnings array exists to
+// close.
+//
+// The findings are deliberately advisory. prompt-template.txt and
+// prompt-import-tree.json are optional parts of the artifact contract, so
+// RequiredInput stays false: classifying them as required would make strict
+// mode refuse every run of a host that simply does not stage them, turning an
+// additive reporting change into a breaking one.
+func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) []artifacts.ArtifactWarning {
 	var unavailable []string
 	if analysis == nil || analysis.PromptTemplate == "" {
 		unavailable = append(unavailable, "aw-prompts/prompt-template.txt")
@@ -545,14 +562,22 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 		unavailable = append(unavailable, "aw-prompts/prompt-import-tree.json")
 	}
 	if len(unavailable) == 0 {
-		return
+		return nil
 	}
 
-	stderrf(
-		"::warning::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.",
+	message := fmt.Sprintf(
+		"%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files. This failure is not itself evidence of a threat.",
 		promptAnalysisValidationCode,
 		strings.Join(unavailable, ", "),
 	)
+	stderrf("::warning::%s", message)
+
+	return []artifacts.ArtifactWarning{{
+		Field:         "prompt_analysis",
+		Code:          promptAnalysisValidationCode,
+		Message:       message,
+		RequiredInput: false,
+	}}
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries, maxTurns int, engineTimeout time.Duration, analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) (*detector.Result, error) {
@@ -653,6 +678,13 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 // always redacted: it carries the three booleans with an empty `reasons` array.
 // The model-authored reasons go only to fullOutput, which stays on the runner.
 //
+// Detector-authored warnings (from artifactWarnings) are attached to both
+// destinations. Unlike reasons, warnings are fixed strings composed by the
+// detector — the model never authors or influences them — so they are safe to
+// publish in the uploaded result and give hosts a programmatic signal that the
+// detector could not fully inspect the artifact bundle. Warnings MUST NOT
+// affect the verdict or the exit code.
+//
 // No diagnostic composed here echoes the reasons, because hosts tee stdout and
 // stderr into files they publish. That guarantee covers detector-authored output
 // only: forwarded engine output (TD-20a) reproduces the reason text wherever the
@@ -665,14 +697,26 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 // read-only or missing detection directory must not turn a completed detection
 // into an infrastructure error. A failure to write the authoritative redacted
 // result is fatal, and yields no JSON at all.
-func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (int, string) {
+func writeResult(sinkResult *detector.Result, artifactWarnings []artifacts.ArtifactWarning, outputJSON, fullOutputJSON string) (int, string) {
+	// Attach detector-authored warnings before writing, on a copy so the
+	// caller's Result is not mutated. The assignment is unconditional and
+	// overwrites whatever the sink carried: the reporting tool exposes no
+	// warnings flag, but the engine holds a file-writing tool and knows
+	// THREAT_DETECTION_RESULT_FILE, so a model that wrote the sink directly
+	// could otherwise smuggle warnings into a published file. Assembling them
+	// here keeps the model out of the warnings channel entirely and ensures
+	// both destinations carry the identical warnings block.
+	local := *sinkResult
+	result := &local
+	result.Warnings = buildResultWarnings(artifactWarnings)
+
 	if fullOutputJSON != "" {
 		if err := detector.WriteResultFile(fullOutputJSON, result); err != nil {
 			stderrf("::warning::Could not write the full detection result to %s: %v. The verdict is unaffected; reasons will not be available to the conclusion step.",
 				escapeWorkflowData(fullOutputJSON), escapeWorkflowData(err.Error()))
 		} else {
-			stderrf("[threat-detect] full result written: path=%s reasons=%d",
-				sanitizeLogValue(fullOutputJSON), len(result.Reasons))
+			stderrf("[threat-detect] full result written: path=%s reasons=%d warnings=%d",
+				sanitizeLogValue(fullOutputJSON), len(result.Reasons), len(result.Warnings))
 		}
 	}
 
@@ -692,11 +736,85 @@ func writeResult(result *detector.Result, outputJSON, fullOutputJSON string) (in
 		fmt.Println(string(jsonBytes))
 	}
 
-	// Exit code based on threat detection
+	// Exit code based on threat detection. Warnings are advisory and MUST NOT
+	// influence the verdict or the exit code.
 	if result.HasThreats() {
 		return exitThreat, reasonResultRecorded
 	}
 	return exitSafe, reasonResultRecorded
+}
+
+// buildResultWarnings converts loader-time ArtifactWarnings to the result
+// contract's ResultWarning shape, bounded to fit the schema.
+//
+// Excess entries are dropped and over-long values clipped rather than causing a
+// write failure: the schema bounds exist to keep the result file readable, not
+// to gate its emission, and a warning that says "I could not inspect
+// everything" must never be the thing that prevents the verdict from being
+// published. Both adjustments are surfaced on stderr so they stay diagnosable
+// from the job log.
+func buildResultWarnings(warnings []artifacts.ArtifactWarning) []detector.ResultWarning {
+	if len(warnings) == 0 {
+		return []detector.ResultWarning{}
+	}
+	out := make([]detector.ResultWarning, 0, len(warnings))
+	for i, w := range warnings {
+		if len(out) >= detector.MaxWarnings {
+			// Report what is actually left unconsumed at this point. Counting
+			// from len(out) instead would under-report whenever an earlier
+			// entry was skipped as structurally invalid.
+			stderrf("[threat-detect] result warnings truncated: kept=%d dropped=%d (schema cap is %d)",
+				len(out), len(warnings)-i, detector.MaxWarnings)
+			break
+		}
+		field := clipRunes(w.Field, detector.MaxWarningFieldRunes)
+		code := clipRunes(w.Code, detector.MaxWarningCodeRunes)
+		if code == "" {
+			code = artifacts.ErrCodeValidation
+		}
+		message := clipRunes(w.MessageBody(), detector.MaxWarningMessageRunes)
+		if strings.TrimSpace(field) == "" || strings.TrimSpace(message) == "" {
+			// A warning missing structural fields would be rejected on read;
+			// skip it rather than producing an unreadable result.
+			stderrf("[threat-detect] skipping unrepresentable result warning: field=%s", sanitizeLogValue(w.Field))
+			continue
+		}
+		out = append(out, detector.ResultWarning{
+			Field:   field,
+			Code:    code,
+			Message: message,
+		})
+	}
+	return out
+}
+
+// clipMarker is appended to a value clipped by clipRunes, so a shortened
+// warning message is visibly shortened rather than silently losing its tail.
+const clipMarker = "…"
+
+// clipRunes bounds s to at most n runes, appending clipMarker within that
+// budget when it shortens the value.
+//
+// This is deliberately not conclude.go's truncateRunes, which appends
+// "… (truncated)" *past* the requested length: that is correct for a display
+// line, but here n is a schema bound enforced on both write and read, so
+// exceeding it would produce a result file the detector itself would reject on
+// read. Reserving room for the marker keeps the output inside the bound while
+// still signalling that content was dropped.
+func clipRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	marker := []rune(clipMarker)
+	if n <= len(marker) {
+		// No room for both content and a marker; keep content.
+		return string(runes[:n])
+	}
+	return string(runes[:n-len(marker)]) + clipMarker
 }
 
 func envInt(key string, fallback int) int {

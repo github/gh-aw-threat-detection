@@ -9,8 +9,8 @@ import (
 
 func TestWriteReadResultFileRoundTrip(t *testing.T) {
 	cases := map[string]*Result{
-		"safe":   {PromptInjection: false, SecretLeak: false, MaliciousPatch: false, Reasons: []string{}},
-		"threat": {PromptInjection: true, SecretLeak: false, MaliciousPatch: true, Reasons: []string{"injection", "patch"}},
+		"safe":   {PromptInjection: false, SecretLeak: false, MaliciousPatch: false, Reasons: []string{}, Warnings: []ResultWarning{}},
+		"threat": {PromptInjection: true, SecretLeak: false, MaliciousPatch: true, Reasons: []string{"injection", "patch"}, Warnings: []ResultWarning{}},
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {

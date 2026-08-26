@@ -264,6 +264,7 @@ func (c *concluder) conclude(resultFile string) int {
 
 	// Step 4 — report and evaluate the verdict.
 	c.reportVerdict(result, reasons)
+	c.reportWarnings(result.Warnings)
 	if result.HasThreats() {
 		threats := make([]string, 0, 3)
 		if result.PromptInjection {
@@ -383,6 +384,30 @@ func (c *concluder) reportVerdict(result *detector.Result, reasons []string) {
 		}
 	} else {
 		c.info("   reasons          : (none)")
+	}
+}
+
+// reportWarnings prints a distinct ⚠️ block for any detector-authored
+// warnings the result carries. Warnings say "the detector could not inspect
+// everything", not "a threat was found", so they are rendered separately from
+// both the verdict and the reasons — visible in the job log without a reader
+// having to consult the annotations. They never affect the verdict or the
+// exit code.
+//
+// Each field is host-controlled or detector-composed (never model-authored),
+// but Message embeds host-controlled paths, so every value is sanitized before
+// it is echoed into the job log — the same protection the reasons block
+// applies to its untrusted content.
+func (c *concluder) reportWarnings(warnings []detector.ResultWarning) {
+	if len(warnings) == 0 {
+		return
+	}
+	c.info(fmt.Sprintf("⚠️  Detector warnings (%d) — artifact channels that could not be fully inspected. These do not affect the verdict.", len(warnings)))
+	for i, w := range warnings {
+		field := sanitizeLogValue(truncateRunes(w.Field, maxEchoedLineRunes))
+		code := sanitizeLogValue(truncateRunes(w.Code, maxEchoedLineRunes))
+		message := sanitizeLogValue(truncateRunes(w.Message, maxEchoedLineRunes))
+		c.info(fmt.Sprintf("     [%d] field=%s code=%s message=%s", i+1, field, code, message))
 	}
 }
 
