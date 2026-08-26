@@ -455,7 +455,11 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	warnDegradedPromptAnalysis(promptAnalysis)
+	if warnDegradedPromptAnalysis(promptAnalysis, !continueOnWarning) && !continueOnWarning {
+		stderrf("Error: prompt analysis artifacts in %s are missing or unusable and GH_AW_DETECTION_CONTINUE_ON_WARNING is \"false\"; refusing to certify a partially readable bundle.", artifactsDir)
+		reason = reasonConfigError
+		return exitError
+	}
 
 	// The rendered prompt itself is never echoed; only its metadata, so a
 	// truncated or scaffolding-free prompt is diagnosable from the job log.
@@ -562,7 +566,14 @@ func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
 	return analysis.Scaffolding.Markers
 }
 
-func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
+// warnDegradedPromptAnalysis emits the TD-18b finding for prompt-analysis
+// artifacts that could not be used, and reports whether it emitted one. The
+// caller needs that answer because this finding is recorded after artifacts
+// loading, so it is not in arts.Warnings and would otherwise escape the
+// TD-18f gate — leaving a host that opted out of partial-bundle verdicts still
+// certifying a bundle whose trusted-vs-untrusted split was degraded.
+// fatal escalates the annotation to an error for exactly that case.
+func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis, fatal bool) bool {
 	var unavailable []string
 	if analysis == nil || analysis.PromptTemplate == "" {
 		unavailable = append(unavailable, "aw-prompts/prompt-template.txt")
@@ -571,14 +582,20 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 		unavailable = append(unavailable, "aw-prompts/prompt-import-tree.json")
 	}
 	if len(unavailable) == 0 {
-		return
+		return false
 	}
 
+	command := "warning"
+	if fatal {
+		command = "error"
+	}
 	stderrf(
-		"::warning::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.",
+		"::%s::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.",
+		command,
 		promptAnalysisValidationCode,
 		strings.Join(unavailable, ", "),
 	)
+	return true
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries, maxTurns int, engineTimeout time.Duration, analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) (*detector.Result, error) {

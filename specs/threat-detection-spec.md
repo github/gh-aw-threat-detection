@@ -366,17 +366,18 @@ detection with the inputs that were staged. In strict mode
 MUST emit each finding as an error and terminate as a configuration error
 (`config_error`, exit `2`) before invoking the engine. Findings about other
 artifacts (for example an unreadable `comment-memory` directory, per TD-18a)
-remain advisory warnings in both modes, subject to TD-18e. Each finding MUST identify the artifact
+remain advisory warnings in both modes, subject to TD-18f. Each finding MUST identify the artifact
 it concerns and whether it is a required input. The detector MUST apply this same mode selection everywhere it
 consumes `GH_AW_DETECTION_CONTINUE_ON_ERROR`, including `conclude` (TD-20b).
 
-**TD-18e**: The detector MUST support a separate opt-in gate,
+**TD-18f**: The detector MUST support a separate opt-in gate,
 `GH_AW_DETECTION_CONTINUE_ON_WARNING`, resolved with the same case-insensitive
 `"false"` comparison as `GH_AW_DETECTION_CONTINUE_ON_ERROR` and defaulting to
 continuing when unset. When it is case-insensitively equal to `"false"` and any
-`ERR_VALIDATION` finding was recorded while loading artifacts — including a
-finding about an optional channel such as `comment-memory` that is not a
-required input — the detector MUST emit each finding as an error and terminate
+`ERR_VALIDATION` finding was recorded — including a finding about an optional
+channel such as `comment-memory` that is not a required input, and the degraded
+prompt-analysis finding of TD-18b, which is recorded after artifacts loading —
+the detector MUST emit each finding as an error and terminate
 as a configuration error (`config_error`, exit `2`) before invoking the engine.
 The detector MUST NOT set any threat flag because a channel could not be
 inspected: the refusal is the detector declining to certify a bundle it could
@@ -400,7 +401,7 @@ markdown files, the detector MUST proceed and record that no comment-memory
 files were found. When the directory is present but cannot be inspected — it
 cannot be read, or it is not a directory, or an entry within it is not a regular
 file — the detector MUST emit a non-fatal `ERR_VALIDATION` warning and continue
-(subject to TD-18e).
+(subject to TD-18f).
 Refusing to follow a symlink is such an inspection failure and MUST be reported
 as one: the run under analysis can influence how comment memory is staged, so a
 silent refusal would be indistinguishable from an absent channel.
@@ -419,7 +420,7 @@ channel, while this requirement governs what the model is told about it.
 `aw-prompts/prompt-import-tree.json` is absent, unreadable, or empty, the
 detector MUST continue with degraded trusted-vs-untrusted prompt analysis and
 MUST emit an `ERR_VALIDATION` warning to the job log identifying the
-unavailable artifacts.
+unavailable artifacts (subject to TD-18f).
 
 **TD-18d**: The detector MUST identify the `gh-aw` framework scaffolding
 preamble in the rendered workflow prompt — the `<system>...</system>` block that

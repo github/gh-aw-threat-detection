@@ -1244,9 +1244,25 @@ func TestDetectionContinueOnWarning(t *testing.T) {
 	}
 }
 
+// stagePromptAnalysisArtifacts adds the TD-18b prompt-analysis artifacts so a
+// bundle is fully readable and the TD-18f gate stays inert.
+func stagePromptAnalysisArtifacts(t *testing.T, artifactsDir string) {
+	t.Helper()
+	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
+	files := map[string]string{
+		"prompt-template.txt":     "Trusted instructions.\nRequest: {{user_input}}\nEnd.",
+		"prompt-import-tree.json": `{"version":1,"children":[]}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+}
+
 // stageUninspectableCommentMemory shapes comment-memory as a symlink, which
 // loadCommentMemory refuses to follow and reports as an uninspectable optional
-// channel. This is the adversarially reachable shape TD-18e exists to gate on.
+// channel. This is the adversarially reachable shape TD-18f exists to gate on.
 func stageUninspectableCommentMemory(t *testing.T, artifactsDir string) {
 	t.Helper()
 	target := t.TempDir()
@@ -1256,7 +1272,7 @@ func stageUninspectableCommentMemory(t *testing.T, artifactsDir string) {
 }
 
 // An uninspectable optional channel stays advisory by default, so hosts that
-// set neither variable see no behavior change from TD-18e.
+// set neither variable see no behavior change from TD-18f.
 func TestRunKeepsUninspectableOptionalChannelAdvisoryByDefault(t *testing.T) {
 	artifactsDir := t.TempDir()
 	writeMinimalArtifacts(t, artifactsDir)
@@ -1376,6 +1392,7 @@ func TestRunFailsOnUninspectableOptionalChannelWithMixedCaseGate(t *testing.T) {
 func TestRunSucceedsWithWarningsGatedAndCompleteArtifacts(t *testing.T) {
 	artifactsDir := t.TempDir()
 	writeMinimalArtifacts(t, artifactsDir)
+	stagePromptAnalysisArtifacts(t, artifactsDir)
 	outputPath := filepath.Join(t.TempDir(), "result.json")
 	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
 	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
@@ -1392,6 +1409,74 @@ func TestRunSucceedsWithWarningsGatedAndCompleteArtifacts(t *testing.T) {
 
 	if code != exitSafe {
 		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	if strings.Contains(stderr, "::error::") {
+		t.Errorf("expected no error annotation for a complete bundle, got:\n%s", stderr)
+	}
+}
+
+// Degraded prompt analysis (TD-18b) is recorded after artifacts loading, so it
+// is not in arts.Warnings. It must still be gated, or a host that opted out of
+// partial-bundle verdicts would keep certifying a bundle whose
+// trusted-vs-untrusted split could not be computed.
+func TestRunFailsOnDegradedPromptAnalysisWhenWarningsGated(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_WARNING": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (degraded prompt analysis must be gated)\n%s", code, exitError, stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Fatal("expected detection not to run when prompt analysis is degraded and gated")
+	}
+	if !strings.Contains(stderr, "::error::"+promptAnalysisValidationCode+": Missing or unusable prompt analysis artifacts") {
+		t.Errorf("expected prompt-analysis error annotation, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError) {
+		t.Errorf("expected config_error status line, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Error("expected no result file to be written for a configuration error")
+	}
+}
+
+// Degraded prompt analysis remains advisory in strict continue-on-error mode,
+// which is the pre-existing TD-18b contract.
+func TestRunKeepsDegradedPromptAnalysisAdvisoryInStrictErrorMode(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	if !strings.Contains(stderr, "::warning::"+promptAnalysisValidationCode) {
+		t.Errorf("expected advisory prompt-analysis warning, got:\n%s", stderr)
 	}
 }
 

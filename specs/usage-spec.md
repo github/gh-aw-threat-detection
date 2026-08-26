@@ -163,9 +163,10 @@ detector so both stages agree.
 detector could not fully read MAY additionally set
 `GH_AW_DETECTION_CONTINUE_ON_WARNING=false`. The detector then terminates with
 `config_error` (exit `2`) before invoking the engine when any artifact channel
-was recorded as uninspectable, including optional channels such as
+was recorded as uninspectable or prompt analysis was degraded, including
+optional channels such as
 `comment-memory` that `GH_AW_DETECTION_CONTINUE_ON_ERROR=false` leaves advisory
-(per TD-18e). The host MUST treat that outcome as a configuration failure, not
+(per TD-18f). The host MUST treat that outcome as a configuration failure, not
 as a threat verdict. The default is to continue, so a host that sets neither
 variable sees no change.
 
