@@ -1453,32 +1453,8 @@ func TestRunFailsOnDegradedPromptAnalysisWhenWarningsGated(t *testing.T) {
 	}
 }
 
-// Degraded prompt analysis remains advisory in strict continue-on-error mode,
-// which is the pre-existing TD-18b contract.
-func TestRunKeepsDegradedPromptAnalysisAdvisoryInStrictErrorMode(t *testing.T) {
-	artifactsDir := t.TempDir()
-	writeMinimalArtifacts(t, artifactsDir)
-	outputPath := filepath.Join(t.TempDir(), "result.json")
-	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
-	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
-	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
-
-	code, stderr := runWithTestArgsCapture(t, []string{
-		"threat-detect",
-		"-output", outputPath,
-		artifactsDir,
-	}, map[string]string{
-		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
-	})
-
-	if code != exitSafe {
-		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
-	}
-	if !strings.Contains(stderr, "::warning::"+promptAnalysisValidationCode) {
-		t.Errorf("expected advisory prompt-analysis warning, got:\n%s", stderr)
-	}
-}
+// Degraded prompt analysis remains advisory in strict continue-on-error mode:
+// see TestRun_DegradedPromptAnalysisDoesNotBlockStrictMode in warnings_test.go.
 
 func TestRunFailsOnDegradedRequiredInputInMixedCaseStrictMode(t *testing.T) {
 	artifactsDir := t.TempDir()

@@ -333,6 +333,61 @@ Consequences worth knowing:
   read-only detection directory does not turn a completed detection into an
   infrastructure error.
 
+#### Warnings vs reasons
+
+The result also carries a `warnings` array, which is **not** the same as
+`reasons`:
+
+| | `reasons` | `warnings` |
+|---|---|---|
+| Author | The detection model | The detector itself |
+| Content | Free-form explanations quoting untrusted artifact content | Fixed strings composed by the detector, embedding host-controlled paths |
+| Where written | Full result only (`detection_result_full.json`) | **Both** files (`detection_result.json` and `_full.json`) |
+| Uploaded? | No | Yes — safe to publish |
+| Affects verdict? | Yes (present iff at least one threat is true) | **No.** A warning never sets a threat category or triggers a threat exit |
+| Signal | "here is a threat and why" | "the detector could not inspect part of the input" |
+
+A warning is recorded when an artifact channel is present but cannot be fully
+inspected — for example, `HAS_PATCH=true` was set but no readable patch bundle
+was found, a staged prompt or patch exists but cannot be opened, the
+`comment-memory` directory could not be listed, or the optional prompt-analysis
+inputs (`prompt-template.txt`, `prompt-import-tree.json`) were missing or
+unusable. Readability is probed by
+actually opening the file: a stat-only check succeeds on a file the detector has
+no permission to read, which would report a non-empty, inspected-looking channel
+for content nobody examined. Without the `warnings` array, a partially
+inspectable bundle would be indistinguishable from a fully inspected clean one
+on the uploaded result: the detector analyzed less than the full artifact set,
+reported clean, and exited 0. Gating a run on advisory warnings is a
+**host-level policy** decision; the detector deliberately does not do it, so a
+staging failure cannot suppress a real finding by turning "could not inspect"
+into "must fail". Each entry has three fields:
+
+```json
+"warnings": [
+  {
+    "field": "comment_memory",
+    "code": "ERR_VALIDATION",
+    "message": "Unable to read comment-memory directory at /tmp/gh-aw/threat-detection/comment-memory: permission denied"
+  }
+]
+```
+
+`conclude` renders any warnings under a `⚠️` block distinct from both the
+verdict and the reasons, so a misconfigured job is visible in the job log
+without a reader having to consult GitHub Actions annotations.
+
+One exception is worth knowing about. Warnings are advisory *within a run that
+executes*. When `GH_AW_DETECTION_CONTINUE_ON_ERROR` is `false`, a warning about
+a **required** input (`prompt`, `agent_output`, `patch`) is promoted to a
+configuration error and the detector refuses to run degraded detection, exiting
+`2` before any analysis happens. That is an infrastructure error, not a threat
+verdict (exit `1`), and no result file is written — writing one would assert a
+clean verdict for analysis that never ran. Warnings about *optional* artifacts,
+such as `prompt_analysis`, are never promoted this way, so reporting them cannot
+start failing a host that does not stage them. In the default warn mode, where
+detection does run, every recorded warning appears in both result files.
+
 #### Concluding a run (`conclude`)
 
 In `gh-aw`-compiled workflows the detector runs inside the AWF sandbox, where the
@@ -526,9 +581,9 @@ modes.
 A host that will not accept a clean verdict from a bundle the detector could
 not fully read can additionally set `GH_AW_DETECTION_CONTINUE_ON_WARNING=false`.
 That makes *any* recorded `ERR_VALIDATION` finding — an uninspectable optional
-channel such as a `comment-memory` directory, or missing/unusable prompt-analysis
-artifacts — an error
-and exits `2` (`config_error`) before the engine runs. It is deliberately a
+channel such as a `comment-memory` directory, or missing/unusable
+prompt-analysis artifacts — an error and exits `2` (`config_error`) before the
+engine runs, writing no result file. It is deliberately a
 separate switch: `GH_AW_DETECTION_CONTINUE_ON_ERROR` is about whether the host
 staged the primary inputs correctly, while this one is about the strength of the
 assurance you are willing to accept. Both default to continuing, and a refusal
@@ -546,7 +601,8 @@ explicitly treated as untrusted runtime data.
   "prompt_injection": false,
   "secret_leak": false,
   "malicious_patch": false,
-  "reasons": []
+  "reasons": [],
+  "warnings": []
 }
 ```
 
@@ -559,6 +615,16 @@ reports a result and when the file is read back, so a recorded result can never
 fail validation later. A rejected report is returned to the model as a
 correctable tool error; an oversized or malformed result file is a parse error
 that fails the detection closed.
+
+`warnings` is a detector-authored, optional array of partial-inspection
+findings (see [Warnings vs reasons](#warnings-vs-reasons)). It is additive and
+backward-compatible: a pre-existing consumer sees the field absent on results
+from an older detector, and one indexing into it always finds an array on
+results from a newer detector. Each entry is a `{ "field", "code", "message" }`
+object; the array is bounded at 20 entries with each `field` and `code` at most
+64 characters and each `message` at most 2000 characters. A warning never sets a
+threat category or causes a threat exit; see the note above on strict mode,
+where a required-input warning is instead promoted to a configuration error.
 
 ### Replay workflow
 
@@ -646,7 +712,7 @@ This repository includes three Agentic Workflows smoke tests, one per engine:
 
 Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can be dispatched manually to start all three at once. The matching `.lock.yml` files are the compiled AW workflows. gh-aw natively downloads this repo's released binary matching the runner platform (the external detector path is the compile-time default), runs it under AWF, and reads the structured `detection_result.json` to conclude. The detector version they install is resolved at run time — see [Detector Version Selection](#detector-version-selection).
 
-**The smokes do not exercise `threat-detect conclude`.** The compiled locks conclude with gh-aw's own `conclude_threat_detection.sh`, which reads only `detection_result.json`. Because the published result deliberately carries `reasons: []`, the smokes' job logs show the verdict but no reasons: recovering those needs the `--full-result-file` lookup that only the `conclude` subcommand performs. Use [`replay-detection.yml`](#replay-workflow), which renders the reasons from the companion full result, when the explanations are what you need to see.
+**The smokes do exercise `threat-detect conclude`.** The compiled locks call gh-aw's `conclude_threat_detection.sh`, which does no JSON parsing of its own: it verifies `threat-detect` is on `PATH` and then `exec`s `threat-detect conclude --result-file … --detection-log …`. Because it passes no `--full-result-file`, the conventional sibling (`detection_result_full.json`) is derived and the reasons *are* recovered into the smokes' job logs, as are any `⚠️` warnings. The full result is written next to the result file and is not uploaded — the detection artifact lists `detection_result.json` by exact filename rather than a glob, so the companion never leaves the runner. Use [`replay-detection.yml`](#replay-workflow) when you want to rerun detection against a past run's artifacts, rather than as a way to see reasons.
 
 **Codex detection model pin.** The Codex smokes pin the detection model explicitly:
 
@@ -731,7 +797,7 @@ What the collector records per run:
 
 - whether the run had a `detection` job at all, and which detector it used. The `Install threat-detect binary` marker step is only observable on a job that got far enough to reach it — a skipped job reports no steps at all, and a cancelled or setup-failed one reports a truncated list — so classifying per run would drop exactly the failures this report exists to measure into the "built-in" bucket and out of every rate. The evidence is therefore rolled up per **workflow**: if any run of a workflow showed the marker that day, all of its detection jobs count as external. Anything still unresolved is reported as `indeterminate_detector_runs`, never as built-in;
 - the detection job's `status`/`conclusion` (`success`, `failure`, `cancelled`, `skipped`, `timed_out`, `action_required`, or still `in_progress`) and the names of any failed steps;
-- whether the job published a `detection_result.json` artifact and, if so, the `prompt_injection` / `secret_leak` / `malicious_patch` verdict. The published result deliberately carries `reasons: []`, so explanations are not available here — use the [replay workflow](#replay-workflow) when you need them;
+- whether the job published a `detection_result.json` artifact and, if so, the `prompt_injection` / `secret_leak` / `malicious_patch` verdict. The published result deliberately carries `reasons: []`, so explanations are not available here — use the [replay workflow](#replay-workflow) when you need them. Any `warnings` the detector recorded *are* present in the published result, since they are detector-authored (see [Warnings vs reasons](#warnings-vs-reasons));
 - the `conclusion`/`reason` pairs (`threat_detected`, `agent_failure`, `parse_error`) that gh-aw itself posts to its `[aw] Detection Runs` tracking issue.
 
 A **green** detection job that published no verdict artifact is counted separately as a soft failure: gh-aw marks detection steps `continue-on-error`, so the Actions runner rewrites their `conclusion` to `success` and step conclusions cannot reveal these.

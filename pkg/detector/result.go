@@ -28,14 +28,54 @@ const (
 	// It is far above any schema-valid result (MaxReasons × MaxReasonRunes plus
 	// JSON overhead) yet bounds memory for a corrupt or hostile file.
 	MaxResultFileBytes = 1 << 20 // 1 MiB
+	// MaxWarnings is the maximum number of entries allowed in `warnings`. Each
+	// entry describes an artifact channel that could not be inspected; the
+	// artifact set the detector recognizes is small enough that a handful is
+	// generous. Bounded here so a hostile or corrupt result file cannot embed
+	// unbounded diagnostic text.
+	MaxWarnings = 20
+	// MaxWarningFieldRunes bounds the `field` identifier (e.g. "prompt",
+	// "agent_output"). It is a short symbolic name, not free text.
+	MaxWarningFieldRunes = 64
+	// MaxWarningCodeRunes bounds the `code` identifier (e.g. "ERR_VALIDATION").
+	MaxWarningCodeRunes = 64
+	// MaxWarningMessageRunes bounds the human-readable warning message. The
+	// message embeds host-controlled paths, so it may be long, but must remain
+	// a diagnostic line rather than an unbounded transcript.
+	MaxWarningMessageRunes = 2000
 )
+
+// ResultWarning describes a single detector-authored warning: a structural
+// finding about the input the detector could not fully inspect (e.g. an
+// unreadable `comment-memory` directory, or a `HAS_PATCH=true` bundle that was
+// absent). Warnings are assembled by the detector from Artifacts.Warnings and
+// attached on write; the model never authors or influences them.
+//
+// Warnings MUST NOT affect the verdict or the exit code. A warning says "the
+// detector could not inspect everything", not "a threat was found". Warnings
+// are safe to publish in the uploaded result (unlike `reasons`, which is
+// model-authored text that only lives in the full result).
+type ResultWarning struct {
+	// Field identifies the artifact channel the warning concerns (e.g.
+	// "prompt", "agent_output", "patch", "comment_memory").
+	Field string `json:"field"`
+	// Code is a short, stable identifier categorizing the warning (e.g.
+	// "ERR_VALIDATION"), matching the code already surfaced in
+	// GitHub Actions annotations.
+	Code string `json:"code"`
+	// Message is the human-readable diagnostic. It may embed host-controlled
+	// paths and other fixed strings composed by the detector; it never carries
+	// model-authored text.
+	Message string `json:"message"`
+}
 
 // Result represents the structured output of threat detection analysis.
 type Result struct {
-	PromptInjection bool     `json:"prompt_injection"`
-	SecretLeak      bool     `json:"secret_leak"`
-	MaliciousPatch  bool     `json:"malicious_patch"`
-	Reasons         []string `json:"reasons"`
+	PromptInjection bool            `json:"prompt_injection"`
+	SecretLeak      bool            `json:"secret_leak"`
+	MaliciousPatch  bool            `json:"malicious_patch"`
+	Reasons         []string        `json:"reasons"`
+	Warnings        []ResultWarning `json:"warnings"`
 }
 
 // HasThreats returns true if any threat category was detected.
@@ -59,6 +99,10 @@ const FullResultSuffix = "_full"
 // `reasons` key is retained as an empty array rather than dropped, so the
 // redacted result remains schema-valid under TD-10a and every existing reader
 // parses it unchanged.
+//
+// Warnings are detector-authored and safe to publish, so they are preserved
+// unchanged on the redacted copy: partial-inspection failures must remain
+// visible on the uploaded result, not confined to the runner-local full result.
 func (r *Result) Redacted() *Result {
 	if r == nil {
 		return nil
@@ -129,7 +173,7 @@ func ParseStructuredResult(data []byte) (*Result, error) {
 func validateRawResult(raw map[string]any, label string) error {
 	for field := range raw {
 		switch field {
-		case "prompt_injection", "secret_leak", "malicious_patch", "reasons":
+		case "prompt_injection", "secret_leak", "malicious_patch", "reasons", "warnings":
 		default:
 			return fmt.Errorf("unexpected field %q in %s", field, label)
 		}
@@ -166,6 +210,59 @@ func validateRawResult(raw map[string]any, label string) error {
 			return fmt.Errorf("invalid value for %q[%d]: reason is %d characters, maximum is %d", "reasons", i, n, MaxReasonRunes)
 		}
 	}
+	// warnings is optional — a result without the field is a well-formed
+	// warning-free result. When present it must be an array of objects with
+	// the three required string fields, bounded identically to reasons so no
+	// result accepted on write can be rejected on read.
+	if warnings, exists := raw["warnings"]; exists {
+		warningsArr, ok := warnings.([]any)
+		if !ok {
+			return fmt.Errorf("invalid type for %q: expected array, got %T (%v)", "warnings", warnings, warnings)
+		}
+		if len(warningsArr) > MaxWarnings {
+			return fmt.Errorf("too many entries in %q: got %d, maximum is %d", "warnings", len(warningsArr), MaxWarnings)
+		}
+		for i, entry := range warningsArr {
+			obj, ok := entry.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid type for %q[%d]: expected object, got %T (%v)", "warnings", i, entry, entry)
+			}
+			for key := range obj {
+				switch key {
+				case "field", "code", "message":
+				default:
+					return fmt.Errorf("unexpected field %q in %q[%d]", key, "warnings", i)
+				}
+			}
+			if err := validateWarningStringField(obj, "field", i, MaxWarningFieldRunes); err != nil {
+				return err
+			}
+			if err := validateWarningStringField(obj, "code", i, MaxWarningCodeRunes); err != nil {
+				return err
+			}
+			if err := validateWarningStringField(obj, "message", i, MaxWarningMessageRunes); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateWarningStringField(obj map[string]any, key string, index, maxRunes int) error {
+	val, exists := obj[key]
+	if !exists {
+		return fmt.Errorf("missing required field %q in %q[%d]", key, "warnings", index)
+	}
+	text, ok := val.(string)
+	if !ok {
+		return fmt.Errorf("invalid type for %q[%d].%q: expected string, got %T (%v)", "warnings", index, key, val, val)
+	}
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("invalid value for %q[%d].%q: must not be empty or whitespace-only", "warnings", index, key)
+	}
+	if n := utf8.RuneCountInString(text); n > maxRunes {
+		return fmt.Errorf("invalid value for %q[%d].%q: %d characters, maximum is %d", "warnings", index, key, n, maxRunes)
+	}
 	return nil
 }
 
@@ -186,6 +283,9 @@ func WriteResultFile(path string, r *Result) error {
 	out := *r
 	if out.Reasons == nil {
 		out.Reasons = []string{}
+	}
+	if out.Warnings == nil {
+		out.Warnings = []ResultWarning{}
 	}
 	data, err := json.MarshalIndent(&out, "", "  ")
 	if err != nil {
@@ -298,7 +398,9 @@ func ReadReasonsFile(path string) ([]string, error) {
 }
 
 // BuildResultFromReport constructs a *Result from individual report fields.
-// reasons may be nil; it is normalized to a non-nil empty slice.
+// reasons may be nil; it is normalized to a non-nil empty slice. Warnings are
+// not part of the model's report and are always initialized empty here; the
+// detector attaches them from Artifacts.Warnings at write time.
 func BuildResultFromReport(promptInjection, secretLeak, maliciousPatch bool, reasons []string) *Result {
 	if reasons == nil {
 		reasons = []string{}
@@ -308,6 +410,7 @@ func BuildResultFromReport(promptInjection, secretLeak, maliciousPatch bool, rea
 		SecretLeak:      secretLeak,
 		MaliciousPatch:  maliciousPatch,
 		Reasons:         reasons,
+		Warnings:        []ResultWarning{},
 	}
 }
 
@@ -334,12 +437,29 @@ func resultFromRaw(raw map[string]any) *Result {
 		SecretLeak:      raw["secret_leak"].(bool),
 		MaliciousPatch:  raw["malicious_patch"].(bool),
 		Reasons:         []string{},
+		Warnings:        []ResultWarning{},
 	}
 	if reasons, ok := raw["reasons"].([]any); ok {
 		for _, r := range reasons {
 			if reason, ok := r.(string); ok {
 				result.Reasons = append(result.Reasons, reason)
 			}
+		}
+	}
+	if warnings, ok := raw["warnings"].([]any); ok {
+		for _, w := range warnings {
+			obj, ok := w.(map[string]any)
+			if !ok {
+				continue
+			}
+			field, _ := obj["field"].(string)
+			code, _ := obj["code"].(string)
+			message, _ := obj["message"].(string)
+			result.Warnings = append(result.Warnings, ResultWarning{
+				Field:   field,
+				Code:    code,
+				Message: message,
+			})
 		}
 	}
 	return result
