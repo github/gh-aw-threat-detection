@@ -446,7 +446,7 @@ func TestRun_DegradedPromptAnalysisSurfacesInPublishedResult(t *testing.T) {
 // TD-18c would promote it and strict mode would refuse every run of a host that
 // simply does not stage them, turning an additive change into a breaking one.
 func TestWarnDegradedPromptAnalysis_IsAdvisoryNotRequiredInput(t *testing.T) {
-	warnings := warnDegradedPromptAnalysis(nil)
+	warnings := warnDegradedPromptAnalysis(nil, false)
 	if len(warnings) == 0 {
 		t.Fatal("expected a warning when no prompt analysis is available")
 	}

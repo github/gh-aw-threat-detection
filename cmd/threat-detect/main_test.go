@@ -1209,6 +1209,253 @@ func TestDetectionContinueOnError(t *testing.T) {
 	}
 }
 
+func TestDetectionContinueOnWarning(t *testing.T) {
+	tests := []struct {
+		value string
+		set   bool
+		want  bool
+	}{
+		{set: false, want: true},
+		{value: "", set: true, want: true},
+		{value: "true", set: true, want: true},
+		{value: "false", set: true, want: false},
+		{value: "False", set: true, want: false},
+		{value: "FALSE", set: true, want: false},
+		{value: "no", set: true, want: true},
+	}
+	for _, tt := range tests {
+		name := "unset"
+		if tt.set {
+			name = "value=" + tt.value
+		}
+		t.Run(name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv("GH_AW_DETECTION_CONTINUE_ON_WARNING", tt.value)
+			} else {
+				t.Setenv("GH_AW_DETECTION_CONTINUE_ON_WARNING", "true")
+				if err := os.Unsetenv("GH_AW_DETECTION_CONTINUE_ON_WARNING"); err != nil {
+					t.Fatalf("unsetting env: %v", err)
+				}
+			}
+			if got := detectionContinueOnWarning(); got != tt.want {
+				t.Errorf("detectionContinueOnWarning() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// stagePromptAnalysisArtifacts adds the TD-18b prompt-analysis artifacts so a
+// bundle is fully readable and the TD-18f gate stays inert.
+func stagePromptAnalysisArtifacts(t *testing.T, artifactsDir string) {
+	t.Helper()
+	promptsDir := filepath.Join(artifactsDir, "aw-prompts")
+	files := map[string]string{
+		"prompt-template.txt":     "Trusted instructions.\nRequest: {{user_input}}\nEnd.",
+		"prompt-import-tree.json": `{"version":1,"children":[]}`,
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(promptsDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+}
+
+// stageUninspectableCommentMemory shapes comment-memory as a symlink, which
+// loadCommentMemory refuses to follow and reports as an uninspectable optional
+// channel. This is the adversarially reachable shape TD-18f exists to gate on.
+func stageUninspectableCommentMemory(t *testing.T, artifactsDir string) {
+	t.Helper()
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(artifactsDir, "comment-memory")); err != nil {
+		t.Fatalf("symlinking comment-memory: %v", err)
+	}
+}
+
+// An uninspectable optional channel stays advisory by default, so hosts that
+// set neither variable see no behavior change from TD-18f.
+func TestRunKeepsUninspectableOptionalChannelAdvisoryByDefault(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	stageUninspectableCommentMemory(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH": fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d (default must stay advisory)\n%s", code, exitSafe, stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err != nil {
+		t.Fatalf("expected detection to run by default: %v", err)
+	}
+	if !strings.Contains(stderr, "[threat-detect] artifact degraded: field=comment_memory required_input=false") {
+		t.Errorf("expected advisory comment-memory finding, got:\n%s", stderr)
+	}
+}
+
+// Strict continue-on-error alone must not gate an optional channel: that flag
+// covers the host's staging contract for required inputs only.
+func TestRunKeepsUninspectableOptionalChannelAdvisoryInStrictErrorMode(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	stageUninspectableCommentMemory(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d (CONTINUE_ON_ERROR must not gate optional channels)\n%s", code, exitSafe, stderr)
+	}
+}
+
+func TestRunFailsOnUninspectableOptionalChannelWhenWarningsGated(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	stageUninspectableCommentMemory(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_WARNING": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (gated warnings must fail closed)\n%s", code, exitError, stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Fatal("expected detection not to run when warnings are gated")
+	}
+	if !strings.Contains(stderr, "::error::ERR_VALIDATION: Expected ") {
+		t.Errorf("expected comment-memory error annotation, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "GH_AW_DETECTION_CONTINUE_ON_WARNING is \"false\"") {
+		t.Errorf("expected the refusal to name the gate, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError+" exit="+strconv.Itoa(exitError)) {
+		t.Errorf("expected config_error status line, got:\n%s", stderr)
+	}
+	// A refusal to certify must never be laundered into a threat verdict.
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Error("expected no result file to be written for a configuration error")
+	}
+}
+
+// Mixed case must select the gate, matching CONTINUE_ON_ERROR parsing.
+func TestRunFailsOnUninspectableOptionalChannelWithMixedCaseGate(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	stageUninspectableCommentMemory(t, artifactsDir)
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_WARNING": "False",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (\"False\" must select the gate)\n%s", code, exitError, stderr)
+	}
+}
+
+// With a fully readable bundle the gate is inert, so opting in does not turn a
+// clean run into a configuration error.
+func TestRunSucceedsWithWarningsGatedAndCompleteArtifacts(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	stagePromptAnalysisArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_WARNING": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("run() exit code = %d, want %d\n%s", code, exitSafe, stderr)
+	}
+	if strings.Contains(stderr, "::error::") {
+		t.Errorf("expected no error annotation for a complete bundle, got:\n%s", stderr)
+	}
+}
+
+// Degraded prompt analysis (TD-18b) is recorded after artifacts loading, so it
+// is not in arts.Warnings. It must still be gated, or a host that opted out of
+// partial-bundle verdicts would keep certifying a bundle whose
+// trusted-vs-untrusted split could not be computed.
+func TestRunFailsOnDegradedPromptAnalysisWhenWarningsGated(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                                fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_WARNING": "false",
+	})
+
+	if code != exitError {
+		t.Fatalf("run() exit code = %d, want %d (degraded prompt analysis must be gated)\n%s", code, exitError, stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err == nil {
+		t.Fatal("expected detection not to run when prompt analysis is degraded and gated")
+	}
+	if !strings.Contains(stderr, "::error::"+promptAnalysisValidationCode+": Missing or unusable prompt analysis artifacts") {
+		t.Errorf("expected prompt-analysis error annotation, got:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, statusPrefix+" reason="+reasonConfigError) {
+		t.Errorf("expected config_error status line, got:\n%s", stderr)
+	}
+	if _, err := os.Stat(outputPath); err == nil {
+		t.Error("expected no result file to be written for a configuration error")
+	}
+}
+
+// Degraded prompt analysis remains advisory in strict continue-on-error mode:
+// see TestRun_DegradedPromptAnalysisDoesNotBlockStrictMode in warnings_test.go.
+
 func TestRunFailsOnDegradedRequiredInputInMixedCaseStrictMode(t *testing.T) {
 	artifactsDir := t.TempDir()
 	writeMinimalArtifacts(t, artifactsDir)
