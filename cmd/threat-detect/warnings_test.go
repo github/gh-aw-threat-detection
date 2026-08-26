@@ -394,3 +394,119 @@ func TestRun_UnreadablePromptInStrictModeRefusesWithoutWritingResult(t *testing.
 		t.Errorf("expected config_error status line, got:\n%s", stderr)
 	}
 }
+
+// Prompt-analysis degradation previously existed only as a job-log annotation,
+// which no host can react to programmatically -- the exact gap the warnings
+// array closes. It must reach the published result like any other finding.
+func TestRun_DegradedPromptAnalysisSurfacesInPublishedResult(t *testing.T) {
+	artifactsDir := t.TempDir()
+	// writeMinimalArtifacts stages prompt.txt and agent_output.json but neither
+	// prompt-template.txt nor prompt-import-tree.json, so analysis is degraded.
+	writeMinimalArtifacts(t, artifactsDir)
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, filepath.Join(t.TempDir(), "copilot-called"), sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "true",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("exit code = %d, want %d (degraded analysis is not a threat)", code, exitSafe)
+	}
+	// The annotation must survive; the result is additional, not a replacement.
+	if !strings.Contains(stderr, "::warning::") || !strings.Contains(stderr, "prompt analysis artifacts") {
+		t.Errorf("expected the prompt-analysis annotation to still be emitted, got:\n%s", stderr)
+	}
+
+	result := readResultFile(t, outputPath)
+	entries, _ := result["warnings"].([]any)
+	found := false
+	for _, e := range entries {
+		if entry, ok := e.(map[string]any); ok && entry["field"] == "prompt_analysis" {
+			found = true
+			if !strings.Contains(fmt.Sprint(entry["message"]), "prompt-template.txt") {
+				t.Errorf("message should name the unusable file, got: %v", entry["message"])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a prompt_analysis warning in the published result, got: %v", result["warnings"])
+	}
+}
+
+// prompt-template.txt and prompt-import-tree.json are optional. Reporting their
+// absence must stay advisory: if it were classified as a required-input finding,
+// TD-18c would promote it and strict mode would refuse every run of a host that
+// simply does not stage them, turning an additive change into a breaking one.
+func TestWarnDegradedPromptAnalysis_IsAdvisoryNotRequiredInput(t *testing.T) {
+	warnings := warnDegradedPromptAnalysis(nil)
+	if len(warnings) == 0 {
+		t.Fatal("expected a warning when no prompt analysis is available")
+	}
+	for _, w := range warnings {
+		if w.RequiredInput {
+			t.Errorf("prompt-analysis findings must not be required-input: %+v", w)
+		}
+	}
+
+	arts := &artifacts.Artifacts{Warnings: warnings}
+	if arts.HasRequiredInputWarnings() {
+		t.Error("prompt-analysis findings must not trigger strict-mode refusal")
+	}
+}
+
+// The strict-mode counterpart, end to end: a run missing only the optional
+// prompt-analysis files must still proceed and conclude normally.
+func TestRun_DegradedPromptAnalysisDoesNotBlockStrictMode(t *testing.T) {
+	artifactsDir := t.TempDir()
+	writeMinimalArtifacts(t, artifactsDir)
+
+	outputPath := filepath.Join(t.TempDir(), "result.json")
+	copilotMarker := filepath.Join(t.TempDir(), "copilot-called")
+	sinkJSON := `{"prompt_injection":false,"secret_leak":false,"malicious_patch":false,"reasons":[]}`
+	fakeBinDir := writeFakeCopilotWithSink(t, copilotMarker, sinkJSON, 0)
+
+	code, stderr := runWithTestArgsCapture(t, []string{
+		"threat-detect",
+		"-output", outputPath,
+		artifactsDir,
+	}, map[string]string{
+		"PATH":                              fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GH_AW_DETECTION_CONTINUE_ON_ERROR": "false",
+	})
+
+	if code != exitSafe {
+		t.Fatalf("exit code = %d, want %d; missing optional analysis files must not refuse a run in strict mode.\n%s", code, exitSafe, stderr)
+	}
+	if _, err := os.Stat(copilotMarker); err != nil {
+		t.Error("detection should still have run in strict mode")
+	}
+}
+
+// arts.Warnings backs a slice owned by the loader; collecting the reported set
+// must not append into it.
+func TestRun_ReportingDoesNotMutateLoaderWarnings(t *testing.T) {
+	loaderWarnings := make([]artifacts.ArtifactWarning, 1, 8)
+	loaderWarnings[0] = artifacts.ArtifactWarning{Field: "comment_memory", Code: "ERR_VALIDATION", Message: "ERR_VALIDATION: original"}
+
+	reported := make([]artifacts.ArtifactWarning, 0, len(loaderWarnings)+1)
+	reported = append(reported, loaderWarnings...)
+	reported = append(reported, artifacts.ArtifactWarning{Field: "prompt_analysis", Code: "ERR_VALIDATION", Message: "ERR_VALIDATION: added"})
+
+	if len(loaderWarnings) != 1 {
+		t.Errorf("loader warnings length changed: %d", len(loaderWarnings))
+	}
+	if loaderWarnings[0].Field != "comment_memory" {
+		t.Errorf("loader warning was overwritten: %+v", loaderWarnings[0])
+	}
+	if len(reported) != 2 {
+		t.Errorf("reported set should carry both warnings, got %d", len(reported))
+	}
+}

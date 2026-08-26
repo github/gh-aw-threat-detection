@@ -273,12 +273,24 @@ norm rather than the exception.
 
 **TD-10h**: The result MAY carry a `warnings` array of detector-authored
 findings about artifact channels the detector could not fully inspect (for
-example, an unreadable `comment-memory` directory, or a `HAS_PATCH=true` bundle
-that could not be read). Each entry MUST be a JSON object with the required
+example, an unreadable `comment-memory` directory, a `HAS_PATCH=true` bundle
+that could not be read, or prompt-analysis inputs that were absent or unusable).
+Each entry MUST be a JSON object with the required
 string fields `field` (identifying the artifact channel), `code` (a stable
 identifier such as `ERR_VALIDATION`), and `message` (a human-readable
 diagnostic). The `warnings` field is OPTIONAL for backward compatibility; a
 result without it MUST parse successfully.
+
+Every degraded-inspection condition the implementation reports as an annotation
+MUST also be recorded in `warnings` when a result is written. An annotation
+alone is not a report: it is not readable programmatically, which is the gap
+this requirement exists to close, so a condition surfaced only that way leaves a
+partially inspected bundle indistinguishable from a clean one.
+
+Recording a condition in `warnings` MUST NOT change whether it is treated as a
+required input. Findings about *optional* artifacts (such as the pre-expansion
+prompt template and the import tree) MUST remain advisory, so that reporting
+them does not cause TD-18c to refuse runs of hosts that never staged them.
 
 Warnings are detector-authored — they are composed by the implementation from
 the loader's own findings and MUST NOT be sourced from or influenced by the

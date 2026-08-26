@@ -429,7 +429,7 @@ func run() (code int) {
 		reason = reasonConfigError
 		return exitError
 	}
-	warnDegradedPromptAnalysis(promptAnalysis)
+	analysisWarnings := warnDegradedPromptAnalysis(promptAnalysis)
 
 	// The rendered prompt itself is never echoed; only its metadata, so a
 	// truncated or scaffolding-free prompt is diagnosable from the job log.
@@ -484,7 +484,13 @@ func run() (code int) {
 	}
 
 	var resultReason string
-	code, resultReason = writeResult(result, arts.Warnings, outputJSON, fullOutputJSON)
+	// Build a fresh slice rather than appending onto arts.Warnings, whose
+	// backing array belongs to the loader.
+	reported := make([]artifacts.ArtifactWarning, 0, len(arts.Warnings)+len(analysisWarnings))
+	reported = append(reported, arts.Warnings...)
+	reported = append(reported, analysisWarnings...)
+
+	code, resultReason = writeResult(result, reported, outputJSON, fullOutputJSON)
 	reason = resultReason
 	return code
 }
@@ -536,7 +542,18 @@ func scaffoldingMarkers(analysis *detector.PromptAnalysis) []string {
 	return analysis.Scaffolding.Markers
 }
 
-func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
+// warnDegradedPromptAnalysis annotates prompt-analysis artifacts that could not
+// be used and returns those findings so they also reach the result's warnings
+// array. Emitting only an annotation would drop them: the job log is not
+// readable programmatically, which is the gap the warnings array exists to
+// close.
+//
+// The findings are deliberately advisory. prompt-template.txt and
+// prompt-import-tree.json are optional parts of the artifact contract, so
+// RequiredInput stays false: classifying them as required would make strict
+// mode refuse every run of a host that simply does not stage them, turning an
+// additive reporting change into a breaking one.
+func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) []artifacts.ArtifactWarning {
 	var unavailable []string
 	if analysis == nil || analysis.PromptTemplate == "" {
 		unavailable = append(unavailable, "aw-prompts/prompt-template.txt")
@@ -545,14 +562,22 @@ func warnDegradedPromptAnalysis(analysis *detector.PromptAnalysis) {
 		unavailable = append(unavailable, "aw-prompts/prompt-import-tree.json")
 	}
 	if len(unavailable) == 0 {
-		return
+		return nil
 	}
 
-	stderrf(
-		"::warning::%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files.",
+	message := fmt.Sprintf(
+		"%s: Missing or unusable prompt analysis artifacts: %s. Trusted-vs-untrusted prompt analysis is degraded; ensure the host stages both non-empty files. This failure is not itself evidence of a threat.",
 		promptAnalysisValidationCode,
 		strings.Join(unavailable, ", "),
 	)
+	stderrf("::warning::%s", message)
+
+	return []artifacts.ArtifactWarning{{
+		Field:         "prompt_analysis",
+		Code:          promptAnalysisValidationCode,
+		Message:       message,
+		RequiredInput: false,
+	}}
 }
 
 func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath string, retries, maxTurns int, engineTimeout time.Duration, analysis *detector.PromptAnalysis, arts *artifacts.Artifacts) (*detector.Result, error) {

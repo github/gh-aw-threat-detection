@@ -349,8 +349,10 @@ The result also carries a `warnings` array, which is **not** the same as
 
 A warning is recorded when an artifact channel is present but cannot be fully
 inspected — for example, `HAS_PATCH=true` was set but no readable patch bundle
-was found, a staged prompt or patch exists but cannot be opened, or the
-`comment-memory` directory could not be listed. Readability is probed by
+was found, a staged prompt or patch exists but cannot be opened, the
+`comment-memory` directory could not be listed, or the optional prompt-analysis
+inputs (`prompt-template.txt`, `prompt-import-tree.json`) were missing or
+unusable. Readability is probed by
 actually opening the file: a stat-only check succeeds on a file the detector has
 no permission to read, which would report a non-empty, inspected-looking channel
 for content nobody examined. Without the `warnings` array, a partially
@@ -381,7 +383,9 @@ a **required** input (`prompt`, `agent_output`, `patch`) is promoted to a
 configuration error and the detector refuses to run degraded detection, exiting
 `2` before any analysis happens. That is an infrastructure error, not a threat
 verdict (exit `1`), and no result file is written — writing one would assert a
-clean verdict for analysis that never ran. In the default warn mode, where
+clean verdict for analysis that never ran. Warnings about *optional* artifacts,
+such as `prompt_analysis`, are never promoted this way, so reporting them cannot
+start failing a host that does not stage them. In the default warn mode, where
 detection does run, every recorded warning appears in both result files.
 
 #### Concluding a run (`conclude`)
