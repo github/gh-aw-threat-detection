@@ -640,11 +640,17 @@ func analyzeWithRetries(ctx context.Context, eng engine.Engine, prompt, sinkPath
 // read-only or missing detection directory must not turn a completed detection
 // into an infrastructure error. A failure to write the authoritative redacted
 // result is fatal, and yields no JSON at all.
-func writeResult(result *detector.Result, artifactWarnings []artifacts.ArtifactWarning, outputJSON, fullOutputJSON string) (int, string) {
-	// Attach detector-authored warnings before writing. The sink Result from
-	// the model carries none by construction; assembling them here keeps the
-	// model out of the warnings channel and ensures both files carry the same
-	// warnings block.
+func writeResult(sinkResult *detector.Result, artifactWarnings []artifacts.ArtifactWarning, outputJSON, fullOutputJSON string) (int, string) {
+	// Attach detector-authored warnings before writing, on a copy so the
+	// caller's Result is not mutated. The assignment is unconditional and
+	// overwrites whatever the sink carried: the reporting tool exposes no
+	// warnings flag, but the engine holds a file-writing tool and knows
+	// THREAT_DETECTION_RESULT_FILE, so a model that wrote the sink directly
+	// could otherwise smuggle warnings into a published file. Assembling them
+	// here keeps the model out of the warnings channel entirely and ensures
+	// both destinations carry the identical warnings block.
+	local := *sinkResult
+	result := &local
 	result.Warnings = buildResultWarnings(artifactWarnings)
 
 	if fullOutputJSON != "" {
@@ -682,30 +688,38 @@ func writeResult(result *detector.Result, artifactWarnings []artifacts.ArtifactW
 }
 
 // buildResultWarnings converts loader-time ArtifactWarnings to the result
-// contract's ResultWarning shape, bounded and truncated to fit the schema.
-// Excess entries are dropped rather than causing a write failure — the schema
-// bounds exist to keep the result file readable, not to gate its emission —
-// and the truncation is surfaced on stderr so it is diagnosable from the log.
+// contract's ResultWarning shape, bounded to fit the schema.
+//
+// Excess entries are dropped and over-long values clipped rather than causing a
+// write failure: the schema bounds exist to keep the result file readable, not
+// to gate its emission, and a warning that says "I could not inspect
+// everything" must never be the thing that prevents the verdict from being
+// published. Both adjustments are surfaced on stderr so they stay diagnosable
+// from the job log.
 func buildResultWarnings(warnings []artifacts.ArtifactWarning) []detector.ResultWarning {
 	if len(warnings) == 0 {
 		return []detector.ResultWarning{}
 	}
 	out := make([]detector.ResultWarning, 0, len(warnings))
-	for _, w := range warnings {
+	for i, w := range warnings {
 		if len(out) >= detector.MaxWarnings {
+			// Report what is actually left unconsumed at this point. Counting
+			// from len(out) instead would under-report whenever an earlier
+			// entry was skipped as structurally invalid.
 			stderrf("[threat-detect] result warnings truncated: kept=%d dropped=%d (schema cap is %d)",
-				len(out), len(warnings)-len(out), detector.MaxWarnings)
+				len(out), len(warnings)-i, detector.MaxWarnings)
 			break
 		}
-		field := truncateRunesForResult(w.Field, detector.MaxWarningFieldRunes)
-		code := truncateRunesForResult(w.Code, detector.MaxWarningCodeRunes)
+		field := clipRunes(w.Field, detector.MaxWarningFieldRunes)
+		code := clipRunes(w.Code, detector.MaxWarningCodeRunes)
 		if code == "" {
 			code = artifacts.ErrCodeValidation
 		}
-		message := truncateRunesForResult(w.MessageBody(), detector.MaxWarningMessageRunes)
+		message := clipRunes(w.MessageBody(), detector.MaxWarningMessageRunes)
 		if strings.TrimSpace(field) == "" || strings.TrimSpace(message) == "" {
 			// A warning missing structural fields would be rejected on read;
 			// skip it rather than producing an unreadable result.
+			stderrf("[threat-detect] skipping unrepresentable result warning: field=%s", sanitizeLogValue(w.Field))
 			continue
 		}
 		out = append(out, detector.ResultWarning{
@@ -717,9 +731,20 @@ func buildResultWarnings(warnings []artifacts.ArtifactWarning) []detector.Result
 	return out
 }
 
-// truncateRunesForResult clips s to at most n runes. It returns s unchanged
-// when it already fits, so the common case allocates nothing.
-func truncateRunesForResult(s string, n int) string {
+// clipMarker is appended to a value clipped by clipRunes, so a shortened
+// warning message is visibly shortened rather than silently losing its tail.
+const clipMarker = "…"
+
+// clipRunes bounds s to at most n runes, appending clipMarker within that
+// budget when it shortens the value.
+//
+// This is deliberately not conclude.go's truncateRunes, which appends
+// "… (truncated)" *past* the requested length: that is correct for a display
+// line, but here n is a schema bound enforced on both write and read, so
+// exceeding it would produce a result file the detector itself would reject on
+// read. Reserving room for the marker keeps the output inside the bound while
+// still signalling that content was dropped.
+func clipRunes(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
@@ -727,7 +752,12 @@ func truncateRunesForResult(s string, n int) string {
 	if len(runes) <= n {
 		return s
 	}
-	return string(runes[:n])
+	marker := []rune(clipMarker)
+	if n <= len(marker) {
+		// No room for both content and a marker; keep content.
+		return string(runes[:n])
+	}
+	return string(runes[:n-len(marker)]) + clipMarker
 }
 
 func envInt(key string, fallback int) int {

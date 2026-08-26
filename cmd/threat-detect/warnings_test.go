@@ -91,6 +91,95 @@ func TestBuildResultWarnings_TruncatesOverlongMessage(t *testing.T) {
 	if runes := []rune(got[0].Message); len(runes) > detector.MaxWarningMessageRunes {
 		t.Fatalf("message must be clipped to MaxWarningMessageRunes; got %d runes", len(runes))
 	}
+	// The clip must be self-announcing rather than silently losing the tail.
+	if !strings.HasSuffix(got[0].Message, clipMarker) {
+		t.Errorf("clipped message must end with the clip marker; got tail %q",
+			got[0].Message[max(0, len(got[0].Message)-10):])
+	}
+}
+
+// TestClipRunes_StaysWithinBound is the property that matters: clipRunes must
+// never return more runes than requested, because its bound is the schema
+// bound enforced on read. conclude.go's truncateRunes deliberately exceeds the
+// requested length (it appends "… (truncated)"), so it must not be used here —
+// doing so would produce a result file the detector rejects on read.
+func TestClipRunes_StaysWithinBound(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 3, 5, 64, 2000} {
+		for _, s := range []string{"", "short", strings.Repeat("x", 5000), strings.Repeat("é", 5000)} {
+			got := []rune(clipRunes(s, n))
+			if len(got) > n {
+				t.Errorf("clipRunes(len=%d, n=%d) returned %d runes, exceeding the bound",
+					len([]rune(s)), n, len(got))
+			}
+		}
+	}
+}
+
+// TestClipRunes_CountsRunesNotBytes guards the multi-byte case: a bound
+// expressed in runes must not be applied to bytes, which would over-clip
+// non-ASCII paths in warning messages.
+func TestClipRunes_CountsRunesNotBytes(t *testing.T) {
+	s := strings.Repeat("é", 100)
+	if got := clipRunes(s, 100); got != s {
+		t.Errorf("a 100-rune value must pass a 100-rune bound unchanged")
+	}
+}
+
+// TestWriteResult_DoesNotMutateCallerResult verifies writeResult treats its
+// input as read-only. The sink Result is parsed from the model-written file;
+// silently rewriting it in place would make the caller's value diverge from
+// what was actually reported.
+func TestWriteResult_DoesNotMutateCallerResult(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "detection_result.json")
+
+	result := &detector.Result{Reasons: []string{}, Warnings: []detector.ResultWarning{}}
+	warnings := []artifacts.ArtifactWarning{
+		{Field: "comment_memory", Code: "ERR_VALIDATION", Message: "ERR_VALIDATION: something"},
+	}
+	if code, _ := writeResult(result, warnings, outputPath, ""); code != exitSafe {
+		t.Fatalf("unexpected exit code")
+	}
+	if len(result.Warnings) != 0 {
+		t.Errorf("writeResult must not mutate the caller's Result; warnings = %#v", result.Warnings)
+	}
+	// The written file must still carry the warning.
+	got, err := detector.ReadResultFile(outputPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got.Warnings) != 1 {
+		t.Fatalf("written result must carry the warning, got %#v", got.Warnings)
+	}
+}
+
+// TestWriteResult_OverridesSinkSuppliedWarnings verifies that warnings present
+// on the sink Result are discarded in favour of the detector's own. The
+// reporting tool exposes no warnings flag, but the engine has a file-writing
+// tool and knows THREAT_DETECTION_RESULT_FILE, so a model that wrote the sink
+// directly must not be able to smuggle text into the published result — which
+// is precisely the exposure the reasons split (TD-10f) exists to prevent.
+func TestWriteResult_OverridesSinkSuppliedWarnings(t *testing.T) {
+	dir := t.TempDir()
+	outputPath := filepath.Join(dir, "detection_result.json")
+
+	smuggled := &detector.Result{
+		Reasons: []string{},
+		Warnings: []detector.ResultWarning{
+			{Field: "attacker", Code: "ERR_VALIDATION", Message: "model-authored text"},
+		},
+	}
+	// No artifact warnings at all: the published result must carry none.
+	if code, _ := writeResult(smuggled, nil, outputPath, ""); code != exitSafe {
+		t.Fatalf("unexpected exit code")
+	}
+	got, err := detector.ReadResultFile(outputPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("sink-supplied warnings must be discarded, got %#v", got.Warnings)
+	}
 }
 
 // TestWriteResult_WarningsAppearInBothFiles verifies the plumbing: detector-
