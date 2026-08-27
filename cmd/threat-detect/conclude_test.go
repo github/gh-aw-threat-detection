@@ -598,10 +598,16 @@ func TestRunConcludeDefaultsDetectionLogPath(t *testing.T) {
 	t.Setenv("GITHUB_OUTPUT", outPath)
 	t.Setenv("GITHUB_ENV", envPath)
 
-	code := runConclude([]string{"--result-file", resultFile})
-	if code != concludeExitFail {
-		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
-	}
+	// Wrap in captureStdout so the ERR_PARSE workflow command runConclude
+	// emits on the missing-result-file path doesn't leak into `go test`'s
+	// real stdout, where the Actions runner would harvest it as a job
+	// annotation on this otherwise-passing test.
+	_ = captureStdout(t, func() {
+		code := runConclude([]string{"--result-file", resultFile})
+		if code != concludeExitFail {
+			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+		}
+	})
 	outputs := parseKV(t, outPath)
 	if got := outputs["reason"]; got != "parse_error" {
 		t.Fatalf("reason = %q, want %q", got, "parse_error")
@@ -1413,9 +1419,14 @@ func TestRunConcludeFullResultFileOverride(t *testing.T) {
 	t.Setenv("GITHUB_OUTPUT", filepath.Join(dir, "out"))
 	t.Setenv("GITHUB_ENV", filepath.Join(dir, "env"))
 
-	if code := runConclude([]string{"--result-file", resultFile, "--full-result-file", elsewhere}); code != concludeExitFail {
-		t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
-	}
+	// captureStdout keeps the ERR_VALIDATION workflow command emitted on the
+	// verdict mismatch out of `go test`'s real stdout, where the Actions
+	// runner would otherwise turn it into a job annotation.
+	_ = captureStdout(t, func() {
+		if code := runConclude([]string{"--result-file", resultFile, "--full-result-file", elsewhere}); code != concludeExitFail {
+			t.Fatalf("runConclude() = %d, want %d", code, concludeExitFail)
+		}
+	})
 
 	c := &concluder{fullResultFile: ""}
 	if got := c.fullResultPath(resultFile); got != detector.FullResultPath(resultFile) {
