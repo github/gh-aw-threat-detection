@@ -25,12 +25,22 @@ version: the newest `github/gh-aw` release **or prerelease**, whichever was
 published most recently. There are no per-workflow categories — a bump
 recompiles all the locks together.
 
-**Only the gh-aw version needs bumping.** The detector version is *not* pinned in
-the locks: gh-aw emits the literal `latest` to
-`install_threat_detect_binary.sh`, which resolves it at runtime from
-`GET /repos/github/gh-aw-threat-detection/releases/latest` — the newest
-**non-prerelease** release. Promoting a detector release is therefore enough to
-put it into the smokes; no recompile is required.
+**The detector version is baked into the locks.** `gh-aw`'s
+`buildInstallThreatDetectStep` unconditionally emits
+`constants.DefaultThreatDetectVersion` (a hardcoded tag, e.g. `v0.4.12`) as the
+argument to `install_threat_detect_binary.sh`. There is no CLI flag, env var, or
+frontmatter field that consults an alternate version at compile time. The
+detector pin therefore only moves when either:
+
+1. `github/gh-aw` bumps the constant upstream (typically after a detector
+   promotion) and a normal drift-recompile picks up the new tag, or
+2. a maintainer does a targeted post-compile edit of the lock (see
+   [Testing an unpromoted detector prerelease in the smokes](#testing-an-unpromoted-detector-prerelease-in-the-smokes)
+   below).
+
+Promoting a detector release is **not** by itself enough to put it into the
+smokes — it takes effect only once the upstream constant is bumped and this
+repo's locks are recompiled against that gh-aw tag.
 
 ## 1. Determine the target gh-aw version
 
@@ -112,8 +122,40 @@ Verify before compiling:
 
 ## Testing an unpromoted detector prerelease
 
-The smokes only ever see **promoted** detector releases. To exercise a
-prerelease under AWF before promoting it, dispatch
-`.github/workflows/replay-detection.yml` with `detector_source=release`,
-`detector_ref=<prerelease tag>`, and `use_awf=true`. It downloads that exact
-release asset and runs it under AWF against a prior gh-aw run's artifacts.
+There are two sanctioned paths, depending on what you want to exercise.
+
+### Replay path (preferred for most prerelease iteration)
+
+Dispatch `.github/workflows/replay-detection.yml` with
+`detector_source=release`, `detector_ref=<prerelease tag>`, and `use_awf=true`.
+It downloads that exact release asset and runs it under AWF against a prior
+gh-aw run's artifacts. No lock edit needed.
+
+### Smoke path (when you specifically need fresh AWF + fresh artifacts)
+
+The smokes only ever see whatever tag gh-aw's constant currently points at
+(promoted, stable). To point them at an unpromoted prerelease, do a targeted
+post-compile edit of the smoke locks:
+
+```bash
+sed -i 's|install_threat_detect_binary.sh" v0\.[0-9.]*|install_threat_detect_binary.sh" <PRERELEASE_TAG>|' \
+  .github/workflows/smoke-copilot-standalone.lock.yml \
+  .github/workflows/smoke-claude-standalone.lock.yml \
+  .github/workflows/smoke-codex-standalone.lock.yml
+```
+
+Commit those three files and open a PR. Do **not** patch
+`constants.DefaultThreatDetectVersion` in a `gh-aw` fork to accomplish this:
+that route corrupts the compiler-version story (locks would carry a fork tag or
+lie about upstream), and it inverts the invariant that the constant tracks the
+promoted detector.
+
+Only touch the smoke locks. Leave `detection-stats-daily`,
+`detection-failure-monitor`, `gh-aw-issue-digest`, and `gh-aw-parity-monitor` on
+the compiler-emitted tag — they are not the test bed for detector prereleases.
+
+The edit is deliberately ephemeral: the next `gh aw compile` run will regenerate
+the locks from `constants.DefaultThreatDetectVersion` and revert the pin. That
+is intentional — prerelease pins should not survive a routine recompile. Once
+the detector is promoted and gh-aw bumps its constant, a normal drift-recompile
+picks it up on the standard path.

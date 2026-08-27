@@ -1,18 +1,25 @@
 name: gh-aw Version Check
 
 # Daily read-only check that the compiled agentic workflow `.lock.yml` files are
-# pinned to the version every workflow tracks:
+# pinned to the versions every workflow tracks:
 #
-#   * all workflows -> newest github/gh-aw release OR prerelease
+#   * all workflows  -> newest github/gh-aw release OR prerelease
+#                       (baked into each lock as `compiler_version`)
+#   * smoke-*.lock.yml only
+#                    -> newest github/gh-aw-threat-detection release OR
+#                       prerelease (the tag passed to
+#                       `install_threat_detect_binary.sh` in the detection job)
 #
-# There is a single target for every lock: whichever github/gh-aw release or
-# prerelease was published most recently. Drafts and non-`v<digit>` tags are
-# ignored.
+# There is a single target per field: whichever release or prerelease was
+# published most recently in the corresponding repo. Drafts and non-`v<digit>`
+# tags are ignored.
 #
-# Only the gh-aw compiler version is checked. The detector version is no longer
-# baked into a lock: gh-aw resolves `latest` at runtime from the detector's
-# releases/latest endpoint, so it always tracks the newest promoted release
-# without a recompile.
+# The detector tag is only policed on the smoke locks. Non-smoke locks (issue
+# digest, parity monitor, stats, failure monitor, ...) follow whatever tag
+# gh-aw's compiler bakes in via `constants.DefaultThreatDetectVersion`, which
+# only moves on an upstream constant bump + drift-recompile. Policing their
+# detector tag independently would produce spurious drift whenever a detector
+# prerelease exists but the upstream constant has not yet been bumped.
 #
 # It does NOT build or compile anything. When drift is found it opens (or
 # updates) a single tracking issue listing every workflow that needs updating
@@ -77,12 +84,23 @@ jobs:
           gh_aw_latest="$(newest_tag "$GH_AW_REPO")"
           [ -n "$gh_aw_latest" ] && [ "$gh_aw_latest" != "null" ] || { echo "::error::could not resolve gh-aw latest version"; exit 1; }
 
-          echo "Target version:"
-          echo "  gh-aw (latest release or prerelease): $gh_aw_latest"
+          detector_latest="$(newest_tag "$DETECTOR_REPO")"
+          [ -n "$detector_latest" ] && [ "$detector_latest" != "null" ] || { echo "::error::could not resolve threat-detect latest version"; exit 1; }
+
+          echo "Target versions:"
+          echo "  gh-aw       (latest release or prerelease): $gh_aw_latest"
+          echo "  threat-detect (latest release or prerelease, smoke locks only): $detector_latest"
           echo
 
           # gh-aw compiler version baked into a lock file.
           lock_compiler_version() { grep -o '"compiler_version":"[^"]*"' "$1" | head -n1 | sed 's/.*:"//;s/"//'; }
+
+          # Detector tag passed to install_threat_detect_binary.sh in a lock file.
+          # Empty output means the lock does not invoke the installer.
+          lock_detector_version() {
+            grep -o 'install_threat_detect_binary\.sh" v[0-9][^"[:space:]]*' "$1" \
+              | head -n1 | awk '{print $NF}'
+          }
 
           drift_rows=""
           add_row() { drift_rows+="${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${4}"$'\n'; }
@@ -102,6 +120,20 @@ jobs:
             else
               echo "ok     $base gh-aw $cur_ghaw"
             fi
+
+            # Detector tag is only policed on smoke locks.
+            case "$base" in
+              smoke-*-standalone)
+                cur_det="$(lock_detector_version "$lock")"
+                [ -n "$cur_det" ] || { echo "::error::no install_threat_detect_binary.sh invocation in $lock"; exit 1; }
+                if [ "$cur_det" != "$detector_latest" ]; then
+                  add_row "$base" "threat-detect" "$cur_det" "$detector_latest"
+                  echo "DRIFT  $base threat-detect $cur_det -> $detector_latest"
+                else
+                  echo "ok     $base threat-detect $cur_det"
+                fi
+                ;;
+            esac
           done
 
           echo
@@ -119,9 +151,14 @@ jobs:
             echo
             echo "One or more compiled workflow \`.lock.yml\` files are pinned to an outdated version."
             echo
-            echo "### Target version"
+            echo "### Target versions"
             echo
-            echo "Every compiled lock tracks the newest \`${GH_AW_REPO}\` release **or prerelease**: \`${gh_aw_latest}\`"
+            echo "| Field | Repo | Target |"
+            echo "|-------|------|--------|"
+            echo "| \`gh-aw\` (compiler, all locks) | \`${GH_AW_REPO}\` | \`${gh_aw_latest}\` |"
+            echo "| \`threat-detect\` (smoke locks only) | \`${DETECTOR_REPO}\` | \`${detector_latest}\` |"
+            echo
+            echo "Both targets are the newest release **or prerelease** in their respective repo."
             echo
             echo "### Workflows needing an update"
             echo
