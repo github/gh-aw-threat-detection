@@ -392,7 +392,9 @@ func (c *concluder) reportVerdict(result *detector.Result, reasons []string) {
 // everything", not "a threat was found", so they are rendered separately from
 // both the verdict and the reasons — visible in the job log without a reader
 // having to consult the annotations. They never affect the verdict or the
-// exit code.
+// exit code. When there are no warnings, a "(none)" line is still emitted so
+// the warnings channel is always visible in the verdict block, mirroring the
+// reasons rendering.
 //
 // Each field is host-controlled or detector-composed (never model-authored),
 // but Message embeds host-controlled paths, so every value is sanitized before
@@ -400,6 +402,7 @@ func (c *concluder) reportVerdict(result *detector.Result, reasons []string) {
 // applies to its untrusted content.
 func (c *concluder) reportWarnings(warnings []detector.ResultWarning) {
 	if len(warnings) == 0 {
+		c.info("   warnings         : (none)")
 		return
 	}
 	c.info(fmt.Sprintf("⚠️  Detector warnings (%d) — artifact channels that could not be fully inspected. These do not affect the verdict.", len(warnings)))

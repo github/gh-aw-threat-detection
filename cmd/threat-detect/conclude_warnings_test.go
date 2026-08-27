@@ -88,9 +88,9 @@ func TestConcludeWarningsSanitizedForControlChars(t *testing.T) {
 	}
 }
 
-// TestConcludeNoWarningsBlockWhenEmpty verifies the warnings section is
-// silent when there are no warnings — the log should not contain a stray
-// ⚠️ header for a clean run.
+// TestConcludeNoWarningsBlockWhenEmpty verifies the warnings section renders
+// a "(none)" line on a clean run — mirroring the reasons block — and does
+// not emit the ⚠️ header reserved for actual detector warnings.
 func TestConcludeNoWarningsBlockWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	resultFile := writeResultFixture(t, safeVerdict)
@@ -107,7 +107,11 @@ func TestConcludeNoWarningsBlockWhenEmpty(t *testing.T) {
 	if code := c.run(resultFile); code != concludeExitProceed {
 		t.Fatalf("run returned %d; log:\n%s", code, stdout.String())
 	}
-	if strings.Contains(stdout.String(), "Detector warnings") {
-		t.Errorf("no warnings header expected on a clean run; got:\n%s", stdout.String())
+	got := stdout.String()
+	if strings.Contains(got, "Detector warnings") {
+		t.Errorf("no ⚠️ warnings header expected on a clean run; got:\n%s", got)
+	}
+	if !strings.Contains(got, "warnings         : (none)") {
+		t.Errorf("expected 'warnings         : (none)' line on a clean run; got:\n%s", got)
 	}
 }
