@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
+	"github.com/github/gh-aw-threat-detection/pkg/engine"
 )
 
 // reportHelperEnv makes the test binary behave as the detector binary's
@@ -78,6 +79,30 @@ func TestRunReportMissingConfig(t *testing.T) {
 	code := runReport([]string{"--prompt-injection=false", "--secret-leak=false", "--malicious-patch=false"})
 	if code != reportExitConfig {
 		t.Fatalf("runReport() = %d, want %d", code, reportExitConfig)
+	}
+}
+
+func TestRunReportBoundResultFileTakesPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	boundSink := filepath.Join(dir, "bound-result.json")
+	overrideSink := filepath.Join(dir, "override-result.json")
+	t.Setenv(engine.BoundResultFileEnvVar, boundSink)
+	t.Setenv("THREAT_DETECTION_RESULT_FILE", filepath.Join(dir, "environment-result.json"))
+
+	code := runReport([]string{
+		"--prompt-injection=false",
+		"--secret-leak=false",
+		"--malicious-patch=false",
+		"--result-file", overrideSink,
+	})
+	if code != reportExitOK {
+		t.Fatalf("runReport() = %d, want %d", code, reportExitOK)
+	}
+	if _, err := detector.ReadResultFile(boundSink); err != nil {
+		t.Fatalf("bound result was not recorded: %v", err)
+	}
+	if _, err := os.Stat(overrideSink); !os.IsNotExist(err) {
+		t.Fatalf("model-controlled override sink was written, stat err = %v", err)
 	}
 }
 
@@ -347,7 +372,10 @@ func TestReportResultShellEndToEndHostileEvidence(t *testing.T) {
 	sink := filepath.Join(dir, "result.json")
 
 	wrapper := filepath.Join(dir, "threat_detection_result")
-	script := "#!/bin/sh\nexec '" + self + "' report-result \"$@\"\n"
+	script := "#!/bin/sh\n" +
+		"export THREAT_DETECTION_RESULT_FILE='" + sink + "'\n" +
+		"export " + engine.BoundResultFileEnvVar + "='" + sink + "'\n" +
+		"exec '" + self + "' report-result \"$@\"\n"
 	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
 		t.Fatalf("WriteFile error = %v", err)
 	}
@@ -356,12 +384,14 @@ func TestReportResultShellEndToEndHostileEvidence(t *testing.T) {
 
 	// The command line the model is instructed to run: booleans and a path, no
 	// artifact-derived text.
+	overrideSink := filepath.Join(dir, "wrong-result.json")
 	cmd := exec.Command("/bin/sh", "-c",
-		"threat_detection_result --prompt-injection true --secret-leak false --malicious-patch false --reasons-file "+reasonsFile)
+		"threat_detection_result --prompt-injection true --secret-leak false --malicious-patch false --reasons-file "+reasonsFile+" --result-file "+overrideSink)
 	cmd.Dir = dir // any CANARY created by an executed substitution lands here
 	cmd.Env = append(os.Environ(),
 		reportHelperEnv+"=1",
-		"THREAT_DETECTION_RESULT_FILE="+sink,
+		"THREAT_DETECTION_RESULT_FILE=/tmp/wrong-environment-result.json",
+		engine.BoundResultFileEnvVar+"=/tmp/wrong-bound-result.json",
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	out, err := cmd.CombinedOutput()
@@ -370,6 +400,9 @@ func TestReportResultShellEndToEndHostileEvidence(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "THREAT_DETECTION_RESULT_RECORDED") {
 		t.Fatalf("expected recorded confirmation, got: %s", out)
+	}
+	if _, err := os.Stat(overrideSink); !os.IsNotExist(err) {
+		t.Fatalf("model-controlled override sink was written, stat err = %v", err)
 	}
 
 	// Nothing in the evidence may have been executed.

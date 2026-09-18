@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/github/gh-aw-threat-detection/pkg/detector"
+	"github.com/github/gh-aw-threat-detection/pkg/engine"
 )
 
 // Exit codes for the report-result subcommand.
@@ -56,6 +57,14 @@ func runReport(args []string) int {
 	if err := fs.Parse(normalizeBoolFlagArgs(args)); err != nil {
 		reportError(err.Error())
 		return reportExitInvalid
+	}
+
+	// The generated wrapper sets a detector-owned binding after entering the
+	// engine's shell. It must win over --result-file, whose value is composed by
+	// the model. Direct report-result invocations retain the flag behavior when
+	// no binding is present.
+	if boundResultFile := os.Getenv(engine.BoundResultFileEnvVar); boundResultFile != "" {
+		resultFile = boundResultFile
 	}
 
 	// All three boolean flags are required and must be explicitly provided.

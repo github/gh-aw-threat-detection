@@ -88,7 +88,7 @@ func TestResultToolScriptBindsResultPath(t *testing.T) {
 	dir := t.TempDir()
 	echoResultPath := filepath.Join(dir, "echo-result-path")
 	if err := os.WriteFile(echoResultPath, []byte(
-		"#!/bin/sh\nprintf 'result=%s\\n' \"$THREAT_DETECTION_RESULT_FILE\"\n",
+		"#!/bin/sh\nprintf 'result=%s\\nbound=%s\\n' \"$THREAT_DETECTION_RESULT_FILE\" \"$"+BoundResultFileEnvVar+"\"\n",
 	), 0o700); err != nil {
 		t.Fatalf("WriteFile error = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestResultToolScriptBindsResultPath(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	want := "result=" + sink + "\n"
+	want := "result=" + sink + "\nbound=" + sink + "\n"
 	for _, tc := range []struct {
 		name string
 		env  []string

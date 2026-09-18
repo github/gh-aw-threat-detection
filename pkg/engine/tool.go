@@ -14,6 +14,12 @@ import (
 // resultSinkPollInterval is how often watchResultSink polls the sink file.
 const resultSinkPollInterval = 250 * time.Millisecond
 
+// BoundResultFileEnvVar carries the detector-owned sink path from the generated
+// wrapper to report-result. Unlike THREAT_DETECTION_RESULT_FILE, it is not an
+// advisory default: report-result gives it precedence over model-controlled
+// command-line arguments.
+const BoundResultFileEnvVar = "THREAT_DETECTION_BOUND_RESULT_FILE"
+
 // reasonsFileName is the conventional name of the reasons file the engine
 // writes. It is provisioned in the same directory as the result sink, which is
 // also the directory holding the rendered prompt file — a directory every
@@ -91,6 +97,7 @@ func watchResultSink(ctx context.Context, cancel context.CancelFunc, sinkPath st
 func resultToolScript(self, sinkPath string) string {
 	return "#!/bin/sh\n" +
 		"export THREAT_DETECTION_RESULT_FILE=" + shellQuote(sinkPath) + "\n" +
+		"export " + BoundResultFileEnvVar + "=" + shellQuote(sinkPath) + "\n" +
 		"exec " + shellQuote(self) + " report-result \"$@\"\n"
 }
 
