@@ -51,7 +51,7 @@ func TestProvisionResultTool(t *testing.T) {
 // attacker-authored content, so the wrapper must use double-quoted "$@" and
 // never re-split or glob what it was given.
 func TestResultToolScriptForwardsArgsIntact(t *testing.T) {
-	script := resultToolScript("/opt/bin/threat detect", "/tmp/result file", "/tmp/reasons file")
+	script := resultToolScript("/opt/bin/threat detect", "/tmp/result file")
 	if !strings.Contains(script, `"$@"`) {
 		t.Fatalf("wrapper must forward double-quoted \"$@\", got: %q", script)
 	}
@@ -67,7 +67,7 @@ func TestResultToolScriptForwardsArgsIntact(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 	wrapper := filepath.Join(dir, "threat_detection_result")
-	if err := os.WriteFile(wrapper, []byte(resultToolScript(echoArgs, "/tmp/result.json", "/tmp/reasons.json")), 0o700); err != nil {
+	if err := os.WriteFile(wrapper, []byte(resultToolScript(echoArgs, "/tmp/result.json")), 0o700); err != nil {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
@@ -82,30 +82,29 @@ func TestResultToolScriptForwardsArgsIntact(t *testing.T) {
 	}
 }
 
-// TestResultToolScriptBindsResultPaths verifies that a nested engine shell
-// cannot drop or redirect the detector-owned sink paths.
-func TestResultToolScriptBindsResultPaths(t *testing.T) {
+// TestResultToolScriptBindsResultPath verifies that a nested engine shell
+// cannot drop or redirect the detector-owned sink path.
+func TestResultToolScriptBindsResultPath(t *testing.T) {
 	dir := t.TempDir()
-	echoEnv := filepath.Join(dir, "echo-env")
-	if err := os.WriteFile(echoEnv, []byte(
-		"#!/bin/sh\nprintf 'result=%s\\nreasons=%s\\n' \"$THREAT_DETECTION_RESULT_FILE\" \"$THREAT_DETECTION_REASONS_FILE\"\n",
+	echoResultPath := filepath.Join(dir, "echo-result-path")
+	if err := os.WriteFile(echoResultPath, []byte(
+		"#!/bin/sh\nprintf 'result=%s\\n' \"$THREAT_DETECTION_RESULT_FILE\"\n",
 	), 0o700); err != nil {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
 	sink := filepath.Join(dir, "result file.json")
-	reasons := filepath.Join(dir, "reasons file.json")
 	wrapper := filepath.Join(dir, "threat_detection_result")
-	if err := os.WriteFile(wrapper, []byte(resultToolScript(echoEnv, sink, reasons)), 0o700); err != nil {
+	if err := os.WriteFile(wrapper, []byte(resultToolScript(echoResultPath, sink)), 0o700); err != nil {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	want := "result=" + sink + "\nreasons=" + reasons + "\n"
+	want := "result=" + sink + "\n"
 	for _, tc := range []struct {
 		name string
 		env  []string
 	}{
-		{name: "environment dropped"},
+		{name: "environment dropped", env: []string{}},
 		{
 			name: "paths redirected",
 			env: []string{
