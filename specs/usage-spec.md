@@ -75,10 +75,21 @@ execution, with no fallback to an unverified or existing binary. An approved
 mirror changes the source of the bytes, not the expected digest. A preinstalled
 asset MUST also be verified against the independent pin before execution.
 
-`scripts/install-threat-detect.sh` implements independent verification using a
-caller-supplied local checksum file, with optional HTTPS mirror acquisition.
-The caller MUST pin and trust the installer itself and MUST stop on installation
-failure; the script does not control the host's downstream execution policy.
+**U-03b**: A detector release MUST publish `checksums.txt` with exactly one
+entry for each binary asset in the release source revision's `release-targets.txt`
+and no additional entries. Each line MUST contain a 64-character lowercase
+hexadecimal SHA-256 digest, two ASCII spaces, the asset basename, and a newline.
+Entry order is not significant. Each digest MUST match the exact published
+binary bytes. Release publication MUST fail if the manifest is malformed,
+contains missing, duplicate, or unexpected entries, or does not match the
+binary assets. This applies to both tagged and rolling releases; a rolling
+release still MUST NOT be used as a production version pin (U-04).
+
+The release manifest supplies inputs for the host's independent pinning process;
+it is not itself an independent trust root. A host such as gh-aw must separately
+review and pin the release tag and platform digests, then embed them into its
+compiled workflows. Neither release validation nor publication implements that
+host integration.
 
 **U-04**: The host MUST pin acquisition to an explicit release tag (per TD-25,
 U-24, and U-26). A host that resolves the latest promoted (stable) release MUST

@@ -38,6 +38,9 @@ jobs:
           cd dist
           sha256sum threat-detect-* > checksums.txt
 
+      - name: Validate release checksum contract
+        run: bash scripts/validate-release-checksums.sh dist
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -58,6 +61,9 @@ jobs:
         with:
           name: release-artifacts
           path: dist
+
+      - name: Validate downloaded release artifacts
+        run: bash scripts/validate-release-checksums.sh dist
 
       - name: Create GitHub release (prerelease)
         env:

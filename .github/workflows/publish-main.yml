@@ -38,6 +38,9 @@ jobs:
             echo "version=${VERSION}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Validate release checksum contract
+        run: bash scripts/validate-release-checksums.sh dist
+
       - name: Publish rolling main pre-release
         env:
           GH_TOKEN: ${{ github.token }}

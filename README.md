@@ -547,61 +547,6 @@ checksum-verifies CI downloads before execution. Browser downloads may be
 quarantined by Gatekeeper; prefer the installer, or verify the checksum before
 removing quarantine.
 
-### Independently pinned installation
-
-For installations that require an independent trust root, use
-[`scripts/install-threat-detect.sh`](scripts/install-threat-detect.sh) from a
-reviewed, commit-pinned checkout of this repository:
-
-```bash
-# pins/v1.2.3.txt is a reviewed file committed with the consuming workflow.
-# Use a real published version and its approved pins.
-set -e
-bash scripts/install-threat-detect.sh v1.2.3 pins/v1.2.3.txt ./bin
-./bin/threat-detect /path/to/artifacts
-```
-
-Run this in a shell with `set -e` (or explicitly check the install exit code)
-so installation failure stops execution even if an older binary exists.
-The checksum file uses the release `checksums.txt` format: one 64-character
-SHA-256 digest, whitespace, and asset name per line. Include pins for each
-runner platform you support: `threat-detect-linux-amd64`,
-`threat-detect-linux-arm64`, `threat-detect-darwin-x64`, and
-`threat-detect-darwin-arm64`. The installer selects the current runner platform
-and requires exactly one matching pin. It accepts blank lines and `#` comments.
-
-Associate each reviewed pin file with a specific release tag. Establish trust
-in the release through your organization's approval process, then commit its
-digests separately from runtime downloads. Fetching a fresh `checksums.txt`
-alongside the binary in the installation job provides corruption detection,
-but does not provide an independent trust root. This installer never downloads
-checksums and never executes a downloaded binary to verify it.
-
-By default, acquisition uses `gh release download` (including its normal
-`GH_TOKEN` authentication for approved private repository access). To acquire
-the same bytes through an approved artifact proxy instead:
-
-```bash
-THREAT_DETECT_ARTIFACT_BASE_URL=https://artifacts.example.org/threat-detect \
-  bash scripts/install-threat-detect.sh v1.2.3 pins/v1.2.3.txt ./bin
-```
-
-The mirror must serve `<base>/<version>/<asset>`. Downloads and redirects must
-use HTTPS; the independent local pin is still mandatory. Missing or invalid
-pins, unsupported platforms, download failures, and checksum mismatches return
-nonzero without replacing an existing installation. Successful installation
-atomically replaces `<install-directory>/threat-detect`; add that directory to
-the host's `PATH` if needed.
-
-This is the detector-side integration for
-[gh-aw#57792](https://github.com/github/gh-aw/issues/57792). It does not change
-gh-aw's generated installer steps. Adopting it in generated workflows requires
-a corresponding gh-aw compiler/setup change to supply reviewed pins and invoke
-this installer (and forward the mirror setting when configured). Merely
-preinstalling a binary does not disable gh-aw's current installation step.
-Hosts providing a preinstalled release binary must verify it against their
-independent platform pin before execution.
-
 ### Input (Artifacts Directory)
 
 ```
@@ -729,6 +674,38 @@ asset's sha256 in the release notes, and attaches them (plus a shared
 with `contents: write`. `release-targets.txt` is the canonical build matrix for
 both tagged and rolling releases. The scheduled Release Platform Parity workflow
 compares its asset names with the platforms supported by `gh-aw`'s installer.
+
+### Checksum contract and independent pinning
+
+Each release supplies `checksums.txt` with exactly one entry for every binary
+in `release-targets.txt`, and no other entries. Each line consists of a
+64-character lowercase hexadecimal SHA-256 digest, two ASCII spaces, the asset
+basename, and a newline. Entries have no required ordering. The digest covers
+the exact published binary bytes, without packaging or transformation.
+
+Tagged and rolling release workflows validate the manifest against the matrix
+and hash every binary before publication. Tagged releases also validate after
+transferring artifacts into the publishing job. To run the same check locally:
+
+```bash
+bash scripts/validate-release-checksums.sh dist
+```
+
+This release contract supplies the inputs for
+[gh-aw#57792](https://github.com/github/gh-aw/issues/57792). The follow-up in
+gh-aw must review and commit the approved release tag and all platform digests
+together, emit those pins into compiled `*.lock.yml` detection jobs, and update
+its existing installer to verify against the emitted pin. A configured artifact
+mirror may change where bytes are downloaded, but must not change the expected
+digest. Missing pins or verification failures must prevent execution and
+downstream safe outputs, without falling back to an existing binary.
+
+Fetching `checksums.txt` alongside the binary at runtime is corruption detection,
+not an independent trust root. Trust comes from separately reviewing and pinning
+the release digests in gh-aw before compilation. The mutable rolling `main`
+release is for development, not production version pinning. This repository
+does not implement the compiler or installer changes; existing compiled
+workflows are unaffected by the release validation added here.
 
 Maintainers need to configure the following before the binary is consumed by `gh-aw`:
 
