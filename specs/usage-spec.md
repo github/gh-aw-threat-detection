@@ -51,8 +51,9 @@ here as `TD-XX`.
 ## 2. Acquisition
 
 **U-01**: A conforming host MUST acquire the detector as a published GitHub
-Release asset from `github/gh-aw-threat-detection`. The host MUST NOT build the
-detector from source as part of a production detection job.
+Release asset from `github/gh-aw-threat-detection`, either directly or through
+an organization-approved mirror or preinstallation of that asset. The host MUST
+NOT build the detector from source as part of a production detection job.
 
 **U-02**: The host MUST select the release asset matching the runner operating
 system and architecture: `threat-detect-linux-amd64`,
@@ -62,6 +63,22 @@ system and architecture: `threat-detect-linux-amd64`,
 **U-03**: The host MUST verify the downloaded asset against the `sha256` value
 recorded for that asset (via `checksums.txt` published alongside the assets, or
 the sha256 recorded in the release notes) before executing it.
+
+**U-03a**: A host requiring independently pinned artifacts MUST obtain the
+expected SHA-256 from trusted configuration reviewed separately from runtime
+acquisition (for example, compiler-embedded digests or a checksum file committed
+with the consuming workflow). Downloading both the binary and its checksum from
+the release or mirror during installation does not satisfy this requirement.
+Pins MUST be associated with an explicit release tag and platform asset name.
+Missing, malformed, duplicate, or mismatched pins MUST fail installation before
+execution, with no fallback to an unverified or existing binary. An approved
+mirror changes the source of the bytes, not the expected digest. A preinstalled
+asset MUST also be verified against the independent pin before execution.
+
+`scripts/install-threat-detect.sh` implements independent verification using a
+caller-supplied local checksum file, with optional HTTPS mirror acquisition.
+The caller MUST pin and trust the installer itself and MUST stop on installation
+failure; the script does not control the host's downstream execution policy.
 
 **U-04**: The host MUST pin acquisition to an explicit release tag (per TD-25,
 U-24, and U-26). A host that resolves the latest promoted (stable) release MUST
