@@ -675,6 +675,38 @@ with `contents: write`. `release-targets.txt` is the canonical build matrix for
 both tagged and rolling releases. The scheduled Release Platform Parity workflow
 compares its asset names with the platforms supported by `gh-aw`'s installer.
 
+### Checksum contract and independent pinning
+
+Each release supplies `checksums.txt` with exactly one entry for every binary
+in `release-targets.txt`, and no other entries. Each line consists of a
+64-character lowercase hexadecimal SHA-256 digest, two ASCII spaces, the asset
+basename, and a newline. Entries have no required ordering. The digest covers
+the exact published binary bytes, without packaging or transformation.
+
+Tagged and rolling release workflows validate the manifest against the matrix
+and hash every binary before publication. Tagged releases also validate after
+transferring artifacts into the publishing job. To run the same check locally:
+
+```bash
+bash scripts/validate-release-checksums.sh dist
+```
+
+This release contract supplies the inputs for
+[gh-aw#57792](https://github.com/github/gh-aw/issues/57792). The follow-up in
+gh-aw must review and commit the approved release tag and all platform digests
+together, emit those pins into compiled `*.lock.yml` detection jobs, and update
+its existing installer to verify against the emitted pin. A configured artifact
+mirror may change where bytes are downloaded, but must not change the expected
+digest. Missing pins or verification failures must prevent execution and
+downstream safe outputs, without falling back to an existing binary.
+
+Fetching `checksums.txt` alongside the binary at runtime is corruption detection,
+not an independent trust root. Trust comes from separately reviewing and pinning
+the release digests in gh-aw before compilation. The mutable rolling `main`
+release is for development, not production version pinning. This repository
+does not implement the compiler or installer changes; existing compiled
+workflows are unaffected by the release validation added here.
+
 Maintainers need to configure the following before the binary is consumed by `gh-aw`:
 
 1. Keep Actions enabled for this private repository.
