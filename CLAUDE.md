@@ -312,3 +312,10 @@ docker compose down -v + rm /tmp/awf-<ts>/
 ## Exit Codes & Cleanup
 
 AWF propagates the agent container's exit code via `docker inspect`. Use `--keep-containers` to preserve `/tmp/awf-<ts>/` (squid.conf, docker-compose.yml, agent-logs/, squid-logs/) for debugging.
+
+## Lane worktrees
+
+- Create isolated worktrees only when asked by the user. Use `lane new <name>` and work in the printed path. Otherwise, work in the current checkout.
+- Do not pass `--dirty` unless the worktree should inherit the parent checkout's uncommitted work.
+- Run `lane push` as the end gate when the work is ready to publish.
+
