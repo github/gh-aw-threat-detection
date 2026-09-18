@@ -46,7 +46,7 @@ func provisionResultTool(sinkPath string) (env []string, cleanup func(), err err
 	cleanup = func() { os.RemoveAll(toolDir) }
 
 	wrapperPath := filepath.Join(toolDir, "threat_detection_result")
-	if err := os.WriteFile(wrapperPath, []byte(resultToolScript(self)), 0o700); err != nil {
+	if err := os.WriteFile(wrapperPath, []byte(resultToolScript(self, sinkPath, reasonsPath)), 0o700); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("writing result tool wrapper: %w", err)
 	}
@@ -78,8 +78,8 @@ func watchResultSink(ctx context.Context, cancel context.CancelFunc, sinkPath st
 	}
 }
 
-// resultToolScript renders the threat_detection_result wrapper that execs self's
-// report-result subcommand.
+// resultToolScript renders the threat_detection_result wrapper that binds the
+// detector-owned result paths and execs self's report-result subcommand.
 //
 // The arguments are forwarded with "$@" (double-quoted, never $* or bare $@) so
 // each argument the engine passed reaches the subcommand as one intact
@@ -88,8 +88,11 @@ func watchResultSink(ctx context.Context, cancel context.CancelFunc, sinkPath st
 // must never re-interpret it. It is only half the boundary, though — the engine
 // composes the command line in its own shell, which is why reason text is
 // transported through --reasons-file rather than as an argument.
-func resultToolScript(self string) string {
-	return "#!/bin/sh\nexec " + shellQuote(self) + " report-result \"$@\"\n"
+func resultToolScript(self, sinkPath, reasonsPath string) string {
+	return "#!/bin/sh\n" +
+		"export THREAT_DETECTION_RESULT_FILE=" + shellQuote(sinkPath) + "\n" +
+		"export THREAT_DETECTION_REASONS_FILE=" + shellQuote(reasonsPath) + "\n" +
+		"exec " + shellQuote(self) + " report-result \"$@\"\n"
 }
 
 // shellQuote wraps a value in single quotes for safe use in a POSIX shell script.
