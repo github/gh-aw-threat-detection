@@ -22,7 +22,6 @@ tools:
     - "*"
   github:
     mode: gh-proxy
-  web-fetch:
 runtimes:
   go:
     version: "1.26"
@@ -73,7 +72,7 @@ has returned.
 ## Test Requirements
 
 1. Use GitHub tools to read the latest 2 pull requests in `${{ github.repository }}` and record their numbers and titles only.
-2. Use `web-fetch` to fetch `https://github.com/github/gh-aw-threat-detection` and verify the response mentions `gh-aw-threat-detection`.
+2. Use bash to run `curl -fsSL https://github.com/github/gh-aw-threat-detection` and verify the response mentions `gh-aw-threat-detection`.
 3. Use bash to run `make build` in `${{ github.workspace }}` and verify it succeeds.
 4. Use bash to create a minimal artifacts directory under `/tmp/gh-aw/smoke-copilot-standalone-${{ github.run_id }}` with:
    - `aw-prompts/prompt.txt`
