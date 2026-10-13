@@ -13,8 +13,8 @@ engine: codex
 models:
   # Estimated USD per million tokens for models missing from the pricing catalog.
   default-ai-credits-pricing:
-    input: 3
-    output: 15
+    input: 5
+    output: 20
 strict: false
 network:
   allowed:
