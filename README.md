@@ -748,6 +748,8 @@ Each runs daily and by `workflow_dispatch`. The top-level `Smoke` workflow can b
 
 **The smokes do exercise `threat-detect conclude`.** The compiled locks call gh-aw's `conclude_threat_detection.sh`, which does no JSON parsing of its own: it verifies `threat-detect` is on `PATH` and then `exec`s `threat-detect conclude --result-file … --detection-log …`. Because it passes no `--full-result-file`, the conventional sibling (`detection_result_full.json`) is derived and the reasons *are* recovered into the smokes' job logs, as are any `⚠️` warnings. The full result is written next to the result file and is not uploaded — the detection artifact lists `detection_result.json` by exact filename rather than a glob, so the companion never leaves the runner. Use [`replay-detection.yml`](#replay-workflow) when you want to rerun detection against a past run's artifacts, rather than as a way to see reasons.
 
+The GitHub metadata check runs before the agent and validates two PR numbers. It supplies only `passed=true` or `passed=false` in a local file; PR titles, bodies, and comments are never included in that check. GitHub tools are explicitly disabled for the smoke agents. Their shell and network access remain available for the build and egress checks.
+
 **Codex detection model pin.** The Codex smokes pin the detection model explicitly:
 
 ```yaml
@@ -768,6 +770,12 @@ detection job with `reason=engine_error exit=2`. Copilot and Claude do not hit
 this because `gh-aw` does not set `GH_AW_MODEL_DETECTION_{COPILOT,CLAUDE}` for
 them. Pinning a concrete, priced OpenAI model keeps the pass cheap and
 deterministic.
+
+### Upstream Issue Digest
+
+`.github/workflows/gh-aw-issue-digest.yml` runs daily or manually as a standard Actions workflow, without an AI agent. It reads metadata for the 50 most recently updated upstream issues labeled `threat-detection`, including closed issues, and publishes newly observed issues here. Titles, authors, and labels are escaped before rendering; issue bodies and comments are not included.
+
+The first run establishes a baseline without publishing. Cached state retains up to 500 reported issue numbers and advances only after successful reads and confirmed publication. Recent bot-authored digest markers reconcile a publication whose response or cache save was lost. Missing or invalid cache state establishes a fresh baseline.
 
 ### Detector Version Selection
 
