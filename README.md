@@ -673,7 +673,9 @@ asset's sha256 in the release notes, and attaches them (plus a shared
 `checksums.txt`) to a GitHub **prerelease** using the automatic `GITHUB_TOKEN`
 with `contents: write`. `release-targets.txt` is the canonical build matrix for
 both tagged and rolling releases. The scheduled Release Platform Parity workflow
-compares its asset names with the platforms supported by `gh-aw`'s installer.
+checks that every asset requested by `gh-aw`'s installer is published. The
+standalone detector also ships macOS assets, while the gh-aw installer currently
+supports Linux only.
 
 ### Checksum contract and independent pinning
 

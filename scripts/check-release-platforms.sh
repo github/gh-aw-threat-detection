@@ -52,21 +52,25 @@ installer_targets="$(
 
     /^install_linux_binary\(\)/ {
       function_os = "linux"
+      arch = ""
       next
     }
     /^install_darwin_binary\(\)/ {
       function_os = "darwin"
+      arch = ""
       next
     }
     function_os != "" && /^}/ {
       function_os = ""
       next
     }
-    function_os != "" && /binary_name="threat-detect-[^"]+"/ {
+    function_os != "" && /\)/ {
       arch_pattern = $0
       sub(/\).*/, "", arch_pattern)
       sub(/^[[:space:]]*/, "", arch_pattern)
       arch = canonical_arch(arch_pattern)
+    }
+    function_os != "" && /binary_name="threat-detect-[^"]+"/ {
       if (arch == "") {
         printf "unsupported installer architecture mapping: %s\n", $0 > "/dev/stderr"
         exit 1
@@ -76,35 +80,22 @@ installer_targets="$(
       sub(/.*binary_name="/, "", asset)
       sub(/".*/, "", asset)
       print function_os, arch, asset
+      mapped[function_os] = 1
     }
 
-    /^case "\$OS" in/ {
-      in_os_dispatch = 1
-      next
-    }
-    in_os_dispatch && /^[[:space:]]*Linux\)/ {
-      dispatch_os = "linux"
-      next
-    }
-    in_os_dispatch && /^[[:space:]]*Darwin\)/ {
-      dispatch_os = "darwin"
-      next
-    }
-    in_os_dispatch && dispatch_os == "linux" && /^[[:space:]]*install_linux_binary/ {
+    /^[[:space:]]*install_linux_binary([[:space:]]|$)/ {
       reachable["linux"] = 1
-      dispatch_os = ""
-      next
     }
-    in_os_dispatch && dispatch_os == "darwin" && /^[[:space:]]*install_darwin_binary/ {
+    /^[[:space:]]*install_darwin_binary([[:space:]]|$)/ {
       reachable["darwin"] = 1
-      dispatch_os = ""
-      next
     }
 
     END {
-      if (!reachable["linux"] || !reachable["darwin"]) {
-        print "installer does not dispatch both Linux and Darwin install functions" > "/dev/stderr"
-        exit 1
+      for (os in mapped) {
+        if (!reachable[os]) {
+          printf "installer does not call the %s install function. Check upstream platform dispatch before publishing this mapping.\n", os > "/dev/stderr"
+          exit 1
+        }
       }
     }
   ' "$installer_file" | sort -u
@@ -119,14 +110,17 @@ if [ -z "$installer_targets" ]; then
   exit 1
 fi
 
-if ! diff -u \
-  <(printf '%s\n' "$installer_targets") \
-  <(printf '%s\n' "$manifest_targets"); then
-  echo "ERROR: gh-aw installer platform mappings and release targets differ" >&2
+# gh-aw may support fewer platforms than the standalone detector. Every asset
+# it requests must exist, but standalone-only assets (such as macOS) are valid.
+missing_targets="$(comm -23 <(printf '%s\n' "$installer_targets") <(printf '%s\n' "$manifest_targets"))"
+if [ -n "$missing_targets" ]; then
+  echo "ERROR: gh-aw installer requests unpublished release targets:" >&2
+  printf '%s\n' "$missing_targets" >&2
+  echo "Add these mappings to release-targets.txt and publish the corresponding assets, or correct the upstream installer." >&2
   exit 1
 fi
 
-echo "Release targets match gh-aw installer platform mappings:"
+echo "All gh-aw installer platform mappings are published release targets:"
 while IFS= read -r target; do
   printf '  %s\n' "$target"
-done <<< "$manifest_targets"
+done <<< "$installer_targets"
