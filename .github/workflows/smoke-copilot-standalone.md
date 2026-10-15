@@ -22,8 +22,8 @@ tools:
     - "*"
   github:
     mode: gh-proxy
-    # This metadata check must include PRs from bots and external contributors.
-    min-integrity: none
+    # The public-repository default permits collaborator and same-repository PRs.
+    min-integrity: approved
     allowed-repos: [github/gh-aw-threat-detection]
 runtimes:
   go:
