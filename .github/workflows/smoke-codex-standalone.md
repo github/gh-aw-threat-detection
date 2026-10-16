@@ -9,7 +9,11 @@ permissions:
   pull-requests: read
   actions: read
 name: Smoke Codex Standalone
-engine: codex
+engine:
+  id: codex
+  env:
+    # No Copilot credential is used by this engine or its detector.
+    COPILOT_GITHUB_TOKEN: ""
 models:
   # Estimated USD per million tokens for models missing from the pricing catalog.
   default-ai-credits-pricing:

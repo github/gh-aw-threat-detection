@@ -5,6 +5,7 @@ on:
   schedule: daily
 permissions:
   contents: read
+  copilot-requests: write
   issues: read
 name: gh-aw Threat-Detection Issue Digest
 engine: copilot

@@ -5,6 +5,7 @@ on:
   schedule: daily
 permissions:
   contents: read
+  copilot-requests: write
   issues: read
   pull-requests: read
 name: gh-aw Parity Monitor

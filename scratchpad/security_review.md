@@ -20,7 +20,7 @@ Reviewed 2 zizmor template injection findings in GitHub Actions workflows. Both 
 ```yaml
 - continue-on-error: true
   env:
-    GH_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN || secrets.GH_AW_GITHUB_TOKEN }}
+    GH_TOKEN: ${{ secrets.GH_AW_GITHUB_TOKEN || github.token }}
   id: download-sessions
   name: List and download Copilot coding agent sessions
   run: |

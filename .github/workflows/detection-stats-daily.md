@@ -25,6 +25,7 @@ on:
   schedule: daily
 permissions:
   contents: read
+  copilot-requests: write
   actions: read
   issues: read
 name: Detection Stats Daily

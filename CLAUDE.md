@@ -199,7 +199,7 @@ Unit tests, `make build`, `make test`, and `make smoke` need **no secrets**. Rea
 
 | Variable | When |
 |----------|------|
-| `COPILOT_GITHUB_TOKEN` | `--engine copilot` — fine-grained PAT with **Copilot Requests: Read**; `GITHUB_TOKEN` is not sufficient |
+| `COPILOT_GITHUB_TOKEN` | `--engine copilot` locally — fine-grained PAT with **Copilot Requests: Read**; repo Actions workflows use the built-in token with `copilot-requests: write` |
 | `ANTHROPIC_API_KEY`    | `--engine claude` |
 | `OPENAI_API_KEY`       | `--engine codex` (or `CODEX_API_KEY` depending on CLI setup) |
 | `WORKFLOW_NAME`, `WORKFLOW_DESCRIPTION`, `CUSTOM_PROMPT` | Optional — folded into the prompt |

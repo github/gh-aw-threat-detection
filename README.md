@@ -720,7 +720,7 @@ No additional secrets are required for unit tests, `make build`, `make test`, or
 
 | Variable | Required when | Notes |
 |----------|---------------|-------|
-| `COPILOT_GITHUB_TOKEN` | Running `--engine copilot` in an environment that needs explicit token-based Copilot authentication | Use a fine-grained PAT owned by a user account with **Account permissions → Copilot Requests: Read**. `GITHUB_TOKEN` is not sufficient for Copilot inference. |
+| `COPILOT_GITHUB_TOKEN` | Running `--engine copilot` in an environment that needs explicit token-based Copilot authentication | Use a fine-grained PAT owned by a user account with **Account permissions → Copilot Requests: Read**. The built-in Actions token supports inference when the workflow grants `copilot-requests: write`, as this repository’s Copilot workflows do. |
 | `ANTHROPIC_API_KEY` | Running `--engine claude` with the Claude CLI | Not used by unit tests. |
 | `OPENAI_API_KEY` | Running `--engine codex` with the Codex CLI | Not used by unit tests. |
 | `WORKFLOW_NAME` | Optional local runs | Included in the generated prompt. Overridable with `--workflow-name`. |
@@ -797,9 +797,10 @@ Regenerating the locks is a **separate, manual, human-reviewed step** because pu
 >
 > If you build the gh-aw compiler from source rather than installing the released extension, you must pass **both** `-X main.version=<TAG>` and `-X main.isRelease=true`. Without the latter, gh-aw normalizes the emitted `compiler_version` / `GH_AW_VERSION` to `dev` and skips release-only generation.
 
+Copilot workflows and their detection jobs use the built-in Actions token with `permissions: copilot-requests: write`; no Copilot Actions secret is required.
+
 | Secret | Required for | Notes |
 |--------|--------------|-------|
-| `COPILOT_GITHUB_TOKEN` | Copilot smoke workflow and Copilot detection | Use a fine-grained PAT owned by a user account with **Account permissions → Copilot Requests: Read**. |
 | `ANTHROPIC_API_KEY` | Claude smoke workflow and Claude detection | Used by the Claude CLI. |
 | `OPENAI_API_KEY` or `CODEX_API_KEY` | Codex smoke workflow and Codex detection | Configure whichever token your Codex CLI setup expects. |
 | `GH_AW_GITHUB_TOKEN` | Recommended for GitHub MCP access, safe outputs, and release-asset downloads | The generated workflows fall back to `GITHUB_TOKEN` where possible. |

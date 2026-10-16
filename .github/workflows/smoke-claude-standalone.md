@@ -11,6 +11,9 @@ permissions:
 name: Smoke Claude Standalone
 engine:
   id: claude
+  env:
+    # No Copilot credential is used by this engine or its detector.
+    COPILOT_GITHUB_TOKEN: ""
   max-turns: 20
   bare: true
 model: claude-sonnet-5
