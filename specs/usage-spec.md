@@ -349,7 +349,7 @@ environment inputs consumed by `conclude`:
 |----------|--------|
 | `RUN_DETECTION` | When not `"true"`, the verdict is `skipped`/`success` |
 | `GH_AW_DETECTION_CONTINUE_ON_ERROR` | Anything other than `"false"` (compared case-insensitively) selects warn mode |
-| `DETECTION_AGENTIC_EXECUTION_OUTCOME` | `"failure"` makes `agent_failure`/`parse_error` hard-fail |
+| `DETECTION_AGENTIC_EXECUTION_OUTCOME` | Provides execution-outcome context; does not override warn or strict mode |
 
 A host MAY also pass `--detection-log <path>` (default `<result-file-dir>/detection.log`)
 so `conclude` can refine a missing-result-file outcome into `agent_failure` or
@@ -359,9 +359,12 @@ so `conclude` can refine a missing-result-file outcome into `agent_failure` or
 reports `agent_failure` or `parse_error` (refined from the detection log per
 TD-20b, defaulting to `agent_failure`), a malformed result file always reports
 `parse_error`, and a detected threat reports `threat_detected`. In warn mode,
-non-mandatory failures MUST surface as warnings without failing the job, except
-that `agent_failure` and `parse_error` MUST hard-fail when the detection execution
-step itself failed (per TD-20b).
+non-mandatory failures MUST surface as warnings without failing the job, including
+`agent_failure` and `parse_error` when the detection execution step itself failed.
+These failures MUST emit `conclusion=warning`, preserve the original `reason`,
+report `success=false`, and exit 0. In strict mode they MUST emit
+`conclusion=failure`, preserve the original `reason`, report `success=false`,
+and exit 1 (per TD-20b).
 
 ### 6.1 Exit codes and status line
 
