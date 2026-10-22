@@ -641,8 +641,11 @@ A malformed (readable but unparseable) result file MUST unconditionally report
 `parse_error`; detected threats MUST report `threat_detected`. In warn mode
 (`GH_AW_DETECTION_CONTINUE_ON_ERROR` not case-insensitively equal to `"false"`,
 per TD-18c) non-mandatory failures MUST
-surface as warnings without failing the job, except that `agent_failure` and
-`parse_error` MUST hard-fail when the detection execution step itself failed.
+surface as warnings without failing the job, including `agent_failure` and
+`parse_error` when the detection execution step itself failed. These warnings
+MUST emit `conclusion=warning`, preserve the original `reason`, and report
+`success=false`. In strict mode these failures MUST emit `conclusion=failure`
+and `success=false`, preserve the original `reason`, and fail the step.
 
 **TD-20c**: The detector MUST NOT write to the GitHub Actions step summary. The
 artifact inventory defined by TD-17b is surfaced on standard error (TD-20a) only,

@@ -740,16 +740,11 @@ func isForwardedEngineLine(line string) bool {
 	return strings.HasPrefix(strings.TrimLeft(line, " \t"), engine.PassthroughPrefix)
 }
 
-// fail records a failure verdict and decides whether to fail closed. It mirrors
-// gh-aw's setDetectionFailure exactly:
-//
-//   - mustFail is true only when the detection run itself failed AND the reason
-//     is an infrastructure category (agent_failure/parse_error).
-//   - In warn mode and not mustFail, emit a warning, set conclusion=warning, and
-//     let the job proceed (exit 0).
-//   - Otherwise set conclusion=failure, emit an error, and fail closed (exit 1).
+// fail mirrors gh-aw's setDetectionFailure warn-mode policy: failures emit
+// conclusion=warning and exit 0 in warn mode, even if detection execution failed.
+// Strict mode emits conclusion=failure and exits 1. Both modes preserve the
+// reason and success=false so hosts can apply the appropriate safe-output policy.
 func (c *concluder) fail(result *detector.Result, reason, message string) int {
-	mustFail := c.executionFailed && detector.IsToolingFailureReason(reason)
 	if headline := detector.ThreatHeadline(reason); headline != "" {
 		icon := "🚨"
 		if detector.IsToolingFailureReason(reason) {
@@ -759,7 +754,7 @@ func (c *concluder) fail(result *detector.Result, reason, message string) int {
 	}
 	c.setOutput("reason", reason)
 	c.exportVariable("GH_AW_DETECTION_REASON", reason)
-	if c.warnMode && !mustFail {
+	if c.warnMode {
 		c.command("warning", message)
 		c.setOutput("conclusion", "warning")
 		c.exportVariable("GH_AW_DETECTION_CONCLUSION", "warning")

@@ -127,13 +127,13 @@ func TestConcludeContract(t *testing.T) {
 			wantReason:      "agent_failure",
 		},
 		{
-			name:            "missing file fails closed when execution failed (mustFail)",
+			name:            "missing file warns when execution failed",
 			runDetection:    "true",
 			warnMode:        true,
 			executionFailed: true,
 			resultMissing:   true,
-			wantExit:        concludeExitFail,
-			wantConclusion:  "failure",
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
 			wantSuccess:     "false",
 			wantReason:      "agent_failure",
 		},
@@ -148,13 +148,13 @@ func TestConcludeContract(t *testing.T) {
 			wantReason:     "parse_error",
 		},
 		{
-			name:            "malformed file fails closed when execution failed (mustFail)",
+			name:            "malformed file warns when execution failed",
 			runDetection:    "true",
 			warnMode:        true,
 			executionFailed: true,
 			resultContent:   "{not json",
-			wantExit:        concludeExitFail,
-			wantConclusion:  "failure",
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
 			wantSuccess:     "false",
 			wantReason:      "parse_error",
 		},
@@ -162,8 +162,8 @@ func TestConcludeContract(t *testing.T) {
 		// {RUN_DETECTION} x {result file present/absent/malformed} x {warn/strict} x
 		// {execution outcome} (gh-aw-threat-detection#694). The cases above cover the
 		// primary decision paths; these fill in the combinations that exercise
-		// mustFail's scope (agent_failure/parse_error only, never threat_detected) and
-		// confirm executionFailed is inert on the success path.
+		// mode-dependent failures and confirm executionFailed is inert on the
+		// success path.
 		{
 			name:           "success on safe verdict is unaffected by warn mode",
 			runDetection:   "true",
@@ -186,7 +186,7 @@ func TestConcludeContract(t *testing.T) {
 			wantReason:      "",
 		},
 		{
-			name:            "threat_detected warns even when execution failed (mustFail excludes threat_detected)",
+			name:            "threat_detected warns even when execution failed",
 			runDetection:    "true",
 			warnMode:        true,
 			executionFailed: true,
@@ -316,11 +316,11 @@ func TestConcludeUnreadableFileIsAgentFailure(t *testing.T) {
 			wantConclusion: "warning",
 		},
 		{
-			name:            "warn mode fails closed when execution failed (mustFail)",
+			name:            "warn mode warns when execution failed",
 			warnMode:        true,
 			executionFailed: true,
-			wantExit:        concludeExitFail,
-			wantConclusion:  "failure",
+			wantExit:        concludeExitProceed,
+			wantConclusion:  "warning",
 		},
 	}
 
@@ -1608,5 +1608,79 @@ func TestConcludeHeaderDiagnosticsNeutralizeLegacyWorkflowCommand(t *testing.T) 
 	}
 	if !strings.Contains(got, `##\[stop-commands]outcome`) {
 		t.Fatalf("escaped execution outcome not rendered:\n%s", got)
+	}
+}
+
+// TestConcludeNativeWarningPolicyParity exercises the CLI environment contract
+// selected in gh-aw#70325: warn-mode tooling failures reach the host's warning
+// policy with success=false, while strict mode still fails closed.
+func TestConcludeNativeWarningPolicyParity(t *testing.T) {
+	inputs := []struct {
+		name, result, status, reason string
+	}{
+		{"missing_engine_error", "", "engine_error", "agent_failure"},
+		{"missing_no_status", "", "", "agent_failure"},
+		{"missing_invalid_report", "", "invalid_report_exhausted", "parse_error"},
+		{"missing_write_error", "", "output_write_error", "parse_error"},
+		{"malformed_overrides_engine_error", "{not json", "engine_error", "parse_error"},
+		{"threat", threatVerdict, "", "threat_detected"},
+	}
+	for _, mode := range []string{"default", "true", "false"} {
+		for _, outcome := range []string{"failure", "success"} {
+			for _, input := range inputs {
+				t.Run(mode+"/"+outcome+"/"+input.name, func(t *testing.T) {
+					dir := t.TempDir()
+					resultPath := filepath.Join(dir, "detection_result.json")
+					if input.result != "" {
+						if err := os.WriteFile(resultPath, []byte(input.result), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if input.status != "" {
+						status := "THREAT_DETECTION_STATUS: reason=" + input.status + " exit=2\n"
+						if err := os.WriteFile(filepath.Join(dir, "detection.log"), []byte(status), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					t.Setenv("RUN_DETECTION", "true")
+					t.Setenv("DETECTION_AGENTIC_EXECUTION_OUTCOME", outcome)
+					t.Setenv("GH_AW_DETECTION_CONTINUE_ON_ERROR", mode)
+					if mode == "default" {
+						if err := os.Unsetenv("GH_AW_DETECTION_CONTINUE_ON_ERROR"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					outPath, envPath := filepath.Join(dir, "outputs"), filepath.Join(dir, "env")
+					t.Setenv("GITHUB_OUTPUT", outPath)
+					t.Setenv("GITHUB_ENV", envPath)
+					wantExit, wantConclusion, annotation := concludeExitProceed, "warning", "::warning::"
+					if mode == "false" {
+						wantExit, wantConclusion, annotation = concludeExitFail, "failure", "::error::"
+					}
+					var code int
+					log := captureStdout(t, func() {
+						code = runConclude([]string{"--result-file", resultPath})
+					})
+					if code != wantExit {
+						t.Fatalf("exit = %d, want %d; log: %s", code, wantExit, log)
+					}
+					if !strings.Contains(log, annotation) {
+						t.Errorf("missing %s annotation in %s", annotation, log)
+					}
+					outputs := parseKV(t, outPath)
+					for key, want := range map[string]string{"conclusion": wantConclusion, "reason": input.reason, "success": "false"} {
+						if got := outputs[key]; got != want {
+							t.Errorf("output %s = %q, want %q", key, got, want)
+						}
+					}
+					env := parseKV(t, envPath)
+					for key, want := range map[string]string{"GH_AW_DETECTION_CONCLUSION": wantConclusion, "GH_AW_DETECTION_REASON": input.reason} {
+						if got := env[key]; got != want {
+							t.Errorf("env %s = %q, want %q", key, got, want)
+						}
+					}
+				})
+			}
+		}
 	}
 }
