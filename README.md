@@ -420,7 +420,7 @@ and `GH_AW_DETECTION_REASON` to `GITHUB_ENV`. It reads these environment inputs:
 
 - `RUN_DETECTION` — when not `"true"`, the verdict is `skipped`/`success`
 - `GH_AW_DETECTION_CONTINUE_ON_ERROR` — anything other than `"false"` (compared case-insensitively) is warn mode
-- `DETECTION_AGENTIC_EXECUTION_OUTCOME` — `"failure"` makes `agent_failure`/`parse_error` hard-fail
+- `DETECTION_AGENTIC_EXECUTION_OUTCOME` — provides execution-outcome context; does not override warn or strict mode
 
 A malformed (readable but unparseable) result file always reports `parse_error`,
 and detected threats report `threat_detected`. When the result file is missing,

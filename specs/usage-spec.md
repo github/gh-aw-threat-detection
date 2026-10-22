@@ -105,14 +105,11 @@ more strictly than its configured detection-failure policy. In warn mode
 (`GH_AW_DETECTION_CONTINUE_ON_ERROR` other than `"false"`) the host SHOULD retry
 the download, then surface an unrecoverable acquisition failure as a warning
 with the `agent_failure` outcome (per U-20) rather than as a job failure — the
-absent detector is the same non-fatal condition its conclusion step already
-tolerates. To keep this consistent with U-20's exception — which mandates a
-hard-fail for `agent_failure`/`parse_error` whenever the detection *execution*
-step also failed — the host MUST ensure the acquisition failure does not
-propagate as a failed execution outcome: either the execution step is skipped
-(so `DETECTION_AGENTIC_EXECUTION_OUTCOME` is `skipped`, not `failure`), or a
-pre-execution guard short-circuits the run before invoking a missing binary
-(as `conclude_threat_detection.sh` does today for its own missing-binary case).
+absent detector is a tooling failure subject to the configured warning policy,
+with `conclusion=warning`, `reason=agent_failure`, and `success=false`.
+The host SHOULD skip execution when acquisition fails, or use a pre-execution
+guard to avoid invoking a missing binary. The execution outcome is diagnostic
+context and MUST NOT override the configured warn-mode policy (per U-20).
 In strict mode the acquisition failure MUST fail the job, because detection
 cannot run. In either mode the host MUST NOT synthesize a verdict: warn mode
 records the run as a detection failure it chose to tolerate, not as a `safe`
